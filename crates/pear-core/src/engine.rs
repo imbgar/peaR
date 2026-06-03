@@ -25,6 +25,8 @@ struct Tab {
     session: Session,
     pr: Option<PrRef>,
     cli: CliKind,
+    /// The Claude session id this tab is running (so we never resume a live one twice).
+    session_id: Option<String>,
 }
 
 pub struct Engine {
@@ -187,15 +189,28 @@ impl Engine {
         }
 
         let mut session_id: Option<String> = None;
+        let mut forked_live = false;
         if cli == CliKind::Claude {
             if let Some(p) = &pr {
-                let chosen = if let Some(id) = session_id_req {
+                let mut chosen = if let Some(id) = session_id_req {
                     Some(id) // resume this exact session
                 } else if !fresh {
                     self.store.most_recent_session(p) // resume the latest, if any
                 } else {
                     None // explicit "New"
                 };
+                // Never resume a session that's already live in another tab — Claude
+                // refuses a double-resume. Fork to a fresh session instead.
+                if let Some(id) = &chosen {
+                    if self
+                        .tabs
+                        .values()
+                        .any(|t| t.session_id.as_deref() == Some(id.as_str()))
+                    {
+                        forked_live = true;
+                        chosen = None;
+                    }
+                }
                 match chosen {
                     Some(id) => {
                         args.push("--resume".into());
@@ -235,6 +250,7 @@ impl Engine {
                 session,
                 pr: pr.clone(),
                 cli,
+                session_id: session_id.clone(),
             },
         );
         self.emit(Event::TabOpened {
@@ -243,6 +259,12 @@ impl Engine {
             pr: pr.clone(),
             cli,
         });
+        if forked_live {
+            self.emit(Event::Notice {
+                tab: Some(tab),
+                message: "that session is already open — started a new one".into(),
+            });
+        }
 
         // PR metadata + history, off the lock, on a worker thread.
         if let Some(pr) = pr {
