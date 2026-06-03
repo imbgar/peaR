@@ -1,6 +1,6 @@
 <div align="center">
 
-# <img src="docs/brand/pear.png" alt="" height="34" align="middle" /> peaR
+# <img src="docs/brand/pear.png" alt="" height="64" align="middle" /> &nbsp;peaR
 
 **A terminal-native PR review control center.**
 Every pull request is a tab. Every tab is a real terminal running the AI CLI of your choice.
