@@ -1,0 +1,79 @@
+# OSV-Scanner ignore list — every entry is a transitive advisory that does not
+# affect pear, with a reason. pear is a macOS-only Tauri app, so Tauri's Linux GTK
+# stack is never compiled; the rest are unmaintained-crate advisories on build-time
+# or transitive deps with no fixed version. Reviewed 2026-06-03; revisit when Tauri
+# bumps its gtk-rs (glib 0.20+) or the deps below find maintained replacements.
+
+# ── Tauri Linux windowing stack (gtk-rs 0.18) — not compiled on macOS ──────────
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0429" # glib < 0.20 unsoundness (Medium); also GHSA-wrw7-89jp-8q8g
+reason = "Transitive via tauri -> gtk 0.18 (Linux-only). Not compiled on pear's macOS target; tauri pins gtk ^0.18 so glib can't be bumped to 0.20 here."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0413" # atk unmaintained
+reason = "Tauri Linux GTK binding; unused/never compiled on pear's macOS target, no fixed version."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0416" # atk-sys unmaintained
+reason = "Tauri Linux GTK binding; unused on macOS, no fixed version."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0412" # gdk unmaintained
+reason = "Tauri Linux GTK binding; unused on macOS, no fixed version."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0418" # gdk-sys unmaintained
+reason = "Tauri Linux GTK binding; unused on macOS, no fixed version."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0411" # gdkwayland-sys unmaintained
+reason = "Tauri Linux GTK binding; unused on macOS, no fixed version."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0417" # gdkx11 unmaintained
+reason = "Tauri Linux GTK binding; unused on macOS, no fixed version."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0414" # gdkx11-sys unmaintained
+reason = "Tauri Linux GTK binding; unused on macOS, no fixed version."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0415" # gtk unmaintained
+reason = "Tauri Linux GTK binding; unused on macOS, no fixed version."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0420" # gtk-sys unmaintained
+reason = "Tauri Linux GTK binding; unused on macOS, no fixed version."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0419" # gtk3-macros unmaintained
+reason = "Tauri Linux GTK binding; unused on macOS, no fixed version."
+
+# ── build-time / transitive unmaintained crates ──────────────────────────────
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0370" # proc-macro-error unmaintained
+reason = "Build-time transitive macro dep; unmaintained, no fixed version, no runtime exposure."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2017-0008" # serial unmaintained
+reason = "Transitive via portable-pty (serial-port support, not used by pear's PTY path); unmaintained, no fixed version."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0081" # unic-char-property unmaintained
+reason = "Transitive via tauri-build -> urlpattern (build-time unicode); unmaintained, no fixed version."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0075" # unic-char-range unmaintained
+reason = "Transitive via tauri-build -> urlpattern (build-time unicode); unmaintained, no fixed version."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0080" # unic-common unmaintained
+reason = "Transitive via tauri-build -> urlpattern (build-time unicode); unmaintained, no fixed version."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0100" # unic-ucd-ident unmaintained
+reason = "Transitive via tauri-build -> urlpattern (build-time unicode); unmaintained, no fixed version."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0098" # unic-ucd-version unmaintained
+reason = "Transitive via tauri-build -> urlpattern (build-time unicode); unmaintained, no fixed version."

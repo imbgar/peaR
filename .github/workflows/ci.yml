@@ -30,11 +30,13 @@ jobs:
         run: cargo test -p pear-core
 
   app:
-    name: app build · macOS
+    name: app · lint · build · clippy (macOS)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
         with:
@@ -44,8 +46,11 @@ jobs:
       - name: install frontend deps
         run: npm ci
         working-directory: apps/desktop
-      - name: build frontend
+      - name: lint frontend (eslint)
+        run: npm run lint
+        working-directory: apps/desktop
+      - name: build frontend (tsc + vite)
         run: npm run build
         working-directory: apps/desktop
-      - name: build tauri backend
-        run: cargo build -p desktop
+      - name: clippy (desktop crate)
+        run: cargo clippy -p desktop --all-targets -- -D warnings

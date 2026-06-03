@@ -13,6 +13,13 @@ All notable changes to this project are documented here. The format is based on
 - Repackaged the PR-review skills as an installable **Claude Code + Codex plugin**
   (`plugins/pear-review`) with `.claude-plugin`/`.codex-plugin` manifests, per-skill
   `SKILL.md` (rich frontmatter), and a `.claude-plugin/marketplace.json`.
+- **Frontend linting** — ESLint (typescript-eslint) + a CI lint step; clippy now also
+  covers the `desktop` (Tauri) crate.
+
+### Security
+- Documented OSV-Scanner ignores (`osv-scanner.toml`) for 18 transitive advisories that
+  don't reach pear's macOS target — Tauri's Linux GTK stack (never compiled), plus
+  unmaintained build-time deps with no fixed version. Each entry has a reason.
 
 ### Changed
 - A PR's repo now **auto-clones** into a managed `repos/` dir when it isn't found locally,
