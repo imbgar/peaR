@@ -6,15 +6,15 @@
 Every pull request is a tab. Every tab is a real terminal running the AI CLI of your choice.
 Review with one keystroke, resume any past session, and keep your reviews close.
 
-[![CI](https://github.com/imbgar/pear/actions/workflows/ci.yml/badge.svg)](https://github.com/imbgar/pear/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/imbgar/pear?include_prereleases&sort=semver)](https://github.com/imbgar/pear/releases)
+[![CI](https://github.com/imbgar/peaR/actions/workflows/ci.yml/badge.svg)](https://github.com/imbgar/peaR/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/imbgar/peaR?include_prereleases&sort=semver)](https://github.com/imbgar/peaR/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-c6f24e.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/macOS-Apple%20Silicon%20%7C%20Intel-ffb000)](#install)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24c8db)](https://tauri.app)
 
-<img src="docs/design-mocks/2-phosphor.png" alt="pear — Phosphor theme" width="820">
+<img src="docs/design-mocks/theme-flip.gif" alt="peaR — Phosphor and Instrument themes" width="860">
 
-<sub>Phosphor theme. One click toggles to <b>Instrument</b> — see <a href="docs/design-mocks/1-instrument.png">the other look</a>.</sub>
+<sub>Two built-in themes — <b>Phosphor</b> (amber CRT) and <b>Instrument</b> (refined industrial) — toggle live in the app.</sub>
 
 </div>
 
@@ -71,7 +71,7 @@ Unsigned build — on first launch, right-click the app → **Open**.
 
 ### Run from source
 ```bash
-git clone git@github.com:imbgar/pear.git
+git clone git@github.com:imbgar/peaR.git
 cd pear/apps/desktop
 npm install
 npm run tauri dev
