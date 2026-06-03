@@ -10,17 +10,19 @@ on:
 permissions:
   contents: read
 
-# Scans Cargo.lock + package-lock.json against the OSV database and fails the job
-# on findings. Runs the scanner directly (no SARIF upload), so it works on private
-# repos too — unlike code-scanning uploads which need a public repo or GH Advanced Security.
+# Scans Cargo.lock + package-lock.json against the OSV database, fails on findings,
+# and uploads results to the Security tab (code scanning). Advisories listed in
+# osv-scanner.toml are filtered out *before* SARIF, so they neither fail the gate nor
+# appear as alerts — see that file for per-advisory reasons.
 jobs:
   osv-scan:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: google/osv-scanner-action@v2.0.2
-        with:
-          scan-args: |-
-            --config=./osv-scanner.toml
-            --lockfile=./Cargo.lock
-            --lockfile=./apps/desktop/package-lock.json
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.0.2
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    with:
+      scan-args: |-
+        --config=./osv-scanner.toml
+        --lockfile=./Cargo.lock
+        --lockfile=./apps/desktop/package-lock.json
