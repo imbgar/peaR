@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- DevSecOps CI: gitleaks (secrets), cargo-audit + OSV-Scanner (deps), CodeQL (SAST),
+  OSSF Scorecard (supply chain); documented the Socket.dev GitHub App.
+- Homebrew cask distribution + auto-update workflow (`brew install --cask imbgar/tap/peaR`).
+
+### Changed
+- A PR's repo now **auto-clones** into a managed `repos/` dir when it isn't found locally,
+  so pear no longer depends on the user having repos in a specific place.
+
 ## [0.1.1] — 2026-06-03
 
 ### Added

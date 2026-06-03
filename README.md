@@ -57,6 +57,12 @@ and [docs/ROADMAP.md](docs/ROADMAP.md) for what's shipped and what's next.
 
 ## Install
 
+### Homebrew (macOS)
+```bash
+brew install --cask imbgar/tap/peaR
+```
+Unsigned build — on first launch, right-click the app → **Open**.
+
 ### Prerequisites
 - **macOS** (Apple Silicon or Intel)
 - [Rust](https://rustup.rs) ≥ 1.80, [Node](https://nodejs.org) ≥ 20
@@ -84,7 +90,7 @@ pear reads a few optional environment variables:
 
 | Variable | Purpose |
 |----------|---------|
-| `PEAR_REPO_DIRS` | Colon-separated dirs to search for PR repos (default: `~/repos`, `~/projects`, `~/src`, …) |
+| `PEAR_REPO_DIRS` | Colon-separated dirs to search for PR repos (default: `~/repos`, `~/projects`, `~/src`, …). If a PR's repo isn't found in any of them, pear auto-clones it into a managed `repos/` dir under the data dir — no manual setup needed. |
 | `PEAR_DATA_DIR` | Override where history + reviews are stored (default: OS data dir) |
 | `PEAR_GITHUB_TOKEN` / `GITHUB_TOKEN` | GitHub token (otherwise sourced from `gh auth token`) |
 

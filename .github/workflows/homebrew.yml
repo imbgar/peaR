@@ -1,0 +1,81 @@
+name: Homebrew cask
+
+# On each published release, update the cask in the tap repo so
+# `brew install --cask imbgar/tap/peaR` always points at the latest .dmg.
+#
+# One-time setup (see packaging/homebrew/README.md):
+#   1. Create a public repo  imbgar/homebrew-tap
+#   2. Add a repo secret  TAP_GITHUB_TOKEN  (PAT with `repo` scope on the tap)
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.1)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  update-cask:
+    runs-on: macos-latest
+    steps:
+      - name: Resolve release .dmg + checksum
+        id: rel
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          VERSION="${TAG#v}"
+          NAME=$(gh release view "$TAG" -R "$REPO" --json assets \
+                 --jq '.assets[].name' | grep -E '\.dmg$' | head -1)
+          if [ -z "$NAME" ]; then echo "No .dmg asset on $TAG"; exit 1; fi
+          URL="https://github.com/$REPO/releases/download/$TAG/$NAME"
+          curl -sSL "$URL" -o app.dmg
+          SHA=$(shasum -a 256 app.dmg | awk '{print $1}')
+          {
+            echo "version=$VERSION"
+            echo "url=$URL"
+            echo "sha=$SHA"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout tap
+        uses: actions/checkout@v4
+        with:
+          repository: imbgar/homebrew-tap
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          path: tap
+
+      - name: Write cask
+        run: |
+          mkdir -p tap/Casks
+          cat > tap/Casks/peaR.rb <<EOF
+          cask "pear" do
+            version "${{ steps.rel.outputs.version }}"
+            sha256 "${{ steps.rel.outputs.sha }}"
+
+            url "${{ steps.rel.outputs.url }}"
+            name "peaR"
+            desc "Terminal-native PR review control center"
+            homepage "https://github.com/imbgar/pear"
+
+            app "peaR.app"
+
+            zap trash: [
+              "~/Library/Application Support/dev.pear.app",
+              "~/Library/Caches/dev.pear.app",
+            ]
+          end
+          EOF
+
+      - name: Commit + push tap
+        run: |
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/peaR.rb
+          git commit -m "peaR ${{ steps.rel.outputs.version }}" || { echo "no changes"; exit 0; }
+          git push

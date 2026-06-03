@@ -48,6 +48,13 @@ impl Store {
             .join(pr.number.to_string())
     }
 
+    /// Managed clone location for a PR's repo when it isn't found on the machine:
+    /// `<data-dir>/repos/<owner>/<repo>`. Auto-created + populated on first open, so
+    /// pear has no dependency on the user having the repo cloned anywhere specific.
+    pub fn repo_clone_dir(&self, pr: &PrRef) -> PathBuf {
+        self.root.join("repos").join(&pr.owner).join(&pr.repo)
+    }
+
     /// Load the PR history (newest PR first). Missing/corrupt file -> empty.
     pub fn history(&self) -> Vec<PrRecord> {
         let Ok(bytes) = fs::read(self.history_path()) else {

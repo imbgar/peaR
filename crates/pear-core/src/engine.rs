@@ -167,12 +167,22 @@ impl Engine {
         let tab = self.alloc();
 
         // Resolve a working directory: for PR tabs, the PR's local repo (so reviews
-        // run inside a git repo). Falls back to the caller's cwd / process cwd.
+        // run inside a git repo). If it isn't found on the machine, fall back to a
+        // managed clone dir that we auto-create + populate (no dependency on the
+        // user's local layout). Otherwise the caller's cwd / process cwd.
         let resolved = pr
             .as_ref()
             .and_then(|p| crate::workdir::resolve(p, cwd.as_deref()));
+        let managed = pr
+            .as_ref()
+            .filter(|_| resolved.is_none())
+            .map(|p| self.store.repo_clone_dir(p));
+        if let Some(m) = &managed {
+            let _ = std::fs::create_dir_all(m);
+        }
         let spawn_cwd = resolved
             .as_ref()
+            .or(managed.as_ref())
             .map(|p| p.display().to_string())
             .or_else(|| cwd.clone());
 
@@ -276,36 +286,50 @@ impl Engine {
 
             // Working dir: either check out the PR branch in the found repo, or tell
             // the user we couldn't locate it (reviews won't have a repo otherwise).
-            match &resolved {
-                Some(dir) => {
-                    let dir = dir.clone();
-                    let disp = dir.display().to_string();
-                    let n = pr.number;
-                    let s = self.sink.clone();
-                    self.emit(Event::Notice {
-                        tab: Some(tab),
-                        message: format!("repo: {disp} · checking out PR #{n}…"),
-                    });
-                    std::thread::spawn(move || {
-                        let out = std::process::Command::new("gh")
-                            .args(["pr", "checkout", &n.to_string()])
-                            .current_dir(&dir)
-                            .output();
-                        let msg = match out {
-                            Ok(o) if o.status.success() => format!("✓ checked out PR #{n} in {disp}"),
-                            Ok(o) => format!("gh pr checkout #{n} failed: {}", first_line(&o.stderr)),
-                            Err(e) => format!("gh pr checkout: {e}"),
-                        };
-                        s(Event::Notice { tab: Some(tab), message: msg });
-                    });
-                }
-                None => self.emit(Event::Notice {
+            // Prepare the repo in the background: either checkout in the existing
+            // local clone, or init+clone into the managed dir, then checkout the PR.
+            let dir = resolved.clone().or_else(|| managed.clone());
+            if let Some(dir) = dir {
+                let disp = dir.display().to_string();
+                let needs_clone = managed.is_some() && !dir.join(".git").exists();
+                let owner = pr.owner.clone();
+                let repo = pr.repo.clone();
+                let n = pr.number;
+                let s = self.sink.clone();
+                self.emit(Event::Notice {
                     tab: Some(tab),
-                    message: format!(
-                        "couldn't find repo '{}' under ~/repos, ~/projects… — reviews need a git repo; open it there or set PEAR_REPO_DIRS",
-                        pr.repo
-                    ),
-                }),
+                    message: if needs_clone {
+                        format!("cloning {owner}/{repo} → {disp}…")
+                    } else {
+                        format!("repo: {disp} · checking out PR #{n}…")
+                    },
+                });
+                std::thread::spawn(move || {
+                    if needs_clone {
+                        // git init + remote so `gh pr checkout` can fetch into the dir
+                        // (works even though the CLI is already running there).
+                        let url = format!("https://github.com/{owner}/{repo}.git");
+                        for args in [vec!["init", "-q"], vec!["remote", "add", "origin", &url]] {
+                            let _ = std::process::Command::new("git")
+                                .args(&args)
+                                .current_dir(&dir)
+                                .output();
+                        }
+                    }
+                    let out = std::process::Command::new("gh")
+                        .args(["pr", "checkout", &n.to_string()])
+                        .current_dir(&dir)
+                        .output();
+                    let msg = match out {
+                        Ok(o) if o.status.success() => format!("✓ PR #{n} ready in {disp}"),
+                        Ok(o) => format!("prepare repo #{n} failed: {}", first_line(&o.stderr)),
+                        Err(e) => format!("gh pr checkout: {e}"),
+                    };
+                    s(Event::Notice {
+                        tab: Some(tab),
+                        message: msg,
+                    });
+                });
             }
 
             match self.github.clone() {
