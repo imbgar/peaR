@@ -69,13 +69,6 @@
       </aside>
 
       <section id="workspace">
-        <div id="skills-banner" class="hidden">
-          <span class="sb-text">The review action buttons (Post / Distill / Walk-thru / Explain / Video) need pear's <code>/pr-*</code> skills installed in Claude. Install them into <code>~/.claude/skills</code>?</span>
-          <span class="sb-actions">
-            <button id="skills-install" class="action">Install</button>
-            <button id="skills-dismiss" class="action subtle">Not now</button>
-          </span>
-        </div>
         <header id="tabbar"></header>
 
         <div id="toolbar">
@@ -121,6 +114,26 @@
           <button id="theme-toggle" class="theme-toggle"><span class="swatch">◉</span> <span id="theme-name">phosphor</span></button>
         </footer>
       </section>
+    </div>
+
+    <div id="skills-modal" class="modal hidden">
+      <div class="modal-card consent-card">
+        <div class="modal-head">
+          <span class="modal-title">Install peaR review skills?</span>
+          <button id="skills-dismiss" class="modal-x" title="Not now (Esc)">×</button>
+        </div>
+        <div class="consent-body">
+          <p>The action buttons — <b>Post review</b>, <b>Distill</b>, <b>Walk-thru</b>, <b>Explain</b>, <b>Video</b> — run peaR's <code>/pr-*</code> slash commands. Those aren't bundled with Claude, so they need to be installed once.</p>
+          <p class="consent-target">peaR will write 6 skill files to <code>~/.claude/skills/</code>. Nothing else is touched, and you can re-run any time.</p>
+          <p class="consent-note">The review <b>tiers</b> (Light / Standard / Complex / Ultra) use Claude's built-in <code>/code-review</code> and work without this.</p>
+        </div>
+        <div class="modal-foot">
+          <span id="skills-status" class="modal-status"></span>
+          <span class="toolbar-spacer"></span>
+          <button id="skills-later" class="action subtle">Not now</button>
+          <button id="skills-install" class="primary">Install skills</button>
+        </div>
+      </div>
     </div>
 
     <div id="copy-modal" class="modal hidden">
