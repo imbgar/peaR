@@ -1,0 +1,117 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b1722; --panel:#0d1b28; --elev:#102234;
+  --bd:#1d3346; --bd2:#284a64; --cy:#38bdf8; --cy-d:#1f6a8f; --tx:#dbeafe; --dim:#7e9bb5;
+  --faint:#4c6981; --green:#5fd6a0; --red:#ff7a85;
+  --m:"IBM Plex Mono",monospace; --s:"IBM Plex Sans",sans-serif;
+}
+*{box-sizing:border-box;margin:0}
+body{width:1320px;height:840px;background:var(--bg);color:var(--tx);font-family:var(--s);font-size:13px;overflow:hidden}
+/* blueprint grid */
+#app{display:grid;grid-template-columns:264px 1fr;height:840px;position:relative;
+  background-image:linear-gradient(rgba(56,189,248,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(56,189,248,.05) 1px,transparent 1px);
+  background-size:26px 26px}
+.tick{position:absolute;width:7px;height:7px;border:1px solid var(--cy);opacity:.5;z-index:5}
+.t1{left:264px;top:0;border-right:none;border-bottom:none}.t2{right:0;top:0;border-left:none;border-bottom:none}
+.t3{right:0;bottom:0;border-left:none;border-top:none}.t4{left:264px;bottom:0;border-right:none;border-top:none}
+#sb{background:rgba(13,27,40,.85);border-right:1px solid var(--bd2);padding:16px 14px;display:flex;flex-direction:column;gap:15px}
+.brand{display:flex;align-items:baseline;gap:9px;padding-bottom:11px;border-bottom:1px solid var(--bd2)}
+.bname{font-weight:700;font-size:17px;letter-spacing:-.3px}
+.bsub{margin-left:auto;font-family:var(--m);font-size:9.5px;color:var(--cy-d);letter-spacing:1px}
+.fig{font-family:var(--m);font-size:9.5px;letter-spacing:1.5px;color:var(--cy-d);margin-bottom:6px}
+.lbl{font-family:var(--m);font-size:10px;letter-spacing:1px;color:var(--dim);margin-bottom:6px}
+.fld{border:1px solid var(--bd2);border-radius:3px;padding:9px 10px;color:var(--faint);font-family:var(--m);font-size:12px}
+.row{display:grid;grid-template-columns:1fr auto;gap:7px;margin-top:7px}
+.sel{border:1px solid var(--bd2);border-radius:3px;padding:9px 10px;font-family:var(--m);font-size:12px;color:var(--dim)}
+.btn{border:1px solid var(--cy);border-radius:3px;padding:9px 14px;font-size:12px;font-weight:600;color:#04222f;background:var(--cy)}
+.ghost{border:1px dashed var(--bd2);border-radius:3px;color:var(--dim);width:100%;margin-top:8px;text-align:center;padding:8px;font-family:var(--m);font-size:11.5px}
+.auto{border:1px solid var(--bd2);border-radius:4px;padding:11px;background:rgba(16,34,52,.7)}
+.chk{display:flex;align-items:center;gap:9px;font-size:12.5px}
+.box{width:14px;height:14px;border:1.5px solid var(--cy);border-radius:2px;background:var(--cy);display:flex;align-items:center;justify-content:center;color:#04222f;font-size:10px}
+.auto .sel{width:100%;margin-top:9px}
+.hi{padding:8px 9px;border:1px solid transparent;border-radius:3px}
+.hi.on{border-color:var(--bd2);background:rgba(16,34,52,.6)}
+.hi .r{font-family:var(--m);font-size:12px;color:var(--cy)}
+.hi .t{color:var(--dim);font-size:11px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#ws{display:grid;grid-template-rows:auto auto 1fr auto;min-width:0}
+#tabs{display:flex;gap:6px;padding:11px 14px 0;align-items:flex-end}
+.tab{display:flex;align-items:center;gap:8px;padding:9px 13px;border:1px solid var(--bd2);border-bottom:none;border-radius:4px 4px 0 0;background:rgba(13,27,40,.8);color:var(--dim);font-family:var(--m);font-size:12px}
+.tab.on{background:var(--elev);color:var(--tx);border-color:var(--cy)}
+.dot{width:7px;height:7px;border-radius:50%}.d-c{background:var(--cy)}.d-x{background:var(--green)}
+#tb{display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:12px 14px;border-bottom:1px solid var(--bd2);background:rgba(16,34,52,.55)}
+.tlbl{font-family:var(--m);font-size:10px;letter-spacing:1.5px;color:var(--cy-d);margin-right:3px}
+.act{border:1px solid var(--bd2);border-radius:3px;padding:7px 12px;font-family:var(--m);font-size:11.5px;color:var(--tx)}
+.act.on{border-color:var(--cy);color:var(--cy);background:rgba(56,189,248,.1)}
+.div{width:1px;height:22px;background:var(--bd2);margin:0 3px}.sp{flex:1}
+#stage{display:grid;grid-template-columns:1fr 392px;min-height:0}
+#term{padding:14px 16px;font-family:var(--m);font-size:12.5px;line-height:1.65;border-right:1px solid var(--bd2);overflow:hidden;background:rgba(8,18,28,.6)}
+.cy{color:var(--cy)}.d{color:var(--faint)}.g{color:var(--green)}.r{color:var(--red)}.tx{color:var(--tx)}
+.cur{display:inline-block;width:8px;height:15px;background:var(--cy);vertical-align:-2px;box-shadow:0 0 8px var(--cy)}
+#pan{background:rgba(13,27,40,.85);display:flex;flex-direction:column;min-width:0}
+.ph{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid var(--bd2)}
+.pt{font-weight:600;font-size:12.5px}.pfig{font-family:var(--m);font-size:9.5px;color:var(--cy-d);letter-spacing:1px}
+.pb{padding:14px 16px;font-size:12.5px;line-height:1.6;overflow:hidden}
+.pb h3{font-family:var(--m);font-size:10px;letter-spacing:1.5px;color:var(--cy);margin:14px 0 7px}.pb h3:first-child{margin-top:0}
+.pb li{list-style:none;color:var(--dim);margin:6px 0;padding-left:16px;position:relative}
+.pb li::before{content:"·";position:absolute;left:3px;color:var(--cy);font-weight:700}
+.pb code{font-family:var(--m);font-size:11px;color:var(--cy)}
+.sev{font-family:var(--m);font-size:10px;color:var(--red)}
+#st{display:flex;gap:8px;align-items:center;padding:8px 14px;border-top:1px solid var(--bd2);background:rgba(13,27,40,.85);font-family:var(--m);font-size:11px;color:var(--dim)}
+.pulse{width:7px;height:7px;border-radius:50%;background:var(--cy);box-shadow:0 0 8px var(--cy)}
+</style></head>
+<body><div id="app">
+  <span class="tick t1"></span><span class="tick t2"></span><span class="tick t3"></span><span class="tick t4"></span>
+  <aside id="sb">
+    <div class="brand"><span class="bname">pear</span><span class="bsub">FIG.00 / PR-CTRL</span></div>
+    <div><div class="fig">FIG.01 — INTAKE</div><div class="lbl">OPEN PR</div><div class="fld">owner/repo#123 · paste URL</div>
+      <div class="row"><div class="sel">claude ▾</div><div class="btn">OPEN</div></div>
+      <div class="ghost">+ NEW SHELL</div></div>
+    <div class="auto"><div class="chk"><span class="box">✓</span><span>Auto-review on open</span></div><div class="sel">standard · deep single pass ▾</div></div>
+    <div><div class="fig">FIG.02 — LEDGER</div>
+      <div class="hi on"><div class="r">claude-flow#42</div><div class="t">fix: PTY reader backpressure</div></div>
+      <div class="hi"><div class="r">pear#88</div><div class="t">feat: insight bus prototype</div></div>
+      <div class="hi"><div class="r">web-app#323</div><div class="t">chore: bump deploy wave</div></div>
+    </div>
+  </aside>
+  <section id="ws">
+    <header id="tabs">
+      <div class="tab on"><span class="dot d-c"></span>claude-flow#42 ×</div>
+      <div class="tab"><span class="dot d-x"></span>pear#88 ×</div>
+    </header>
+    <div id="tb">
+      <span class="tlbl">LAUNCH ▸</span>
+      <span class="act">light</span><span class="act on">standard</span><span class="act">complex</span>
+      <span class="div"></span>
+      <span class="act">post review</span><span class="act">distill</span><span class="act">walk-thru</span><span class="act">explain</span><span class="act">video</span><span class="act">copy</span>
+      <span class="sp"></span><span class="act">insight ◂</span><span class="act">save</span>
+    </div>
+    <div id="stage">
+      <div id="term">
+<div class="d">~/src/claude-flow · branch <span class="cy">pr/42</span></div>
+<div><span class="cy">❯</span> <span class="tx">claude --permission-mode acceptEdits</span></div><br>
+<div class="g">● reviewing claude-flow#42 — standard / high effort</div>
+<div class="d">  14 files · +612 / −88</div><br>
+<div class="tx">3 issues flagged, 2 nits:</div>
+<div><span class="r">  1. [blocker]</span> <span class="d">unbounded channel</span> session.rs:74</div>
+<div><span class="cy">  2. [should-fix]</span> <span class="d">missing timeout</span> github.rs:51</div>
+<div class="d">  3. race on tab close → reader thread leak</div><br>
+<div class="cy">❯</div> <span class="tx">/code-review high</span><span class="cur"></span>
+      </div>
+      <aside id="pan">
+        <div class="ph"><div><span class="pt">Latest review</span> <span class="pfig">— #42</span></div><span class="pfig">⟳ ×</span></div>
+        <div class="pb">
+          <h3>VERDICT</h3><div class="d" style="font-family:var(--s)">Request changes — one blocking concurrency bug.</div>
+          <h3>FINDINGS</h3>
+          <li style="font-family:var(--s)"><span class="sev">[blocker]</span> Unbounded PTY channel — OOM risk · <code>session.rs:74</code></li>
+          <li style="font-family:var(--s)"><span class="sev">[should-fix]</span> No GitHub timeout · <code>github.rs:51</code></li>
+          <li style="font-family:var(--s)">Reader thread outlives tab on close · <code>engine.rs:120</code></li>
+          <h3>NITS</h3><li style="font-family:var(--s)">Prefer <code>&str</code> in dispatch table</li>
+        </div>
+      </aside>
+    </div>
+    <footer id="st"><span class="pulse"></span><span>standard review · 3 findings · auto-accept edits on</span></footer>
+  </section>
+</div></body></html>

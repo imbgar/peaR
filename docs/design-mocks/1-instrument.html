@@ -1,0 +1,131 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#07080a; --panel:#0b0d11; --elev:#10131a; --inp:#0c0f15;
+  --bd:#191d26; --bd2:#262b36; --tx:#e7e9ee; --dim:#8a909c; --faint:#565c69;
+  --acc:#c6f24e; --acc2:#3c4a23; --blue:#6cb6ff; --red:#ff6b6b;
+  --ui:"Hanken Grotesk",sans-serif; --mono:"Geist Mono",monospace;
+}
+*{box-sizing:border-box;margin:0}
+body{width:1320px;height:840px;background:var(--bg);color:var(--tx);font-family:var(--ui);font-size:13px;overflow:hidden;-webkit-font-smoothing:antialiased}
+#app{display:grid;grid-template-columns:256px 1fr;height:840px}
+/* sidebar */
+#sb{background:var(--panel);border-right:1px solid var(--bd);padding:16px 14px;display:flex;flex-direction:column;gap:16px}
+.brand{display:flex;align-items:center;gap:9px;padding:2px 2px 10px;border-bottom:1px solid var(--bd)}
+.bmark{width:11px;height:11px;border-radius:3px;background:var(--acc);box-shadow:0 0 14px var(--acc)}
+.bname{font-weight:700;font-size:16px;letter-spacing:-.3px}
+.bsub{color:var(--faint);font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;margin-left:auto}
+.lbl{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--faint);font-weight:600;margin-bottom:6px}
+.inp{background:var(--inp);border:1px solid var(--bd2);border-radius:7px;padding:9px 10px;font-family:var(--mono);font-size:12px;color:var(--tx)}
+.inp.ph{color:var(--faint)}
+.row{display:grid;grid-template-columns:1fr auto;gap:7px;margin-top:7px}
+.sel{background:var(--inp);border:1px solid var(--bd2);border-radius:7px;padding:9px 10px;font-size:12px;color:var(--dim)}
+.btn{border-radius:7px;border:1px solid transparent;font-size:12px;font-weight:600;padding:9px 14px;font-family:var(--ui)}
+.prim{background:var(--acc);color:#0b1400}
+.ghost{background:transparent;border:1px dashed var(--bd2);color:var(--dim);width:100%;margin-top:8px;padding:8px}
+.auto{background:var(--elev);border:1px solid var(--bd);border-radius:9px;padding:11px}
+.chk{display:flex;align-items:center;gap:9px;font-size:12.5px}
+.box{width:15px;height:15px;border-radius:4px;border:1.5px solid var(--acc);background:var(--acc);position:relative}
+.box::after{content:"";position:absolute;left:4.5px;top:1.5px;width:4px;height:8px;border:solid #0b1400;border-width:0 2px 2px 0;transform:rotate(45deg)}
+.auto .sel{width:100%;margin-top:9px}
+.hh{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--faint);font-weight:600;margin-top:2px}
+.hist{display:flex;flex-direction:column;gap:3px;margin-top:8px}
+.hi{padding:8px 9px;border-radius:7px;border:1px solid transparent}
+.hi.on{background:var(--elev);border-color:var(--bd)}
+.hi .r{font-family:var(--mono);font-size:12px;color:var(--acc)}
+.hi .t{color:var(--dim);font-size:11px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* workspace */
+#ws{display:grid;grid-template-rows:auto auto 1fr auto;min-width:0}
+#tabs{display:flex;gap:6px;padding:11px 14px 0;align-items:flex-end}
+.tab{display:flex;align-items:center;gap:8px;padding:9px 12px;border:1px solid var(--bd);border-bottom:none;border-radius:9px 9px 0 0;background:var(--panel);color:var(--dim);font-family:var(--mono);font-size:12.5px;position:relative}
+.tab.on{background:var(--elev);color:var(--tx);border-color:var(--bd2)}
+.tab.on::after{content:"";position:absolute;left:10px;right:10px;bottom:-1px;height:2px;background:var(--acc);box-shadow:0 0 10px var(--acc)}
+.dot{width:7px;height:7px;border-radius:50%}
+.d-c{background:var(--acc)}.d-x{background:var(--blue)}
+.tab .x{color:var(--faint);margin-left:2px}
+#tb{display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:11px 14px;background:var(--elev);border-bottom:1px solid var(--bd)}
+.tlbl{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--faint);font-weight:700;margin-right:3px}
+.seg{display:flex;border:1px solid var(--bd2);border-radius:7px;overflow:hidden}
+.seg .a{padding:7px 13px;font-size:12px;color:var(--dim);border-right:1px solid var(--bd2);font-weight:500}
+.seg .a:last-child{border-right:none}
+.seg .a.on{background:var(--acc);color:#0b1400;font-weight:600}
+.act{background:var(--inp);border:1px solid var(--bd2);border-radius:7px;padding:7px 12px;font-size:12px;color:var(--tx);font-weight:500}
+.div{width:1px;height:22px;background:var(--bd2);margin:0 3px}
+.sp{flex:1}
+.act.sub{color:var(--dim)}
+#stage{display:grid;grid-template-columns:1fr 392px;min-height:0}
+#term{background:#08090c;padding:14px 16px;font-family:var(--mono);font-size:12.5px;line-height:1.65;overflow:hidden;border-right:1px solid var(--bd)}
+.c-dim{color:var(--faint)}.c-acc{color:var(--acc)}.c-blue{color:var(--blue)}.c-tx{color:var(--tx)}.c-red{color:var(--red)}
+.cur{display:inline-block;width:8px;height:15px;background:var(--acc);vertical-align:-2px;box-shadow:0 0 10px var(--acc)}
+#pan{background:var(--panel);display:flex;flex-direction:column;min-width:0}
+.ph{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--bd)}
+.pt{font-weight:600;font-size:12.5px}
+.pba{display:flex;gap:8px;color:var(--faint)}
+.pb{padding:14px 16px;overflow:hidden;font-size:12.5px;line-height:1.6}
+.pb h3{font-size:13px;color:var(--acc);margin:14px 0 7px;font-family:var(--ui)}
+.pb h3:first-child{margin-top:0}
+.pb .v{display:inline-block;font-family:var(--mono);font-size:10.5px;padding:2px 7px;border-radius:5px;background:var(--acc2);color:var(--acc);margin-bottom:8px}
+.pb li{margin:6px 0;color:var(--dim);list-style:none;padding-left:16px;position:relative}
+.pb li::before{content:"";position:absolute;left:0;top:7px;width:5px;height:5px;border-radius:1px;background:var(--acc)}
+.pb code{font-family:var(--mono);font-size:11px;background:var(--inp);padding:1px 5px;border-radius:4px;color:var(--tx)}
+.sev{font-family:var(--mono);font-size:10px;color:var(--red);font-weight:600}
+#st{display:flex;align-items:center;gap:8px;padding:7px 14px;background:var(--panel);border-top:1px solid var(--bd);font-family:var(--mono);font-size:11px;color:var(--dim)}
+.pulse{width:7px;height:7px;border-radius:50%;background:var(--acc);box-shadow:0 0 9px var(--acc)}
+</style></head>
+<body><div id="app">
+  <aside id="sb">
+    <div class="brand"><span class="bmark"></span><span class="bname">pear</span><span class="bsub">control</span></div>
+    <div><div class="lbl">Open PR</div><div class="inp ph">owner/repo#123 · or paste a URL</div>
+      <div class="row"><div class="sel">claude ▾</div><div class="btn prim">Open</div></div>
+      <div class="btn ghost">+ New shell</div></div>
+    <div class="auto"><div class="chk"><span class="box"></span><span>Auto-review on open</span></div><div class="sel">standard · deep single pass ▾</div></div>
+    <div><div class="hh">History</div><div class="hist">
+      <div class="hi on"><div class="r">claude-flow#42</div><div class="t">fix: PTY reader backpressure</div></div>
+      <div class="hi"><div class="r">pear#88</div><div class="t">feat: insight bus prototype</div></div>
+      <div class="hi"><div class="r">web-app#323</div><div class="t">chore: bump deploy wave</div></div>
+    </div></div>
+  </aside>
+  <section id="ws">
+    <header id="tabs">
+      <div class="tab on"><span class="dot d-c"></span>claude-flow#42<span class="x">×</span></div>
+      <div class="tab"><span class="dot d-x"></span>pear#88<span class="x">×</span></div>
+    </header>
+    <div id="tb">
+      <span class="tlbl">Launch</span>
+      <div class="seg"><span class="a">Light</span><span class="a on">Standard</span><span class="a">Complex</span></div>
+      <span class="div"></span>
+      <span class="act">Post review</span><span class="act">Distill</span><span class="act">Walk-thru</span><span class="act">Explain</span><span class="act">Video</span><span class="act">Copy content</span>
+      <span class="sp"></span><span class="act sub">Insight ◂</span><span class="act sub">Save review</span>
+    </div>
+    <div id="stage">
+      <div id="term">
+<div class="c-dim">~/src/claude-flow on <span class="c-acc">pr/42</span></div>
+<div><span class="c-acc">❯</span> <span class="c-tx">claude --permission-mode acceptEdits</span></div>
+<br><div class="c-blue">● Reviewing the diff for claude-flow#42 (standard / high effort)…</div>
+<div class="c-dim">  read 14 files · 612 additions · 88 deletions</div><br>
+<div class="c-tx">I found <span class="c-acc">3 issues worth flagging</span> and 2 nits:</div>
+<div class="c-red">  1. [blocker]</div> <span class="c-dim">unbounded channel in</span> <span class="c-tx">session.rs:74</span>
+<div class="c-acc">  2. [should-fix]</div> <span class="c-dim">missing timeout on</span> <span class="c-tx">github.rs:51</span>
+<div class="c-dim">  3. race on tab close → reader thread …</div><br>
+<div class="c-acc">❯</div> <span class="c-tx">/code-review high</span><span class="cur"></span>
+      </div>
+      <aside id="pan">
+        <div class="ph"><span class="pt">Latest review — claude-flow#42</span><span class="pba">⟳ ×</span></div>
+        <div class="pb">
+          <span class="v">markdown</span>
+          <h3>Verdict</h3>
+          <div style="color:var(--dim)">Request changes — one blocking concurrency bug.</div>
+          <h3>Findings</h3>
+          <li><span class="sev">[blocker]</span> Unbounded PTY channel can OOM under fast output — <code>session.rs:74</code></li>
+          <li><span class="sev">[should-fix]</span> No timeout on the GitHub call — <code>github.rs:51</code></li>
+          <li>Reader thread may outlive the tab on close — <code>engine.rs:120</code></li>
+          <h3>Nits</h3>
+          <li>Prefer <code>&str</code> over <code>String</code> in dispatch table</li>
+        </div>
+      </aside>
+    </div>
+    <footer id="st"><span class="pulse"></span><span>standard review · 3 findings · auto-accept edits on</span></footer>
+  </section>
+</div></body></html>
