@@ -623,7 +623,8 @@ window.addEventListener("DOMContentLoaded", async () => {
       setStatus("⚠ expected owner/repo#NUMBER", true);
       return;
     }
-    openPr(pr, selectedCli());
+    // The Open box always starts a FRESH session; History is where you resume.
+    openPr(pr, selectedCli(), { fresh: true });
     prInput.value = "";
   });
 
