@@ -1,0 +1,54 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="38%" r="75%">
+      <stop offset="0%" stop-color="#1c1305"/>
+      <stop offset="55%" stop-color="#0e0a02"/>
+      <stop offset="100%" stop-color="#070500"/>
+    </radialGradient>
+    <linearGradient id="pear" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffd66a"/>
+      <stop offset="48%" stop-color="#ffb000"/>
+      <stop offset="100%" stop-color="#e08a00"/>
+    </linearGradient>
+    <linearGradient id="leaf" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#c6f24e"/>
+      <stop offset="100%" stop-color="#7ec61f"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="26" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- squircle background -->
+  <rect x="0" y="0" width="1024" height="1024" rx="232" fill="url(#bg)"/>
+  <!-- faint scanlines, phosphor nod -->
+  <g opacity="0.05" fill="#ffb000">
+    <rect x="120" y="150" width="784" height="2"/>
+    <rect x="120" y="430" width="784" height="2"/>
+    <rect x="120" y="710" width="784" height="2"/>
+  </g>
+
+  <g filter="url(#glow)">
+    <!-- stem -->
+    <path d="M512 300 C 508 250 506 224 520 196" stroke="#9a7a2e" stroke-width="20" stroke-linecap="round" fill="none"/>
+    <!-- leaf -->
+    <path d="M520 252 C 560 196 648 188 700 214 C 666 280 586 300 520 252 Z" fill="url(#leaf)"/>
+    <!-- pear body: narrow neck, bulbous base (teardrop) -->
+    <path d="M512 286
+             C 470 286 452 338 458 392
+             C 462 432 444 462 410 498
+             C 352 558 318 636 322 706
+             C 326 800 410 858 512 858
+             C 614 858 698 800 702 706
+             C 706 636 672 558 614 498
+             C 580 462 562 432 566 392
+             C 572 338 554 286 512 286 Z"
+          fill="url(#pear)"/>
+    <!-- specular highlight -->
+    <ellipse cx="430" cy="560" rx="46" ry="84" fill="#fff2cf" opacity="0.34" transform="rotate(-18 430 560)"/>
+    <!-- terminal caret cut into the pear -->
+    <path d="M470 642 L 520 690 L 470 738" stroke="#0e0a02" stroke-width="26" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <rect x="540" y="716" width="64" height="22" rx="6" fill="#0e0a02"/>
+  </g>
+</svg>
