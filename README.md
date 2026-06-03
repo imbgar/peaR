@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🍐 pear
+# 🍐 peaR
 
 **A terminal-native PR review control center.**
 Every pull request is a tab. Every tab is a real terminal running the AI CLI of your choice.
@@ -20,7 +20,7 @@ Review with one keystroke, resume any past session, and keep your reviews close.
 
 ---
 
-## Why pear
+## Why peaR
 
 Reviewing PRs with an AI CLI means a lot of `gh pr checkout`, juggling terminal panes, and
 losing the conversation the moment you close a tab. **pear** makes the PR the unit of work:

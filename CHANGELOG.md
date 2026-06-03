@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-06-03
+
+### Added
+- App icon — the pear logo across the full icon set (macOS bundle no longer ships
+  the default Tauri art).
+
+### Changed
+- Product name is now **peaR** (Launchpad / window title / titles); prose stays "pear".
+
+### Fixed
+- The Open box always starts a fresh Claude session, so opening the same PR twice no
+  longer points two tabs at one session id. The engine also forks to a new session if a
+  resume would target a session already live in another tab.
+
 ## [0.1.0] — 2026-06-03
 
 First public release. A functional, terminal-native PR review control center.
@@ -30,5 +44,6 @@ First public release. A functional, terminal-native PR review control center.
 - **Shipped review skills** — `pr-post-review`, `pr-copy`, `pr-distill`, `pr-walkthru`,
   `pr-explain`, `pr-video`.
 
-[Unreleased]: https://github.com/imbgar/pear/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/imbgar/pear/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/imbgar/pear/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/imbgar/pear/releases/tag/v0.1.0

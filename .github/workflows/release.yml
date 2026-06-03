@@ -35,8 +35,8 @@ jobs:
         with:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name }}
-          releaseName: 'pear ${{ github.ref_name }}'
-          releaseBody: 'See [CHANGELOG.md](https://github.com/imbgar/pear/blob/main/CHANGELOG.md).'
-          releaseDraft: true
+          releaseName: 'peaR ${{ github.ref_name }}'
+          releaseBody: 'See [CHANGELOG.md](https://github.com/imbgar/pear/blob/main/CHANGELOG.md). Unsigned build — right-click → Open on first launch.'
+          releaseDraft: false
           prerelease: false
           args: --target universal-apple-darwin
