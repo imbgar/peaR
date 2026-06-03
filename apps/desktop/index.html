@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>pear — PR Control Center</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <div id="crt" aria-hidden="true"></div>
+    <div id="app">
+      <aside id="sidebar">
+        <div class="brand">
+          <span class="brand-mark">◖</span>
+          <span class="brand-name">pear</span>
+          <span class="brand-sub">PR control center</span>
+        </div>
+
+        <form id="open-form" class="open">
+          <label class="field">
+            <span class="field-label">Open PR</span>
+            <input id="pr-input" placeholder="owner/repo#123  ·  or paste a GitHub URL" autocomplete="off" spellcheck="false" />
+          </label>
+          <div class="open-row">
+            <select id="cli-select" title="CLI launched in the new tab">
+              <option value="claude">claude</option>
+              <option value="codex">codex</option>
+              <option value="aider">aider</option>
+              <option value="shell">shell</option>
+            </select>
+            <button type="submit" class="primary">Open</button>
+          </div>
+          <button type="button" id="new-shell" class="ghost">+ New shell</button>
+          <label class="field perm-field">
+            <span class="field-label">Claude permissions</span>
+            <select id="perm-select" title="How new Claude tabs handle permission prompts">
+              <option value="auto">auto · smart (recommended)</option>
+              <option value="acceptEdits">accept edits · ask on bash</option>
+              <option value="dontAsk">don't ask</option>
+              <option value="bypassPermissions">bypass 🚨 · no prompts</option>
+              <option value="default">ask each</option>
+              <option value="plan">plan · read-only</option>
+            </select>
+          </label>
+        </form>
+
+        <div class="auto-review">
+          <label class="check">
+            <input type="checkbox" id="auto-review-toggle" />
+            <span>Auto-review on open</span>
+          </label>
+          <select id="auto-review-tier" title="Tier used for auto-review on open">
+            <option value="light">light · fast single pass</option>
+            <option value="standard" selected>standard · deep single pass</option>
+            <option value="complex">complex · diverse agents (local)</option>
+          </select>
+        </div>
+
+        <div class="section-head section-head-row">
+          <span>History</span>
+          <span class="section-actions">
+            <button type="button" id="history-clear" class="mini" title="Clear history (restorable)">clear</button>
+            <button type="button" id="history-restore" class="mini" title="Restore last cleared history">restore</button>
+          </span>
+        </div>
+        <ul id="history"></ul>
+      </aside>
+
+      <section id="workspace">
+        <header id="tabbar"></header>
+
+        <div id="toolbar">
+          <span class="toolbar-group-label">Launch</span>
+          <button data-tier="light" data-needs-tab class="action tier" title="Fast single pass · /code-review low">Light</button>
+          <button data-tier="standard" data-needs-tab class="action tier" title="Deep single pass · /code-review high">Standard</button>
+          <button data-tier="complex" data-needs-tab class="action tier" title="Local diverse multi-agent review (free, runs on your machine)">Complex</button>
+          <button data-btn="ultra" data-needs-tab class="action cost" title="PAID cloud review — uploads your repo to Claude on the web (/code-review ultra)">Ultra&nbsp;💸</button>
+          <span class="toolbar-div"></span>
+          <button data-btn="post_review" data-needs-tab class="action">Post review</button>
+          <button data-btn="distill" data-needs-tab class="action">Distill</button>
+          <button data-btn="walk_through" data-needs-tab class="action">Walk-thru</button>
+          <button data-btn="explain" data-needs-tab class="action">Explain</button>
+          <button data-btn="video" data-needs-tab class="action">Video</button>
+          <button data-btn="copy_content" data-needs-tab class="action">Copy content</button>
+          <span class="toolbar-spacer"></span>
+          <button id="panel-toggle" class="action subtle">Insight ▸</button>
+          <button data-btn="save_review" data-needs-tab class="action subtle">Save review</button>
+        </div>
+
+        <div id="stage">
+          <div id="terminals"></div>
+          <aside id="panel">
+            <div class="panel-head">
+              <span class="panel-title" id="panel-title">Insight</span>
+              <div class="panel-head-actions">
+                <button id="panel-load" data-needs-tab title="Load latest saved review">⟳</button>
+                <button id="panel-close" title="Collapse">×</button>
+              </div>
+            </div>
+            <div class="panel-body" id="panel-body">
+              <div class="panel-empty">
+                Nothing here yet. Run a review, <b>Save review</b>, then hit ⟳ to render it —
+                or wire the live bus (see roadmap) so the agent can push diffs &amp; notes here.
+              </div>
+            </div>
+          </aside>
+        </div>
+
+        <footer id="statusbar">
+          <span id="status">starting…</span>
+          <span class="status-spacer"></span>
+          <button id="theme-toggle" class="theme-toggle"><span class="swatch">◉</span> <span id="theme-name">phosphor</span></button>
+        </footer>
+      </section>
+    </div>
+
+    <div id="copy-modal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-head">
+          <span class="modal-title">Content for copy / paste</span>
+          <button id="copy-modal-close" class="modal-x" title="Close (Esc)">×</button>
+        </div>
+        <textarea id="copy-modal-text" spellcheck="false" wrap="off"></textarea>
+        <div class="modal-foot">
+          <span id="copy-modal-status" class="modal-status"></span>
+          <span class="toolbar-spacer"></span>
+          <button id="copy-modal-recopy" class="action">Copy to clipboard</button>
+          <button id="copy-modal-done" class="primary">Done</button>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

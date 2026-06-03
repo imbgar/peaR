@@ -1,0 +1,22 @@
+[package]
+name = "pear-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "In-process core for the pear PR control center: tabs, PTY sessions, GitHub, review storage, slash dispatch."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+portable-pty = "0.8"
+directories = "5"
+uuid = { version = "1", features = ["v4"] }
+ureq = { version = "2", features = ["json"] }
+time = { version = "0.3", features = ["formatting", "macros"] }
+
+[dev-dependencies]
+tempfile = "3"

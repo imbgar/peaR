@@ -1,0 +1,116 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0701; --panel:#0d0902; --elev:#120d03; --bd:#3a2a06; --bd2:#5a4209;
+  --amb:#ffb000; --amb-d:#a9760a; --dim:#9a7a2e; --faint:#6b5418; --green:#8bd450; --red:#ff6a4a;
+  --m:"IBM Plex Mono",monospace;
+}
+*{box-sizing:border-box;margin:0}
+body{width:1320px;height:840px;background:var(--bg);color:var(--amb);font-family:var(--m);font-size:13px;overflow:hidden}
+.glow{text-shadow:0 0 6px rgba(255,176,0,.45)}
+#app{display:grid;grid-template-columns:262px 1fr;height:840px;position:relative}
+/* CRT overlays */
+#app::before{content:"";position:absolute;inset:0;pointer-events:none;z-index:9;
+  background:repeating-linear-gradient(0deg,rgba(0,0,0,0) 0,rgba(0,0,0,0) 2px,rgba(0,0,0,.16) 3px,rgba(0,0,0,0) 4px)}
+#app::after{content:"";position:absolute;inset:0;pointer-events:none;z-index:9;
+  background:radial-gradient(120% 90% at 50% 45%,transparent 55%,rgba(0,0,0,.55) 100%)}
+#sb{background:var(--panel);border-right:1px solid var(--bd);padding:16px 14px;display:flex;flex-direction:column;gap:15px}
+.brand{display:flex;align-items:center;gap:8px;padding-bottom:11px;border-bottom:1px solid var(--bd)}
+.bname{font-weight:700;font-size:17px;letter-spacing:3px}
+.bsub{margin-left:auto;font-size:10px;color:var(--faint);letter-spacing:2px}
+.lbl{font-size:10.5px;letter-spacing:1.5px;color:var(--amb-d);margin-bottom:7px}
+.fld{border:1px solid var(--bd2);padding:9px 10px;color:var(--faint);font-size:12px;letter-spacing:.5px}
+.row{display:grid;grid-template-columns:1fr auto;gap:7px;margin-top:7px}
+.sel{border:1px solid var(--bd2);padding:9px 10px;font-size:12px;color:var(--dim)}
+.btn{border:1px solid var(--amb);padding:9px 14px;font-size:12px;font-weight:600;color:var(--amb);background:rgba(255,176,0,.07);letter-spacing:1px}
+.ghost{border:1px dashed var(--bd2);color:var(--dim);width:100%;margin-top:8px;text-align:center;padding:8px;letter-spacing:1px}
+.auto{border:1px solid var(--bd);padding:11px;background:var(--elev)}
+.chk{display:flex;align-items:center;gap:9px;font-size:12px;letter-spacing:.5px}
+.box{width:14px;height:14px;border:1.5px solid var(--amb);display:flex;align-items:center;justify-content:center;color:var(--amb);font-size:11px}
+.auto .sel{width:100%;margin-top:9px}
+.hh{font-size:10.5px;letter-spacing:1.5px;color:var(--amb-d);margin:2px 0 8px}
+.hi{padding:8px 9px;border:1px solid transparent}
+.hi.on{border-color:var(--bd2);background:var(--elev)}
+.hi .r{font-size:12px;font-weight:600}
+.hi .t{color:var(--faint);font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#ws{display:grid;grid-template-rows:auto auto 1fr auto;min-width:0}
+#tabs{display:flex;gap:6px;padding:11px 14px 0;align-items:flex-end}
+.tab{padding:9px 13px;border:1px solid var(--bd2);border-bottom:none;background:var(--panel);color:var(--dim);font-size:12.5px;letter-spacing:.5px;display:flex;gap:8px;align-items:center}
+.tab.on{background:var(--elev);color:var(--amb);box-shadow:inset 0 0 12px rgba(255,176,0,.12)}
+.tab.on .n{color:var(--amb)}
+#tb{display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:12px 14px;border-bottom:1px solid var(--bd);background:var(--elev)}
+.tlbl{font-size:10.5px;letter-spacing:1.5px;color:var(--amb-d);margin-right:3px}
+.bk{padding:7px 11px;border:1px solid var(--bd2);font-size:11.5px;letter-spacing:1px;color:var(--dim)}
+.bk.on{border-color:var(--amb);color:var(--amb);background:rgba(255,176,0,.08)}
+.div{width:1px;height:22px;background:var(--bd2);margin:0 3px}.sp{flex:1}
+#stage{display:grid;grid-template-columns:1fr 392px;min-height:0}
+#term{padding:14px 16px;font-size:12.5px;line-height:1.7;border-right:1px solid var(--bd);overflow:hidden}
+.g{color:var(--green)} .d{color:var(--faint)} .r{color:var(--red)} .a{color:var(--amb)}
+.cur{display:inline-block;width:9px;height:15px;background:var(--amb);vertical-align:-2px;box-shadow:0 0 9px var(--amb);animation:b 1s steps(2) infinite}
+@keyframes b{50%{opacity:0}}
+#pan{background:var(--panel);display:flex;flex-direction:column;min-width:0}
+.ph{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid var(--bd)}
+.pt{font-size:12.5px;letter-spacing:.5px}
+.pb{padding:14px 16px;font-size:12px;line-height:1.7;overflow:hidden}
+.pb h3{font-size:11px;letter-spacing:2px;color:var(--amb-d);margin:14px 0 7px}.pb h3:first-child{margin-top:0}
+.pb li{list-style:none;color:var(--dim);margin:7px 0;padding-left:16px;position:relative}
+.pb li::before{content:"▸";position:absolute;left:0;color:var(--amb)}
+.pb code{color:var(--amb)}
+.sev{color:var(--red)}
+#st{display:flex;gap:8px;align-items:center;padding:8px 14px;border-top:1px solid var(--bd);background:var(--panel);font-size:11px;color:var(--dim);letter-spacing:1px}
+.blink{width:7px;height:7px;border-radius:50%;background:var(--amb);box-shadow:0 0 9px var(--amb);animation:b 1.4s infinite}
+</style></head>
+<body><div id="app">
+  <aside id="sb">
+    <div class="brand"><span class="bname glow">PEAR</span><span class="bsub">// PR CTRL</span></div>
+    <div><div class="lbl glow">OPEN PR</div><div class="fld">owner/repo#123 · paste URL_</div>
+      <div class="row"><div class="sel">claude ▾</div><div class="btn glow">OPEN</div></div>
+      <div class="ghost">+ NEW SHELL</div></div>
+    <div class="auto"><div class="chk"><span class="box">✓</span><span>AUTO-REVIEW ON OPEN</span></div><div class="sel">standard · deep pass ▾</div></div>
+    <div><div class="hh glow">HISTORY</div>
+      <div class="hi on"><div class="r glow">claude-flow#42</div><div class="t">fix: PTY reader backpressure</div></div>
+      <div class="hi"><div class="r">pear#88</div><div class="t">feat: insight bus prototype</div></div>
+      <div class="hi"><div class="r">roboflow-infra#323</div><div class="t">chore: bump deploy wave</div></div>
+    </div>
+  </aside>
+  <section id="ws">
+    <header id="tabs">
+      <div class="tab on"><span class="n glow">claude-flow#42</span> ×</div>
+      <div class="tab">pear#88 ×</div>
+    </header>
+    <div id="tb">
+      <span class="tlbl glow">LAUNCH</span>
+      <span class="bk">(LIGHT)</span><span class="bk on glow">(STANDARD)</span><span class="bk">(COMPLEX)</span>
+      <span class="div"></span>
+      <span class="bk">POST</span><span class="bk">DISTILL</span><span class="bk">WALK-THRU</span><span class="bk">EXPLAIN</span><span class="bk">VIDEO</span><span class="bk">COPY</span>
+      <span class="sp"></span><span class="bk">INSIGHT ◂</span><span class="bk">SAVE</span>
+    </div>
+    <div id="stage">
+      <div id="term">
+<div class="d">~/src/claude-flow on <span class="a">pr/42</span></div>
+<div><span class="a glow">❯</span> claude --permission-mode acceptEdits</div><br>
+<div class="g glow">● reviewing claude-flow#42 — standard / high effort</div>
+<div class="d">  14 files · +612 / -88</div><br>
+<div class="a">3 issues flagged, 2 nits:</div>
+<div><span class="r glow">  1. [blocker]</span> <span class="d">unbounded channel</span> session.rs:74</div>
+<div><span class="a">  2. [should-fix]</span> <span class="d">missing timeout</span> github.rs:51</div>
+<div class="d">  3. race on tab close → reader thread leak</div><br>
+<div class="a glow">❯</div> /code-review high<span class="cur"></span>
+      </div>
+      <aside id="pan">
+        <div class="ph"><span class="pt glow">LATEST REVIEW — #42</span><span class="d">⟳ ×</span></div>
+        <div class="pb">
+          <h3 class="glow">VERDICT</h3><div class="d">Request changes — one blocking concurrency bug.</div>
+          <h3 class="glow">FINDINGS</h3>
+          <li><span class="sev">[blocker]</span> Unbounded PTY channel — OOM risk · <code>session.rs:74</code></li>
+          <li><span class="sev">[should-fix]</span> No GitHub timeout · <code>github.rs:51</code></li>
+          <li>Reader thread outlives tab on close · <code>engine.rs:120</code></li>
+          <h3 class="glow">NITS</h3><li>Prefer <code>&str</code> in dispatch table</li>
+        </div>
+      </aside>
+    </div>
+    <footer id="st"><span class="blink"></span><span class="glow">STANDARD REVIEW · 3 FINDINGS · AUTO-ACCEPT ON</span></footer>
+  </section>
+</div></body></html>

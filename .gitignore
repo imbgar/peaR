@@ -1,0 +1,31 @@
+# Rust
+/target
+**/target
+
+# Node / frontend
+node_modules
+dist
+*.tsbuildinfo
+
+# Tauri build output
+apps/desktop/src-tauri/gen
+
+# Local agent tooling (not part of the project)
+.claude/
+.claude-flow/
+.omc/
+
+# Local review data, if pointed inside the repo
+/.pear-data
+
+# Env / secrets — never commit
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+*.log
+.idea/
+.vscode/*
+!.vscode/extensions.json

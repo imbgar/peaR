@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>pear — PR Control Center</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <div class="brand">
+          <span class="brand-mark">◖</span>
+          <span class="brand-name">pear</span>
+          <span class="brand-sub">PR control center</span>
+        </div>
+
+        <form id="open-form" class="open">
+          <label class="field">
+            <span class="field-label">Open PR</span>
+            <input id="pr-input" placeholder="owner/repo#123" autocomplete="off" spellcheck="false" />
+          </label>
+          <div class="open-row">
+            <select id="cli-select" title="CLI launched in the new tab">
+              <option value="claude">claude</option>
+              <option value="codex">codex</option>
+              <option value="aider">aider</option>
+              <option value="shell">shell</option>
+            </select>
+            <button type="submit" class="primary">Open</button>
+          </div>
+          <button type="button" id="new-shell" class="ghost">+ New shell</button>
+        </form>
+
+        <div class="section-head">History</div>
+        <ul id="history"></ul>
+      </aside>
+
+      <section id="workspace">
+        <header id="tabbar"></header>
+
+        <div id="toolbar">
+          <span class="toolbar-group-label">Review</span>
+          <button data-btn="post_review" data-needs-tab class="action">Post review</button>
+          <button data-btn="copy_content" data-needs-tab class="action">Copy content</button>
+          <button data-btn="reduce_to_key_points" data-needs-tab class="action">Reduce to key points</button>
+          <span class="toolbar-spacer"></span>
+          <button data-btn="save_review" data-needs-tab class="action subtle">Save review</button>
+        </div>
+
+        <div id="terminals"></div>
+
+        <footer id="statusbar">
+          <span id="status">starting…</span>
+        </footer>
+      </section>
+    </div>
+
+    <div id="copy-modal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-head">
+          <span class="modal-title">Content for copy / paste</span>
+          <button id="copy-modal-close" class="modal-x" title="Close (Esc)">×</button>
+        </div>
+        <textarea id="copy-modal-text" spellcheck="false" wrap="off"></textarea>
+        <div class="modal-foot">
+          <span id="copy-modal-status" class="modal-status"></span>
+          <span class="toolbar-spacer"></span>
+          <button id="copy-modal-recopy" class="action">Copy to clipboard</button>
+          <button id="copy-modal-done" class="primary">Done</button>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
