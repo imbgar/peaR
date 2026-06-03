@@ -119,6 +119,19 @@ impl Engine {
             Command::LoadHistory => self.emit(Event::History {
                 entries: self.store.history(),
             }),
+            Command::CheckSkills => self.emit(Event::SkillsStatus {
+                installed: crate::skills_install::skills_installed(),
+            }),
+            Command::InstallSkills => match crate::skills_install::install_skills() {
+                Ok(n) => {
+                    self.emit(Event::Notice {
+                        tab: None,
+                        message: format!("installed {n} review skills into ~/.claude/skills — /pr-* buttons will work in new Claude tabs"),
+                    });
+                    self.emit(Event::SkillsStatus { installed: true });
+                }
+                Err(e) => self.emit(Event::Error { tab: None, message: format!("install skills: {e}") }),
+            },
             Command::ClearHistory => match self.store.clear_history() {
                 Ok(n) => {
                     self.emit(Event::Notice {
