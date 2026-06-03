@@ -29,3 +29,6 @@ apps/desktop/src-tauri/gen
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# maintainer working notes — not for the public repo
+docs/memory/

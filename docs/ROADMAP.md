@@ -30,7 +30,7 @@ Skills shipped under `skills/commands/`: `pr-post-review`, `pr-copy`, `pr-distil
 
 ## Deferred — with scope (return points)
 
-### DF-1 · Default-org search (`web-app#323`)
+### DF-1 · Default-org search (`web-app#1242`)
 Let a bare `repo#NUMBER` resolve against a configured default org/owner.
 - **Scope:** add `default_owner` to a small config (`<data-dir>/config.json`); in `parsePrRef`,
   if no `owner/` present, prefix the default. Add a sidebar setting. ~1 evening.
@@ -102,24 +102,6 @@ checkout. Also: clone-if-missing for repos not found locally.
 Tiers map to `/code-review` effort, not explicit models. Wanted: light→sonnet, standard→opus,
 complex→multi-agent. Cleanest when tabs spawn with `claude --model …`; revisit once tier intent
 is proven.
-
----
-
-## Long-term memory structure (researched from your own projects)
-
-Your `ephemeral-controller` already proves the pattern that beats the 24 KB `MEMORY.md` cliff:
-an **index file + prefixed topic files**, each small and cross-linked. Adopted for pear under
-[`docs/memory/`](./memory/MEMORY.md):
-
-- `MEMORY.md` — ≤150-line index: status, resume block, `[[wikilinks]]` to topics. Never embed.
-- `session_<date>.md` — per-session recap (did / next / blockers).
-- `decision_<topic>.md` — choices that don't belong in the locked ARCHITECTURE.md.
-- `reference_<topic>.md` — reusable gotchas (PTY timing, TUI-bus rationale…).
-- `feedback_<topic>.md` — refinements from review/testing.
-
-Guardrails: index stays an index; topic files 40–150 lines (~5–8 KB); link, don't inline; after a
-substantial session write a `session_<date>.md` and update the resume block. This distributes
-~250 KB across 30–40 files with no single-file ceiling.
 
 ---
 
