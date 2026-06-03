@@ -13,6 +13,8 @@ All notable changes to this project are documented here. The format is based on
 - Repackaged the PR-review skills as an installable **Claude Code + Codex plugin**
   (`plugins/pear-review`) with `.claude-plugin`/`.codex-plugin` manifests, per-skill
   `SKILL.md` (rich frontmatter), and a `.claude-plugin/marketplace.json`.
+- The pear logo now appears in the app sidebar; README hero is an animated GIF flipping
+  between the Phosphor and Instrument themes.
 - **Frontend linting** — ESLint (typescript-eslint) + a CI lint step; clippy now also
   covers the `desktop` (Tauri) crate.
 
@@ -24,6 +26,11 @@ All notable changes to this project are documented here. The format is based on
 ### Changed
 - A PR's repo now **auto-clones** into a managed `repos/` dir when it isn't found locally,
   so pear no longer depends on the user having repos in a specific place.
+
+### Fixed
+- **Auto-review on open no longer fires when resuming a session** (or opening from history) —
+  it only triggers on a fresh launch from the Open box. Resuming a PR now restores the chat
+  instead of injecting a new `/code-review`.
 
 ## [0.1.1] — 2026-06-03
 
