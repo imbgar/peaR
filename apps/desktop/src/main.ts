@@ -153,7 +153,16 @@ function renderToolbar() {
 
 /** Open a PR tab. Default = resume the PR's most recent session; `fresh` forces a
  *  new one; `session_id` resumes that exact session. */
-function openPr(pr: PrRef, cli: CliKind, opts: { fresh?: boolean; session_id?: string } = {}) {
+// Auto-review intent for the NEXT tab to open, set per-open so it only applies to
+// a fresh Open-box launch — never to a Resume / session-restore.
+let pendingAutoReview: ReviewTier | null = null;
+
+function openPr(
+  pr: PrRef,
+  cli: CliKind,
+  opts: { fresh?: boolean; session_id?: string; autoReview?: ReviewTier | null } = {},
+) {
+  pendingAutoReview = opts.autoReview ?? null;
   send({
     type: "open_pr",
     pr,
@@ -416,12 +425,13 @@ function handle(ev: CoreEvent) {
       setStatus(`opened ${ev.title}`);
       // Auto-review on open (PR tabs only). Delay lets the CLI boot before the
       // slash command is typed (input queues in the PTY regardless).
-      if (ev.pr && autoToggle.checked) {
-        const tier = autoTier.value as ReviewTier;
+      if (ev.pr && pendingAutoReview) {
+        const tier = pendingAutoReview;
         const tab = ev.tab;
         setStatus(`auto-review (${tier}) queued for ${ev.title}`);
         setTimeout(() => send({ type: "start_review", tab, tier }), 2200);
       }
+      pendingAutoReview = null; // consume — resumes/new opens never carry it
       break;
     }
     case "pr_meta": {
@@ -624,7 +634,10 @@ window.addEventListener("DOMContentLoaded", async () => {
       return;
     }
     // The Open box always starts a FRESH session; History is where you resume.
-    openPr(pr, selectedCli(), { fresh: true });
+    openPr(pr, selectedCli(), {
+      fresh: true,
+      autoReview: autoToggle.checked ? (autoTier.value as ReviewTier) : null,
+    });
     prInput.value = "";
   });
 
