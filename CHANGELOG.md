@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-06-03
+
 ### Added
 - DevSecOps CI: gitleaks (secrets), cargo-audit + OSV-Scanner (deps), CodeQL (SAST),
   OSSF Scorecard (supply chain); documented the Socket.dev GitHub App.
@@ -70,6 +72,7 @@ First public release. A functional, terminal-native PR review control center.
 - **Shipped review skills** — `pr-post-review`, `pr-copy`, `pr-distill`, `pr-walkthru`,
   `pr-explain`, `pr-video`.
 
-[Unreleased]: https://github.com/imbgar/pear/compare/v0.1.1...HEAD
-[0.1.1]: https://github.com/imbgar/pear/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/imbgar/pear/releases/tag/v0.1.0
+[Unreleased]: https://github.com/imbgar/peaR/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/imbgar/peaR/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/imbgar/peaR/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/imbgar/peaR/releases/tag/v0.1.0
