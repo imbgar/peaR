@@ -1,10 +1,18 @@
 ---
-description: Interactively walk the user through the review, finding by finding.
-argument-hint: "[optional: 'start' | 'next' | a finding number]"
+name: pr-walkthru
+description: Interactively walk the user through the PR review, one finding at a time, pausing between each. Use for a guided, conversational tour of the review rather than a dump.
+argument-hint: "['start' | 'next' | a finding number]"
+allowed-tools: [Bash, Read, Grep, Glob]
+metadata:
+  category: code-review
+  requires:
+    cli: [gh, git]
 ---
 
-Walk me through the review of this PR **conversationally**, one finding at a time —
-like a senior engineer pairing with me.
+# Walk-through
+
+Walk me through the review of this PR **conversationally**, one finding at a time — like a
+senior engineer pairing with me.
 
 For each finding, in order of importance:
 1. State the finding with its `path:line` and severity.

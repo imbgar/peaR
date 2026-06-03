@@ -1,7 +1,15 @@
 ---
-description: Distill the review to only the most critical, merge-impacting items.
-argument-hint: "[optional: max items, default 5]"
+name: pr-distill
+description: Distill the review of the current PR down to only the most critical, merge-impacting items. Use when you want just the blockers, not a full review.
+argument-hint: "[optional max items, default 5]"
+allowed-tools: [Bash, Read, Grep, Glob]
+metadata:
+  category: code-review
+  requires:
+    cli: [gh, git]
 ---
+
+# Distill to blockers
 
 Distill the review of the current PR down to **only what materially affects the merge**.
 

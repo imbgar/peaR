@@ -10,6 +10,9 @@ All notable changes to this project are documented here. The format is based on
 - DevSecOps CI: gitleaks (secrets), cargo-audit + OSV-Scanner (deps), CodeQL (SAST),
   OSSF Scorecard (supply chain); documented the Socket.dev GitHub App.
 - Homebrew cask distribution + auto-update workflow (`brew install --cask imbgar/tap/peaR`).
+- Repackaged the PR-review skills as an installable **Claude Code + Codex plugin**
+  (`plugins/pear-review`) with `.claude-plugin`/`.codex-plugin` manifests, per-skill
+  `SKILL.md` (rich frontmatter), and a `.claude-plugin/marketplace.json`.
 
 ### Changed
 - A PR's repo now **auto-clones** into a managed `repos/` dir when it isn't found locally,

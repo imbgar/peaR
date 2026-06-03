@@ -1,0 +1,19 @@
+{
+  "name": "peaR",
+  "owner": "imbgar",
+  "owner_url": "https://github.com/imbgar",
+  "description": "peaR's shipped PR-review skills — installable in Claude Code and Codex.",
+  "version": "0.1.1",
+  "repository": "https://github.com/imbgar/peaR",
+  "plugins": [
+    {
+      "name": "pear-review",
+      "displayName": "peaR — PR Review",
+      "source": "./plugins/pear-review",
+      "description": "Terminal-native PR review skills: post review, distill, walk-through, explain, and video — all driven by gh.",
+      "version": "0.1.1",
+      "category": "code-quality",
+      "keywords": ["pull-request", "code-review", "gh", "claude-code", "codex"]
+    }
+  ]
+}

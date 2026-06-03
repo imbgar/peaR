@@ -36,8 +36,8 @@ losing the conversation the moment you close a tab. **pear** makes the PR the un
 - 🎨 **Two production themes** — Phosphor (amber CRT) and Instrument (refined industrial),
   toggleable live.
 - 📋 **Smart copy** — capture review output to the system clipboard with an editable preview.
-- 🧩 **Ships review skills** — `/pr-post-review`, `/pr-distill`, `/pr-walkthru`, `/pr-explain`,
-  `/pr-video`.
+- 🧩 **Ships a review-skills plugin** (Claude Code + Codex) — `/pr-post-review`, `/pr-distill`,
+  `/pr-walkthru`, `/pr-explain`, `/pr-video`. See [`plugins/pear-review`](plugins/pear-review).
 
 ## Architecture
 
@@ -48,7 +48,7 @@ TUI or a daemon frontend can reuse everything below the IPC line unchanged.
 ```
 apps/desktop   Tauri app — web UI (xterm.js) + thin Rust shim
 crates/pear-core   engine · PTY sessions · GitHub · review store · dispatch · workdir
-skills/        shipped Claude review slash-commands
+plugins/       pear-review plugin (Claude Code + Codex) with the /pr-* skills
 docs/          ARCHITECTURE.md · ROADMAP.md · design snapshots & mocks
 ```
 

@@ -1,0 +1,18 @@
+{
+  "name": "pear-review",
+  "version": "0.1.1",
+  "description": "Terminal-native PR review skills for Codex: post review, distill, walk-through, explain, and video — driven by gh.",
+  "author": "Brandon Garcia",
+  "homepage": "https://github.com/imbgar/peaR",
+  "repository": "https://github.com/imbgar/peaR",
+  "license": "MIT",
+  "keywords": ["pull-request", "code-review", "codex"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "peaR — PR Review",
+    "shortDescription": "Review pull requests from the terminal.",
+    "longDescription": "Post GitHub reviews, distill to blockers, walk through findings, explain a PR's purpose and gaps, or dispatch a narrated video — all driven by gh.",
+    "developerName": "Brandon Garcia",
+    "category": "code-review"
+  }
+}

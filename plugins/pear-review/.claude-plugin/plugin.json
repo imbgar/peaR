@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "pear-review",
+  "displayName": "peaR — PR Review",
+  "version": "0.1.1",
+  "description": "Terminal-native PR review skills: post review, distill, walk-through, explain, and video — driven by gh.",
+  "author": {
+    "name": "Brandon Garcia",
+    "url": "https://github.com/imbgar"
+  },
+  "homepage": "https://github.com/imbgar/peaR",
+  "repository": "https://github.com/imbgar/peaR",
+  "license": "MIT",
+  "keywords": ["pull-request", "code-review", "gh", "claude-code"],
+  "skills": "./skills/"
+}
