@@ -128,6 +128,7 @@ impl Engine {
             Command::LoadHistory => self.emit(Event::History {
                 entries: self.store.history(),
             }),
+            Command::LoadDiff { tab } => self.load_diff(tab),
             Command::CheckSkills => self.emit(Event::SkillsStatus {
                 installed: crate::skills_install::skills_installed(),
             }),
@@ -535,6 +536,54 @@ impl Engine {
                 message: "no saved review yet for this PR".into(),
             }),
         }
+    }
+
+    /// Fetch the tab's PR diff + existing review comments (network-bound, on a worker
+    /// thread so the engine lock isn't held across I/O) and emit `Event::Diff`.
+    fn load_diff(&mut self, tab: TabId) {
+        let pr = match self.tabs.get(&tab) {
+            Some(t) => t.pr.clone(),
+            None => {
+                self.emit(Event::Notice {
+                    tab: Some(tab),
+                    message: "diff: unknown tab".into(),
+                });
+                return;
+            }
+        };
+        let Some(pr) = pr else {
+            self.emit(Event::Notice {
+                tab: Some(tab),
+                message: "diff: this tab is not a PR".into(),
+            });
+            return;
+        };
+        let Some(gh) = self.github.clone() else {
+            self.emit(Event::Notice {
+                tab: Some(tab),
+                message: "no GitHub token — diff unavailable (run `gh auth login`)".into(),
+            });
+            return;
+        };
+        self.emit(Event::Notice {
+            tab: Some(tab),
+            message: format!("loading diff for {}…", pr.short_label()),
+        });
+        let sink = self.sink.clone();
+        std::thread::spawn(move || match gh.pr_diff(&pr) {
+            Ok(diff) => {
+                let comments = gh.pr_review_comments(&pr).unwrap_or_default();
+                sink(Event::Diff {
+                    tab,
+                    diff,
+                    comments,
+                });
+            }
+            Err(e) => sink(Event::Notice {
+                tab: Some(tab),
+                message: format!("diff: {e}"),
+            }),
+        });
     }
 
     fn save_review(&mut self, tab: TabId, content: &str) {

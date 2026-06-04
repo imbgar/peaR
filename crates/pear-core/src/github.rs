@@ -8,7 +8,7 @@
 use std::process::Command;
 
 use crate::error::{CoreError, Result};
-use crate::protocol::{PrMeta, PrRef};
+use crate::protocol::{DiffComment, PrMeta, PrRef};
 
 const API: &str = "https://api.github.com";
 const UA: &str = concat!("pear/", env!("CARGO_PKG_VERSION"));
@@ -77,6 +77,64 @@ impl GitHub {
                 body.chars().take(200).collect::<String>()
             )))
         }
+    }
+
+    /// Raw GET with a custom `Accept` (e.g. the diff media type). Returns the body text.
+    fn get_raw(&self, path: &str, accept: &str) -> Result<String> {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .build()
+            .into();
+        let mut resp = agent
+            .get(format!("{API}{path}"))
+            .header("Authorization", &format!("Bearer {}", self.token))
+            .header("Accept", accept)
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("User-Agent", UA)
+            .call()
+            .map_err(|e| CoreError::GitHub(e.to_string()))?;
+        let status = resp.status();
+        let body = resp
+            .body_mut()
+            .read_to_string()
+            .map_err(|e| CoreError::GitHub(e.to_string()))?;
+        if status.is_success() {
+            Ok(body)
+        } else {
+            Err(CoreError::GitHub(format!(
+                "HTTP {}: {}",
+                status.as_u16(),
+                body.chars().take(200).collect::<String>()
+            )))
+        }
+    }
+
+    /// The PR's unified diff (via GitHub's `application/vnd.github.diff` media type).
+    pub fn pr_diff(&self, pr: &PrRef) -> Result<String> {
+        self.get_raw(
+            &format!("/repos/{}/{}/pulls/{}", pr.owner, pr.repo, pr.number),
+            "application/vnd.github.diff",
+        )
+    }
+
+    /// Existing inline review comments on the PR, anchored to file + line.
+    pub fn pr_review_comments(&self, pr: &PrRef) -> Result<Vec<DiffComment>> {
+        let v = self.get(&format!(
+            "/repos/{}/{}/pulls/{}/comments?per_page=100",
+            pr.owner, pr.repo, pr.number
+        ))?;
+        Ok(v.as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|c| DiffComment {
+                        path: c["path"].as_str().unwrap_or("").to_string(),
+                        line: c["line"].as_u64().or_else(|| c["original_line"].as_u64()),
+                        author: c["user"]["login"].as_str().unwrap_or("").to_string(),
+                        body: c["body"].as_str().unwrap_or("").to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     /// Fetch metadata for a single PR.

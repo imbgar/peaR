@@ -349,7 +349,10 @@ button:disabled { opacity: 0.38; cursor: default; }
 .session-new:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 
 /* ── workspace ─────────────────────────────────────────────────────────── */
-#workspace { display: grid; grid-template-rows: auto auto 1fr auto; min-width: 0; background: var(--bg); }
+/* min-height:0 is essential: as a grid item, default min-height:auto lets #workspace
+   grow to its content (a tall diff) instead of staying viewport-bounded, which would
+   stop the 1fr #stage row — and the panel inside it — from ever scrolling. */
+#workspace { display: grid; grid-template-rows: auto auto 1fr auto; min-width: 0; min-height: 0; background: var(--bg); }
 
 #tabbar {
   display: flex;
@@ -416,6 +419,11 @@ button:disabled { opacity: 0.38; cursor: default; }
   letter-spacing: var(--letter);
 }
 .action:hover:not(:disabled) { border-color: var(--accent-d); color: var(--accent); box-shadow: var(--glow); }
+/* toggled-on state (e.g. Diff while the diff panel is showing) */
+.action.active {
+  border-color: var(--accent); color: var(--accent); font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: var(--glow);
+}
 .action.subtle { color: var(--dim); }
 .action.tier { border-color: var(--accent-d); font-weight: 600; }
 .action.tier:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 12%, transparent); }
@@ -434,12 +442,18 @@ button:disabled { opacity: 0.38; cursor: default; }
 /* ── stage: terminals + panel ──────────────────────────────────────────── */
 #stage {
   display: grid;
-  grid-template-columns: 1fr 0px;
+  grid-template-columns: 1fr 0 0;
   min-height: 0;
   min-width: 0;
   transition: grid-template-columns 0.18s var(--ease);
 }
-#stage.panel-open { grid-template-columns: 1fr 384px; }
+#stage.panel-open { grid-template-columns: 1fr 5px var(--panel-w, 420px); }
+/* While dragging the resizer, drop the transition so it tracks the pointer 1:1. */
+#stage.resizing { transition: none; }
+
+#panel-resizer { background: transparent; cursor: col-resize; }
+#panel-resizer:hover, #stage.resizing #panel-resizer { background: var(--accent-d); }
+#stage:not(.panel-open) #panel-resizer { display: none; }
 
 #terminals { position: relative; min-height: 0; min-width: 0; background: var(--term-bg); }
 .terminal-host { position: absolute; inset: 0; padding: 8px 10px; }
@@ -452,6 +466,9 @@ button:disabled { opacity: 0.38; cursor: default; }
   display: flex;
   flex-direction: column;
   min-width: 0;
+  /* As a grid item, default min-height:auto would let #panel grow to its content's
+     full height — so panel-body never gets a bounded height to scroll within. Pin it. */
+  min-height: 0;
   overflow: hidden;
 }
 #stage:not(.panel-open) #panel { display: none; }
@@ -469,7 +486,7 @@ button:disabled { opacity: 0.38; cursor: default; }
   font-size: 15px; padding: 0 5px; line-height: 1;
 }
 .panel-head-actions button:hover:not(:disabled) { color: var(--accent); }
-.panel-body { flex: 1; overflow: auto; padding: 14px 16px; min-height: 0; }
+.panel-body { flex: 1; overflow: auto; overscroll-behavior: contain; padding: 14px 16px; min-height: 0; }
 .panel-empty { color: var(--faint); font-size: 12px; line-height: 1.65; }
 .panel-empty b { color: var(--dim); font-weight: 600; }
 
@@ -487,6 +504,73 @@ button:disabled { opacity: 0.38; cursor: default; }
 .panel-diff .d-add { color: var(--green); }
 .panel-diff .d-del { color: var(--red); }
 .panel-diff .d-hunk { color: var(--blue); }
+
+/* ── PR diff panel ─────────────────────────────────────────────────────────── */
+.panel-body.diff-mode { padding: 0; }
+.diff-summary {
+  position: sticky; top: 0; z-index: 3;
+  display: flex; align-items: center; gap: 11px;
+  padding: 9px 14px; font-family: var(--font-mono); font-size: 11px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  border-bottom: 1px solid var(--bd); backdrop-filter: blur(8px);
+}
+.diff-fcount { color: var(--dim); text-transform: uppercase; letter-spacing: 0.7px; }
+.diff-ccount { margin-left: auto; color: var(--blue); }
+.diff-adds { color: var(--green); font-weight: 600; }
+.diff-dels { color: var(--red); font-weight: 600; }
+
+.diff-file {
+  margin: 10px; border: 1px solid var(--bd); border-radius: var(--r);
+  overflow: hidden; background: var(--bg); animation: rise 0.22s var(--ease) both;
+}
+.diff-file-head {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 8px 11px; background: var(--elev); border: none;
+  border-bottom: 1px solid var(--bd); cursor: pointer; text-align: left;
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--tx);
+  position: sticky; top: 36px; z-index: 2;
+}
+.diff-file-head:hover { background: var(--inp); }
+.diff-chev { color: var(--faint); transition: transform 0.15s var(--ease); font-size: 10px; flex: none; }
+.diff-file.collapsed .diff-chev { transform: rotate(-90deg); }
+.diff-file.collapsed .diff-body { display: none; }
+.diff-status {
+  display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none;
+  border-radius: 4px; font-size: 9px; font-weight: 700;
+}
+.s-added { background: color-mix(in srgb, var(--green) 20%, transparent); color: var(--green); }
+.s-deleted { background: color-mix(in srgb, var(--red) 20%, transparent); color: var(--red); }
+.s-renamed, .s-modified { background: var(--inp); color: var(--dim); }
+.diff-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.diff-file-head .diff-adds, .diff-file-head .diff-dels { font-size: 10.5px; flex: none; }
+
+/* horizontal-only: lets long lines scroll sideways without each file becoming a
+   vertical scroll box that swallows the panel's wheel scroll (scroll chaining). */
+.diff-body { overflow-x: auto; overflow-y: hidden; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.55; }
+.diff-hunk {
+  padding: 3px 12px; color: var(--blue); white-space: pre; opacity: 0.8;
+  background: color-mix(in srgb, var(--blue) 7%, transparent);
+  border-block: 1px solid var(--bd);
+}
+.diff-row { display: grid; grid-template-columns: 42px 42px 15px 1fr; white-space: pre; min-height: 17px; }
+.diff-gutter { text-align: right; padding-right: 8px; color: var(--faint); user-select: none; font-size: 10.5px; }
+.diff-sign { text-align: center; user-select: none; }
+.diff-code { padding-right: 14px; }
+.r-add { background: color-mix(in srgb, var(--green) 11%, transparent); box-shadow: inset 2px 0 0 var(--green); }
+.r-add .diff-sign, .r-add .diff-code { color: var(--green); }
+.r-del { background: color-mix(in srgb, var(--red) 11%, transparent); box-shadow: inset 2px 0 0 var(--red); }
+.r-del .diff-sign, .r-del .diff-code { color: var(--red); }
+
+.diff-comment {
+  margin: 5px 12px 9px 52px; padding: 8px 11px;
+  background: var(--elev); border: 1px solid var(--bd2);
+  border-left: 2px solid var(--blue); border-radius: var(--r-sm); white-space: normal;
+}
+.dc-author { font-size: 11px; font-weight: 600; color: var(--blue); margin-bottom: 3px; font-family: var(--font-mono); }
+.dc-body { font-size: 12px; line-height: 1.5; color: var(--tx); white-space: pre-wrap; }
+
+.diff-empty { padding: 22px 16px; color: var(--faint); font-size: 12.5px; text-align: center; }
+.diff-binary { padding: 8px 12px; color: var(--faint); font-size: 11.5px; font-family: var(--font-mono); }
 .panel-note { font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap; color: var(--dim); }
 
 /* ── status bar ────────────────────────────────────────────────────────── */

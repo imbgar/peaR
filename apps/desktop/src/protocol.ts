@@ -21,6 +21,13 @@ export interface PanelPayload {
   body: string;
 }
 
+export interface DiffComment {
+  path: string;
+  line: number | null;
+  author: string;
+  body: string;
+}
+
 export interface PrRef {
   owner: string;
   repo: string;
@@ -75,7 +82,8 @@ export type Command =
   | { type: "clear_history" }
   | { type: "restore_history" }
   | { type: "check_skills" }
-  | { type: "install_skills" };
+  | { type: "install_skills" }
+  | { type: "load_diff"; tab: number };
 
 export type Event =
   | { type: "tab_opened"; tab: number; title: string; pr: PrRef | null; cli: CliKind }
@@ -84,6 +92,7 @@ export type Event =
   | { type: "tab_closed"; tab: number; code: number | null }
   | { type: "review_saved"; tab: number; path: string }
   | { type: "panel"; tab: number; payload: PanelPayload }
+  | { type: "diff"; tab: number; diff: string; comments: DiffComment[] }
   | { type: "history"; entries: PrRecord[] }
   | { type: "skills_status"; installed: boolean }
   | { type: "notice"; tab: number | null; message: string }
