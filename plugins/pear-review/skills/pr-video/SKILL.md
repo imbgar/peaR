@@ -29,7 +29,7 @@ If either is missing, **do not attempt to render**. Print exactly this and stop:
 > It isn't bundled with peaR (it has its own heavy runtime deps). Set it up once:
 > 1. Install `ffmpeg` — e.g. `brew install ffmpeg`.
 > 2. Install the `video-explainer` skill from the setup gist:
->    **https://gist.github.com/imbgar/<SET-GIST-ID>**
+>    **https://gist.github.com/imbgar/46660c46c8e3a16169cc2b2b59cb7394**
 >    (drop it in `~/.claude/skills/video-explainer/` and follow its README).
 > 3. Re-run `/pr-video`.
 
