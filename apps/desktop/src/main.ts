@@ -446,9 +446,11 @@ function handle(ev: CoreEvent) {
         const tab = ev.tab;
         setStatus(`auto-review (${sel}) queued for ${ev.title}`);
         setTimeout(() => {
+          const v = tabs.get(tab);
+          const agent = v ? resolveAgent(v) : undefined;
           // Ultra is the paid cloud review (a button); tiers go through start_review.
-          if (sel === "ultra") send({ type: "button", tab, button: "ultra" });
-          else send({ type: "start_review", tab, tier: sel });
+          if (sel === "ultra") send({ type: "button", tab, button: "ultra", agent });
+          else send({ type: "start_review", tab, tier: sel, agent });
         }, 2200);
       }
       pendingAutoReview = null; // consume — resumes/new opens never carry it
@@ -518,9 +520,26 @@ function handle(ev: CoreEvent) {
 }
 
 // ── wiring ──────────────────────────────────────────────────────────────────
+// Recognise the agent actually running in a tab so review actions dispatch the right
+// macros. A declared agent (claude/codex/aider) wins; for a "shell" tab we sniff the
+// terminal banner. Order matters: match specific agents before claude (broadest).
+const AGENT_SIGNATURES: [RegExp, CliKind][] = [
+  [/\bcodex\b|openai codex/i, "codex"],
+  [/\baider\b/i, "aider"],
+  [/claude code|claude-flow|\bruflo\b|anthropic|claude max|\bopus\b|\bsonnet\b/i, "claude"],
+];
+function resolveAgent(v: TabView): CliKind {
+  if (v.cli !== "shell") return v.cli;
+  const text = terminalText(v.term);
+  for (const [re, cli] of AGENT_SIGNATURES) if (re.test(text)) return cli;
+  return "claude"; // sensible default for an unrecognised agent shell
+}
+
 function pressButton(button: ReviewButton) {
   if (active === null) return;
-  send({ type: "button", tab: active, button });
+  const v = tabs.get(active);
+  if (!v) return;
+  send({ type: "button", tab: active, button, agent: resolveAgent(v) });
 }
 
 function saveReview() {
