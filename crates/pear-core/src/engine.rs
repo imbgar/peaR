@@ -7,6 +7,7 @@
 //! `TabOpened`, which the protocol allows).
 
 use std::collections::HashMap;
+use std::sync::mpsc::{self, Receiver, Sender};
 
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
@@ -37,6 +38,10 @@ pub struct Engine {
     tabs: HashMap<TabId, Tab>,
     /// Claude `--permission-mode` for launches (see `CLAUDE_PERM_MODES`).
     claude_perm: String,
+    /// A session's wait-thread sends its `TabId` here when its process exits, so the
+    /// engine can drop the dead tab (drained in `reap_dead`, called each `handle`).
+    reaper_tx: Sender<TabId>,
+    reaper_rx: Receiver<TabId>,
 }
 
 /// Claude's real `--permission-mode` choices. Anything else falls back to `auto`.
@@ -65,6 +70,7 @@ impl Engine {
     pub fn new(sink: EventSink) -> Result<Engine> {
         let store = Store::discover()?;
         let github = GitHub::from_env().ok();
+        let (reaper_tx, reaper_rx) = mpsc::channel();
         Ok(Engine {
             sink,
             store,
@@ -72,6 +78,8 @@ impl Engine {
             next: 1,
             tabs: HashMap::new(),
             claude_perm: "auto".to_string(),
+            reaper_tx,
+            reaper_rx,
         })
     }
 
@@ -88,6 +96,7 @@ impl Engine {
     /// Single entry point. Returns `Ok` even for "soft" failures (those are emitted
     /// as `Event::Notice`/`Event::Error` so the UI can surface them per-tab).
     pub fn handle(&mut self, cmd: Command) {
+        self.reap_dead();
         match cmd {
             Command::OpenPr {
                 pr,
@@ -254,8 +263,16 @@ impl Engine {
         }
 
         let sink = self.sink.clone();
-        let session = match Session::spawn(tab, &program, &args, spawn_cwd.as_deref(), 80, 24, sink)
-        {
+        let session = match Session::spawn(
+            tab,
+            &program,
+            &args,
+            spawn_cwd.as_deref(),
+            80,
+            24,
+            sink,
+            self.reaper_tx.clone(),
+        ) {
             Ok(s) => s,
             Err(e) => {
                 self.emit(Event::Error {
@@ -383,13 +400,24 @@ impl Engine {
     }
 
     fn close(&mut self, tab: TabId) {
-        // Dropping the Tab kills the PTY; the session's wait-thread emits TabClosed.
-        if self.tabs.remove(&tab).is_none() {
-            self.emit(Event::Notice {
-                tab: Some(tab),
-                message: "close: unknown tab".into(),
-            });
+        // Dropping the Tab kills the PTY; the wait-thread then signals the reaper.
+        // An unknown tab is normal here — the process may have self-exited and already
+        // been reaped — so this is a silent no-op rather than an error.
+        self.tabs.remove(&tab);
+    }
+
+    /// Drop tabs whose child process has exited on its own. Keeps the tab map
+    /// authoritative so the resume "is this session still live?" check never sees a
+    /// stale entry and spuriously forks. Drained at the start of every `handle`.
+    fn reap_dead(&mut self) {
+        while let Ok(tab) = self.reaper_rx.try_recv() {
+            self.tabs.remove(&tab);
         }
+    }
+
+    /// Count of live tabs — observability + tests.
+    pub fn tab_count(&self) -> usize {
+        self.tabs.len()
     }
 
     fn input(&mut self, tab: TabId, bytes: &[u8]) {
