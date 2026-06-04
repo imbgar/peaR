@@ -12,10 +12,12 @@ import "@fontsource/ibm-plex-mono/700.css";
 import "@fontsource-variable/hanken-grotesk";
 import "@fontsource-variable/jetbrains-mono";
 import { marked } from "marked";
+import { renderDiff } from "./diff";
 import {
   Command,
   Event as CoreEvent,
   CliKind,
+  DiffComment,
   PanelPayload,
   PrMeta,
   PrRecord,
@@ -391,6 +393,11 @@ function setActive(id: number) {
   }
   renderTabBar();
   renderToolbar();
+  // The diff panel follows the active tab: if it's open, re-point it at this tab
+  // (instant from cache, fetch if a PR, or a placeholder for a non-PR tab).
+  if (stageEl.classList.contains("panel-open") && panelBodyEl.classList.contains("diff-mode")) {
+    syncDiffToActive();
+  }
 }
 
 function closeTabView(id: number) {
@@ -465,6 +472,16 @@ function handle(ev: CoreEvent) {
     }
     case "panel": {
       renderPanel(ev.payload);
+      break;
+    }
+    case "diff": {
+      const prev = diffCache.get(ev.tab);
+      diffCache.set(ev.tab, { diff: ev.diff, comments: ev.comments });
+      // Only (re)render if this tab is showing and the content actually changed — keeps
+      // scroll position + collapse state on a background refresh.
+      const changed =
+        !prev || prev.diff !== ev.diff || prev.comments.length !== ev.comments.length;
+      if (ev.tab === active && changed) showDiff(ev.tab, ev.diff, ev.comments);
       break;
     }
     case "history": {
@@ -602,6 +619,10 @@ function refitActive() {
 function setPanel(open: boolean) {
   stageEl.classList.toggle("panel-open", open);
   panelToggleBtn.textContent = open ? "Insight ◂" : "Insight ▸";
+  // The Diff button is "active" only while the panel is open AND showing a diff.
+  document
+    .getElementById("diff-btn")
+    ?.classList.toggle("active", open && panelBodyEl.classList.contains("diff-mode"));
   requestAnimationFrame(refitActive);
 }
 
@@ -614,8 +635,63 @@ function loadPanel() {
   send({ type: "load_panel", tab: active });
 }
 
+// Per-tab diff cache so reopening the panel is instant instead of re-hitting GitHub.
+const diffCache = new Map<number, { diff: string; comments: DiffComment[] }>();
+
+function diffTitle(tab: number): string {
+  const pr = tabs.get(tab)?.pr ?? null;
+  return pr ? `Diff — ${shortLabel(pr)}` : "Diff";
+}
+
+function showDiff(tab: number, diff: string, comments: DiffComment[]) {
+  panelTitleEl.textContent = diffTitle(tab);
+  panelBodyEl.classList.add("diff-mode");
+  renderDiff(panelBodyEl, diff, comments);
+  setPanel(true);
+  setStatus(`diff · ${comments.length} comment${comments.length === 1 ? "" : "s"}`);
+}
+
+/** Render a placeholder in the diff panel (loading / no-PR / error states). */
+function showDiffMessage(tab: number, msg: string) {
+  panelTitleEl.textContent = diffTitle(tab);
+  panelBodyEl.classList.add("diff-mode");
+  panelBodyEl.innerHTML = "";
+  const div = document.createElement("div");
+  div.className = "diff-empty";
+  div.textContent = msg;
+  panelBodyEl.appendChild(div);
+  setPanel(true);
+}
+
+/** Point the (open) diff panel at the active tab: cache → instant, PR-without-cache →
+ *  fetch, no-PR tab → a placeholder. Called on Diff-button open and on tab switch. */
+function syncDiffToActive() {
+  if (active === null) return;
+  const v = tabs.get(active);
+  const cached = diffCache.get(active);
+  if (cached) {
+    showDiff(active, cached.diff, cached.comments);
+  } else if (v?.pr) {
+    showDiffMessage(active, "loading PR diff…");
+    send({ type: "load_diff", tab: active });
+  } else {
+    showDiffMessage(active, "No diff — this tab isn't a pull request.");
+  }
+}
+
+/** Diff toolbar button: toggle the diff panel for the active tab. */
+function loadDiff() {
+  if (active === null) return;
+  if (stageEl.classList.contains("panel-open") && panelBodyEl.classList.contains("diff-mode")) {
+    setPanel(false);
+    return;
+  }
+  syncDiffToActive();
+}
+
 function renderPanel(p: PanelPayload) {
   panelTitleEl.textContent = p.title || "Insight";
+  panelBodyEl.classList.remove("diff-mode");
   panelBodyEl.innerHTML = "";
   if (p.kind === "diff") {
     const pre = document.createElement("pre");
@@ -710,6 +786,33 @@ window.addEventListener("DOMContentLoaded", async () => {
   panelToggleBtn.addEventListener("click", togglePanel);
   $("#panel-close").addEventListener("click", () => setPanel(false));
   $("#panel-load").addEventListener("click", loadPanel);
+  $("#diff-btn").addEventListener("click", loadDiff);
+
+  // Resizable panel (drag the divider between the terminal and the panel).
+  const savedPanelW = localStorage.getItem("pear.panelW");
+  if (savedPanelW) stageEl.style.setProperty("--panel-w", savedPanelW);
+  const resizer = $<HTMLElement>("#panel-resizer");
+  resizer.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    resizer.setPointerCapture(e.pointerId);
+    stageEl.classList.add("resizing");
+    const onMove = (ev: PointerEvent) => {
+      const rect = stageEl.getBoundingClientRect();
+      const w = Math.min(Math.max(rect.right - ev.clientX, 300), rect.width - 360);
+      stageEl.style.setProperty("--panel-w", `${Math.round(w)}px`);
+      refitActive();
+    };
+    const onUp = () => {
+      stageEl.classList.remove("resizing");
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      const w = stageEl.style.getPropertyValue("--panel-w");
+      if (w) localStorage.setItem("pear.panelW", w);
+      refitActive();
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  });
 
   autoToggle.checked = localStorage.getItem("pear.autoReview") === "1";
   autoTier.value = localStorage.getItem("pear.tier") || "standard";
