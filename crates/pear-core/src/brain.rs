@@ -18,6 +18,11 @@ use crate::session::EventSink;
 /// How many existing thoughts to backfill when the panel opens mid-session.
 const BACKFILL: usize = 40;
 
+/// Max length of a `text` (narration) block we treat as "what I'm doing" chatter.
+/// Anything longer is the produced answer itself — the final review — which belongs in
+/// the terminal, not the brain feed. Reasoning (`thinking`) and tool actions are unbounded.
+const MAX_SAY_LEN: usize = 600;
+
 /// Locate the transcript file for `session_id` (unique UUID) under `~/.claude/projects`.
 fn transcript_for(session_id: &str) -> Option<PathBuf> {
     let projects = std::env::var_os("HOME")
@@ -56,10 +61,13 @@ fn thoughts_in(line: &str) -> Vec<Thought> {
                 }
             }
             // Claude's narration between reasoning and tools — the readable "what I'm doing".
+            // Skip long-form text: that's the produced review/answer, which belongs in the
+            // terminal, not the brain feed (see MAX_SAY_LEN).
             Some("text") => {
                 if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
-                    if !t.trim().is_empty() {
-                        out.push(("say".to_string(), t.trim().to_string(), String::new()));
+                    let t = t.trim();
+                    if !t.is_empty() && t.chars().count() <= MAX_SAY_LEN {
+                        out.push(("say".to_string(), t.to_string(), String::new()));
                     }
                 }
             }
