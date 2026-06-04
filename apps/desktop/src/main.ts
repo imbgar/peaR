@@ -158,14 +158,17 @@ function renderToolbar() {
 
 /** Open a PR tab. Default = resume the PR's most recent session; `fresh` forces a
  *  new one; `session_id` resumes that exact session. */
+// A review to auto-run on the next opened PR tab: a tier, or "ultra" (the paid cloud
+// review, dispatched as a button rather than a tier).
+type LaunchReview = ReviewTier | "ultra";
 // Auto-review intent for the NEXT tab to open, set per-open so it only applies to
 // a fresh Open-box launch — never to a Resume / session-restore.
-let pendingAutoReview: ReviewTier | null = null;
+let pendingAutoReview: LaunchReview | null = null;
 
 function openPr(
   pr: PrRef,
   cli: CliKind,
-  opts: { fresh?: boolean; session_id?: string; autoReview?: ReviewTier | null } = {},
+  opts: { fresh?: boolean; session_id?: string; autoReview?: LaunchReview | null } = {},
 ) {
   pendingAutoReview = opts.autoReview ?? null;
   send({
@@ -430,11 +433,16 @@ function handle(ev: CoreEvent) {
       setStatus(`opened ${ev.title}`);
       // Auto-review on open (PR tabs only). Delay lets the CLI boot before the
       // slash command is typed (input queues in the PTY regardless).
-      if (ev.pr && pendingAutoReview) {
-        const tier = pendingAutoReview;
+      // Never auto-review a plain shell — it's just a terminal, not an agent.
+      if (ev.pr && pendingAutoReview && ev.cli !== "shell") {
+        const sel = pendingAutoReview;
         const tab = ev.tab;
-        setStatus(`auto-review (${tier}) queued for ${ev.title}`);
-        setTimeout(() => send({ type: "start_review", tab, tier }), 2200);
+        setStatus(`auto-review (${sel}) queued for ${ev.title}`);
+        setTimeout(() => {
+          // Ultra is the paid cloud review (a button); tiers go through start_review.
+          if (sel === "ultra") send({ type: "button", tab, button: "ultra" });
+          else send({ type: "start_review", tab, tier: sel });
+        }, 2200);
       }
       pendingAutoReview = null; // consume — resumes/new opens never carry it
       break;
@@ -587,13 +595,6 @@ function toggleTheme() {
   applyTheme(currentTheme() === "phosphor" ? "instrument" : "phosphor");
 }
 
-// ── review tiers ────────────────────────────────────────────────────────────
-function startReview(tier: ReviewTier) {
-  if (active === null) return;
-  send({ type: "start_review", tab: active, tier });
-  setStatus(`launching ${tier} review…`);
-}
-
 // ── insight panel ───────────────────────────────────────────────────────────
 function refitActive() {
   if (active !== null) tabs.get(active)?.fit.fit();
@@ -670,15 +671,25 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   $("#open-form").addEventListener("submit", (e) => {
     e.preventDefault();
+    const cli = selectedCli();
     const pr = parsePrRef(prInput.value);
+    // A plain shell is just a terminal: no PR required, and never an agent review or
+    // permission/auto-review behaviour. With a PR it opens in that repo's dir.
+    if (cli === "shell") {
+      if (pr) openPr(pr, cli, { fresh: true, autoReview: null });
+      else send({ type: "open_scratch", cli, cwd: null });
+      prInput.value = "";
+      return;
+    }
+    // Agent CLIs run the review workflow, which needs a PR.
     if (!pr) {
-      setStatus("⚠ expected owner/repo#NUMBER", true);
+      setStatus("⚠ enter owner/repo#NUMBER — or pick 'shell' for a plain terminal", true);
       return;
     }
     // The Open box always starts a FRESH session; History is where you resume.
-    openPr(pr, selectedCli(), {
+    openPr(pr, cli, {
       fresh: true,
-      autoReview: autoToggle.checked ? (autoTier.value as ReviewTier) : null,
+      autoReview: autoToggle.checked ? (autoTier.value as LaunchReview) : null,
     });
     prInput.value = "";
   });
@@ -689,11 +700,6 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   $("#history-clear").addEventListener("click", () => send({ type: "clear_history" }));
   $("#history-restore").addEventListener("click", () => send({ type: "restore_history" }));
-
-  // Review-tier launch buttons.
-  toolbarEl.querySelectorAll<HTMLButtonElement>("button[data-tier]").forEach((b) =>
-    b.addEventListener("click", () => startReview(b.dataset.tier as ReviewTier)),
-  );
 
   // Action buttons. copy_content + save_review are frontend-handled; the rest are
   // slash macros dispatched by the core.
@@ -711,7 +717,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#panel-close").addEventListener("click", () => setPanel(false));
   $("#panel-load").addEventListener("click", loadPanel);
 
-  autoToggle.checked = localStorage.getItem("pear.autoReview") === "1";
+  // Auto-review on open defaults ON (the launch buttons are gone — review is configured
+  // here on the left and fires when the PR opens). Off only if explicitly turned off.
+  autoToggle.checked = localStorage.getItem("pear.autoReview") !== "0";
   autoTier.value = localStorage.getItem("pear.tier") || "standard";
   autoToggle.addEventListener("change", () =>
     localStorage.setItem("pear.autoReview", autoToggle.checked ? "1" : "0"),
