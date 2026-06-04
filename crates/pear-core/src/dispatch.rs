@@ -16,12 +16,18 @@
 
 use crate::protocol::{CliKind, PrRef, ReviewButton, ReviewTier};
 
-/// `/code-review <effort> [<pr#>]`. The PR number makes the built-in review THIS pull
-/// request via `gh`, not whatever branch is checked out against a stale local base.
-fn code_review(effort: &str, pr: Option<&PrRef>) -> String {
+/// `/code-review <effort>` reviews the checked-out PR branch (the engine `gh pr
+/// checkout`s it on open). The effort levels (low/high) do NOT accept a PR-number arg —
+/// passing one makes the command silently not run (it just types into the input box).
+fn code_review(effort: &str) -> String {
+    format!("/code-review {effort}\r")
+}
+
+/// `/code-review ultra [<pr#>]` — the cloud mode DOES take a PR target.
+fn code_review_ultra(pr: Option<&PrRef>) -> String {
     match pr {
-        Some(p) => format!("/code-review {effort} {}\r", p.number),
-        None => format!("/code-review {effort}\r"),
+        Some(p) => format!("/code-review ultra {}\r", p.number),
+        None => "/code-review ultra\r".to_string(),
     }
 }
 
@@ -47,7 +53,7 @@ pub fn keystrokes(button: ReviewButton, cli: CliKind, pr: Option<&PrRef>) -> Opt
         (Claude, WalkThrough) => "/pr-walkthru\r".to_string(),
         (Claude, Explain) => "/pr-explain\r".to_string(),
         (Claude, Video) => "/pr-video\r".to_string(),
-        (Claude, Ultra) => code_review("ultra", pr), // paid cloud review of THIS PR
+        (Claude, Ultra) => code_review_ultra(pr), // paid cloud review of THIS PR
         (Claude, CopyContent) => "/pr-copy\r".to_string(),
 
         (Codex, PostReview) => "/review post\r".to_string(),
@@ -86,8 +92,8 @@ pub fn tier_keystrokes(tier: ReviewTier, cli: CliKind, pr: Option<&PrRef>) -> Op
     use CliKind::*;
     use ReviewTier::*;
     let s = match (cli, tier) {
-        (Claude, Light) => code_review("low", pr),
-        (Claude, Standard) => code_review("high", pr),
+        (Claude, Light) => code_review("low"),
+        (Claude, Standard) => code_review("high"),
         (Claude, Complex) => match pr {
             Some(p) => format!(
                 "deeply review pull request {}/{}#{} across a diverse set of agents. \
@@ -160,10 +166,11 @@ mod tests {
     #[test]
     fn reviews_name_the_pr() {
         let p = pr();
-        // Tiers + ultra append the PR number to /code-review.
+        // Effort tiers review the checked-out branch — NO PR-number arg (it breaks the
+        // command); only ultra accepts a PR target.
         assert_eq!(
             tier_keystrokes(ReviewTier::Standard, CliKind::Claude, Some(&p)).unwrap(),
-            "/code-review high 42\r"
+            "/code-review high\r"
         );
         assert_eq!(
             keystrokes(ReviewButton::Ultra, CliKind::Claude, Some(&p)).unwrap(),
