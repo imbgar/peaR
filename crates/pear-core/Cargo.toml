@@ -12,10 +12,10 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-portable-pty = "0.8"
-directories = "5"
+portable-pty = "0.9"
+directories = "6"
 uuid = { version = "1", features = ["v4"] }
-ureq = { version = "2", features = ["json"] }
+ureq = { version = "3", features = ["json"] }
 time = { version = "0.3", features = ["formatting", "macros"] }
 
 [dev-dependencies]
