@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-06-04
+
+### Fixed
+- **Reviews now target the actual PR.** The review macros said "review this PR" but never named
+  it, so the agent reviewed whatever branch was checked out — diffing against a stale local base
+  (often thousands of unrelated files) instead of the PR's real changes. pear now passes the PR
+  through to every review: tiers/ultra use `/code-review <effort> <n>`, and the complex/aider
+  prompts name `owner/repo#n` and pin the agent to `gh pr diff <n>`. (#27)
+- **Self-exited tabs are reaped.** When a terminal process exited on its own, the engine kept a
+  stale tab entry, which made resume spuriously start a *new* session instead of resuming. (#26)
+
 ## [0.1.4] — 2026-06-04
 
 ### Fixed
