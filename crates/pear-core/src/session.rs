@@ -2,6 +2,7 @@
 //! the frontend (`xterm.js`), so this module stays a thin, fast pipe.
 
 use std::io::{Read, Write};
+use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::thread;
 
@@ -24,6 +25,7 @@ pub struct Session {
 impl Session {
     /// Spawn `program` + `args` in a fresh PTY of `cols`x`rows`, in `cwd`
     /// (default: process cwd). The engine resolves the CLI and any session flags.
+    #[allow(clippy::too_many_arguments)] // a low-level spawn primitive; a params struct would add noise
     pub fn spawn(
         tab: TabId,
         program: &str,
@@ -32,6 +34,7 @@ impl Session {
         cols: u16,
         rows: u16,
         sink: EventSink,
+        reaper: Sender<TabId>,
     ) -> Result<Session> {
         let pty = native_pty_system();
         let pair = pty
@@ -94,12 +97,15 @@ impl Session {
             })
             .map_err(CoreError::Io)?;
 
-        // Reap the child -> Event::TabClosed.
+        // Reap the child: signal the engine to drop the now-dead tab, THEN notify the
+        // frontend. The reaper send keeps the engine's tab map authoritative even when a
+        // process exits on its own (so resume never sees a stale "live" entry and forks).
         let sink_exit = sink.clone();
         thread::Builder::new()
             .name(format!("pear-pty-wait-{tab}"))
             .spawn(move || {
                 let code = child.wait().ok().map(|s| s.exit_code() as i32);
+                let _ = reaper.send(tab);
                 (sink_exit)(Event::TabClosed { tab, code });
             })
             .map_err(CoreError::Io)?;
@@ -140,5 +146,29 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         self.kill();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn self_exiting_process_signals_the_reaper() {
+        let (tx, rx) = mpsc::channel();
+        let sink: EventSink = Arc::new(|_| {});
+        // Absolute path → skips PATH resolution; `exit 0` returns immediately. The
+        // wait-thread should then signal the reaper with our tab id.
+        let args = ["-c".to_string(), "exit 0".to_string()];
+        // Explicit cwd="/" so this is independent of the ambient process cwd, which a
+        // sibling test may have changed to a since-removed temp dir (-> spawn ENOENT).
+        let _s =
+            Session::spawn(42, "/bin/sh", &args, Some("/"), 80, 24, sink, tx).expect("spawn sh");
+        let reaped = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("reaper should receive the tab id after the process exits");
+        assert_eq!(reaped, 42);
     }
 }
