@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-06-04
+
+### Fixed
+- **The app now finds your CLI when launched from Finder/Dock.** A macOS GUI launch
+  inherits only the bare system PATH and never sources your shell profile, so
+  `claude`/`codex`/`aider` (in `~/.local/bin`, `/opt/homebrew/bin`, npm-global, …) couldn't
+  be spawned — *"No viable candidates found in PATH"*. pear now reconstructs the login-shell
+  PATH, resolves the CLI to an absolute path, and injects that PATH into each terminal so
+  tools used inside a session (`gh`, `git`, `node`) resolve too. (#24)
+
 ## [0.1.3] — 2026-06-04
 
 ### Added
