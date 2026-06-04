@@ -347,7 +347,9 @@ impl Engine {
                             // Update the title only (no session change), then re-emit
                             // history so the sidebar entry shows the real PR title.
                             let _ = store.record_open(&pr, &meta.title, cli, None, &now);
-                            sink(Event::History { entries: store.history() });
+                            sink(Event::History {
+                                entries: store.history(),
+                            });
                             sink(Event::PrMeta { tab, meta });
                         }
                         Err(e) => sink(Event::Notice {
