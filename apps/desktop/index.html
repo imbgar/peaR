@@ -11,11 +11,13 @@
   <body>
     <div id="crt" aria-hidden="true"></div>
     <div id="app">
+      <div id="edge-peek" aria-hidden="true"><span class="edge-grip"></span></div>
       <aside id="sidebar">
         <div class="brand">
           <img class="brand-mark" src="/pear.png" alt="peaR" />
           <span class="brand-name">peaR</span>
           <span class="brand-sub">PR control center</span>
+          <button id="sidebar-collapse" title="Collapse sidebar (hover the left edge to peek)" aria-label="Collapse sidebar">‹</button>
         </div>
 
         <form id="open-form" class="open">
@@ -117,6 +119,7 @@
         </section>
 
         <footer id="statusbar">
+          <button id="sidebar-toggle" class="statusbtn" title="Toggle sidebar (⌘B)" aria-label="Toggle sidebar">☰</button>
           <button id="brain-toggle" class="statusbtn" title="Show Claude's thinking">🧠 brain</button>
           <span id="status">starting…</span>
           <span class="status-spacer"></span>
