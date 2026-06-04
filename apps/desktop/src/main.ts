@@ -88,6 +88,11 @@ let panelTitleEl: HTMLElement;
 let panelToggleBtn: HTMLButtonElement;
 let autoToggle: HTMLInputElement;
 let autoTier: HTMLSelectElement;
+let skillsModalEl: HTMLElement;
+let skillsStatusEl: HTMLElement;
+// True once dismissed/installed this session, so we don't re-nag on the next
+// check_skills round-trip. Not persisted — a fresh launch asks again if missing.
+let skillsPrompted = false;
 
 // ── core IPC ────────────────────────────────────────────────────────────────
 async function send(cmd: Command) {
@@ -466,6 +471,16 @@ function handle(ev: CoreEvent) {
       renderHistory(ev.entries);
       break;
     }
+    case "skills_status": {
+      if (ev.installed) {
+        // Installed (initial check or post-install). Close any open prompt.
+        closeSkillsModal();
+        if (skillsPrompted) setStatus("review skills installed ✓");
+      } else if (!skillsPrompted) {
+        openSkillsModal(); // missing + not yet asked this session → consent
+      }
+      break;
+    }
     case "notice": {
       setStatus(ev.message);
       break;
@@ -526,6 +541,31 @@ async function copyContent() {
 function closeCopyModal() {
   copyModalEl.classList.add("hidden");
   if (active !== null) tabs.get(active)?.term.focus();
+}
+
+// ── skills consent modal ──────────────────────────────────────────────────────
+function openSkillsModal() {
+  skillsStatusEl.textContent = "";
+  skillsStatusEl.classList.remove("warn");
+  skillsModalEl.classList.remove("hidden");
+}
+
+function closeSkillsModal() {
+  skillsModalEl.classList.add("hidden");
+}
+
+/** "Not now" — dismiss for this session; we won't re-prompt until next launch. */
+function dismissSkills() {
+  skillsPrompted = true;
+  closeSkillsModal();
+  if (active !== null) tabs.get(active)?.term.focus();
+}
+
+function installSkills() {
+  skillsPrompted = true;
+  skillsStatusEl.classList.remove("warn");
+  skillsStatusEl.textContent = "installing…";
+  send({ type: "install_skills" }); // core replies with skills_status → closes modal
 }
 
 // ── theming ─────────────────────────────────────────────────────────────────
@@ -619,6 +659,8 @@ window.addEventListener("DOMContentLoaded", async () => {
   copyModalEl = $("#copy-modal");
   copyTextEl = $("#copy-modal-text");
   copyStatusEl = $("#copy-modal-status");
+  skillsModalEl = $("#skills-modal");
+  skillsStatusEl = $("#skills-status");
   stageEl = $("#stage");
   panelBodyEl = $("#panel-body");
   panelTitleEl = $("#panel-title");
@@ -704,9 +746,19 @@ window.addEventListener("DOMContentLoaded", async () => {
   copyModalEl.addEventListener("click", (e) => {
     if (e.target === copyModalEl) closeCopyModal();
   });
+
+  // Skills consent modal controls.
+  $("#skills-install").addEventListener("click", installSkills);
+  $("#skills-later").addEventListener("click", dismissSkills);
+  $("#skills-dismiss").addEventListener("click", dismissSkills);
+  skillsModalEl.addEventListener("click", (e) => {
+    if (e.target === skillsModalEl) dismissSkills(); // backdrop click = not now
+  });
+
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
-      if (!copyModalEl.classList.contains("hidden")) closeCopyModal();
+      if (!skillsModalEl.classList.contains("hidden")) dismissSkills();
+      else if (!copyModalEl.classList.contains("hidden")) closeCopyModal();
       else closeSessionPop();
     }
   });
@@ -723,5 +775,6 @@ window.addEventListener("DOMContentLoaded", async () => {
   renderTabBar();
   renderToolbar();
   send({ type: "load_history" });
+  send({ type: "check_skills" }); // → skills_status; consent modal if /pr-* missing
   setStatus("ready");
 });

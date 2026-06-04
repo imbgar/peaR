@@ -33,6 +33,17 @@ Frontend checks:
 cd apps/desktop && npm run build   # tsc + vite build
 ```
 
+### One-shot pre-flight (mirrors CI)
+
+`./scripts/check.sh` runs every check CI runs — `rustfmt`, core/desktop `clippy -D warnings`,
+core tests, eslint, and the frontend build — so a push can't surface a red check you couldn't
+see locally. `./scripts/check.sh --core` skips the frontend for fast Rust-only loops. To run it
+automatically before every push:
+
+```bash
+git config core.hooksPath scripts/hooks   # opt-in pre-push gate; --no-verify to bypass once
+```
+
 ## Architecture in one paragraph
 
 `pear-core` owns all state behind a serializable `Command`/`Event` protocol (see

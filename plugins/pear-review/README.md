@@ -12,9 +12,10 @@ plugin in **Claude Code** and **Codex**.
 | `pr-distill` | Distill to only the merge-blocking items |
 | `pr-walkthru` | Interactive, finding-by-finding guided tour |
 | `pr-explain` | Explain the PR's purpose + changes, then surface gaps |
-| `pr-video` | Dispatch a narrated MP4 walk-through (via `video-explainer`) |
+| `pr-video` | _Optional._ Dispatch a narrated MP4 walk-through — needs a separately-installed `video-explainer` engine (it isn't bundled; the skill checks for it and prints setup steps if missing) |
 
-All are `gh`-driven and operate on the PR checked out in the working directory.
+The first five are `gh`-driven and work out of the box on the PR checked out in the working
+directory. `pr-video` is an optional hook that depends on an external narrated-video engine.
 
 ## Install
 

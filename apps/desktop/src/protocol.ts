@@ -73,7 +73,9 @@ export type Command =
   | { type: "set_claude_permission"; mode: string }
   | { type: "load_history" }
   | { type: "clear_history" }
-  | { type: "restore_history" };
+  | { type: "restore_history" }
+  | { type: "check_skills" }
+  | { type: "install_skills" };
 
 export type Event =
   | { type: "tab_opened"; tab: number; title: string; pr: PrRef | null; cli: CliKind }
@@ -83,6 +85,7 @@ export type Event =
   | { type: "review_saved"; tab: number; path: string }
   | { type: "panel"; tab: number; payload: PanelPayload }
   | { type: "history"; entries: PrRecord[] }
+  | { type: "skills_status"; installed: boolean }
   | { type: "notice"; tab: number | null; message: string }
   | { type: "error"; tab: number | null; message: string };
 

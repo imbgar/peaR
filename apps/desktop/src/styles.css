@@ -552,6 +552,21 @@ button:disabled { opacity: 0.38; cursor: default; }
 .modal-status { font-family: var(--font-mono); font-size: 11.5px; color: var(--accent); text-shadow: var(--glow); }
 .modal-status.warn { color: var(--red); }
 
+/* consent dialog — auto-height card, prose body (overrides the fixed copy-modal size) */
+.consent-card { width: min(520px, 88vw); height: auto; animation: rise 0.16s ease both; }
+.consent-body { padding: 16px 18px 4px; overflow: auto; }
+.consent-body p { margin: 0 0 12px; font-size: 13px; line-height: 1.55; color: var(--tx); }
+.consent-body code {
+  font-family: var(--font-mono); font-size: 12px;
+  background: var(--term-bg); border: 1px solid var(--bd);
+  border-radius: var(--r-sm); padding: 1px 5px; color: var(--accent);
+}
+.consent-target { color: var(--faint) !important; }
+.consent-note {
+  font-size: 12px !important; color: var(--faint) !important;
+  padding-top: 10px; border-top: 1px solid var(--bd);
+}
+
 /* ── motion ────────────────────────────────────────────────────────────── */
 @keyframes rise { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
 
