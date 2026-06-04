@@ -280,11 +280,13 @@ pub enum Event {
         comments: Vec<DiffComment>,
     },
     /// One streamed item from the tab's Claude transcript for the brain panel.
-    /// `kind` is `thinking` | `action` | `note`.
+    /// `kind` is `thinking` | `action` | `note`; `detail` is the full content revealed
+    /// on click (e.g. a tool's whole command/input), empty when there's nothing more.
     Thought {
         tab: TabId,
         kind: String,
         text: String,
+        detail: String,
     },
     /// Reply to `LoadHistory`.
     History { entries: Vec<PrRecord> },

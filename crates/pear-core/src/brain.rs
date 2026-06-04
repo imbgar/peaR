@@ -32,8 +32,12 @@ fn transcript_for(session_id: &str) -> Option<PathBuf> {
     None
 }
 
+/// One streamed thought: `(kind, label, detail)`. `detail` is the full content the UI
+/// reveals on click (the whole command / input); empty when there's nothing more to show.
+type Thought = (String, String, String);
+
 /// Pull the thoughts (thinking + tool actions) out of one transcript JSONL line.
-fn thoughts_in(line: &str) -> Vec<(String, String)> {
+fn thoughts_in(line: &str) -> Vec<Thought> {
     let mut out = Vec::new();
     let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
         return out;
@@ -47,15 +51,15 @@ fn thoughts_in(line: &str) -> Vec<(String, String)> {
             Some("thinking") => {
                 if let Some(t) = b.get("thinking").and_then(|t| t.as_str()) {
                     if !t.trim().is_empty() {
-                        out.push(("thinking".to_string(), t.to_string()));
+                        out.push(("thinking".to_string(), t.to_string(), String::new()));
                     }
                 }
             }
             Some("tool_use") => {
                 let name = b.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
-                // Surface what the tool is actually doing, not just its name. Bash carries a
-                // "description"/"command"; Read/Edit a "file_path"; Grep a "pattern"; etc.
-                let detail = b.get("input").and_then(|i| {
+                let input = b.get("input");
+                // Label: the human-readable description / primary arg.
+                let primary = input.and_then(|i| {
                     [
                         "description",
                         "command",
@@ -67,15 +71,17 @@ fn thoughts_in(line: &str) -> Vec<(String, String)> {
                     .iter()
                     .find_map(|k| i.get(*k).and_then(|d| d.as_str()))
                 });
-                let text = match detail {
-                    Some(d) => {
-                        let first = d.lines().next().unwrap_or(d);
-                        let snip: String = first.chars().take(90).collect();
-                        format!("{name}: {snip}")
-                    }
+                let label = match primary {
+                    Some(d) => format!("{name}: {}", d.lines().next().unwrap_or(d)),
                     None => name.to_string(),
                 };
-                out.push(("action".to_string(), text));
+                // Detail: the full command, else the whole input pretty-printed.
+                let detail = input
+                    .and_then(|i| i.get("command").and_then(|c| c.as_str()).map(String::from))
+                    .or_else(|| input.map(|i| serde_json::to_string_pretty(i).unwrap_or_default()))
+                    .unwrap_or_default();
+                let detail: String = detail.chars().take(4000).collect();
+                out.push(("action".to_string(), label, detail));
             }
             _ => {}
         }
@@ -104,6 +110,7 @@ pub fn watch(session_id: String, tab: TabId, sink: EventSink, stop: Arc<AtomicBo
             tab,
             kind: "note".into(),
             text: "no transcript yet — start a turn in this tab".into(),
+            detail: String::new(),
         });
         return;
     };
@@ -114,18 +121,19 @@ pub fn watch(session_id: String, tab: TabId, sink: EventSink, stop: Arc<AtomicBo
     let mut reader = BufReader::new(file);
 
     // Backfill: read everything so far, emit the tail of it.
-    let mut backlog: Vec<(String, String)> = Vec::new();
+    let mut backlog: Vec<Thought> = Vec::new();
     let mut line = String::new();
     while reader.read_line(&mut line).unwrap_or(0) > 0 {
         backlog.extend(thoughts_in(&line));
         line.clear();
     }
     let start = backlog.len().saturating_sub(BACKFILL);
-    for (kind, text) in &backlog[start..] {
+    for (kind, text, detail) in &backlog[start..] {
         sink(Event::Thought {
             tab,
             kind: kind.clone(),
             text: text.clone(),
+            detail: detail.clone(),
         });
     }
     let mut pos = reader.stream_position().unwrap_or(0);
@@ -147,8 +155,13 @@ pub fn watch(session_id: String, tab: TabId, sink: EventSink, stop: Arc<AtomicBo
         let mut line = String::new();
         while reader.read_line(&mut line).unwrap_or(0) > 0 {
             if line.ends_with('\n') {
-                for (kind, text) in thoughts_in(&line) {
-                    sink(Event::Thought { tab, kind, text });
+                for (kind, text, detail) in thoughts_in(&line) {
+                    sink(Event::Thought {
+                        tab,
+                        kind,
+                        text,
+                        detail,
+                    });
                 }
             }
             line.clear();

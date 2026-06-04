@@ -377,11 +377,24 @@ button:disabled { opacity: 0.38; cursor: default; }
 .thought.thinking { color: var(--dim); font-style: italic; border-left: 2px solid var(--bd2); padding-left: 10px; }
 .thought.note { color: var(--faint); }
 .thought.action {
-  display: inline-block; margin: 0 6px 8px 0; padding: 2px 9px;
-  font-style: normal; color: var(--blue); white-space: nowrap;
+  display: inline-block; margin: 0 6px 8px 0; padding: 2px 10px; max-width: 100%;
+  font-style: normal; color: var(--blue); text-align: left;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: top;
   background: color-mix(in srgb, var(--blue) 9%, transparent);
   border: 1px solid var(--bd2); border-radius: 999px; font-size: 11px;
+  font-family: var(--font-mono);
 }
+.thought.action.has-detail { cursor: pointer; }
+.thought.action.has-detail:hover { border-color: var(--blue); background: color-mix(in srgb, var(--blue) 16%, transparent); }
+.thought.action.open { border-color: var(--blue); border-radius: var(--r-sm) var(--r-sm) 0 0; }
+.thought-detail {
+  margin: -6px 6px 10px 0; padding: 9px 11px; max-height: 280px; overflow: auto;
+  background: var(--term-bg); border: 1px solid var(--bd2); border-top: none;
+  border-radius: 0 0 var(--r-sm) var(--r-sm);
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.5; color: var(--tx);
+  white-space: pre-wrap; word-break: break-word;
+}
+.thought-detail.hidden { display: none; }
 .brain-empty { color: var(--faint); padding: 16px 2px; font-style: italic; }
 
 .statusbtn {

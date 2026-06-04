@@ -189,6 +189,55 @@ function openPr(
   closeSessionPop();
 }
 
+// ── auto-review readiness ─────────────────────────────────────────────────────
+// Fire the review when the agent's boot output goes QUIET (prompt rendered, idle),
+// not on a fixed delay that can type into a not-yet-ready CLI. Bounded by a min (don't
+// fire absurdly early) and a max (give up waiting if output never settles).
+const REVIEW_QUIET_MS = 900;
+const REVIEW_MIN_MS = 1800;
+const REVIEW_MAX_MS = 20000;
+const pendingReviews = new Map<number, { sel: LaunchReview; openedAt: number; timer: number }>();
+
+function fireReview(tab: number) {
+  const p = pendingReviews.get(tab);
+  if (!p) return;
+  const elapsed = Date.now() - p.openedAt;
+  if (elapsed < REVIEW_MIN_MS) {
+    p.timer = window.setTimeout(() => fireReview(tab), REVIEW_MIN_MS - elapsed);
+    return;
+  }
+  pendingReviews.delete(tab);
+  const v = tabs.get(tab);
+  const agent = v ? resolveAgent(v) : undefined;
+  setStatus(`auto-review (${p.sel}) → ${v?.title ?? `tab ${tab}`}`);
+  if (p.sel === "ultra") send({ type: "button", tab, button: "ultra", agent });
+  else send({ type: "start_review", tab, tier: p.sel, agent });
+}
+
+function scheduleAutoReview(tab: number, sel: LaunchReview) {
+  cancelReview(tab);
+  const p = { sel, openedAt: Date.now(), timer: 0 };
+  pendingReviews.set(tab, p);
+  p.timer = window.setTimeout(() => fireReview(tab), REVIEW_QUIET_MS);
+}
+
+/** New output for a tab = still booting; push the quiet-timer back (force-fire at max). */
+function nudgeReview(tab: number) {
+  const p = pendingReviews.get(tab);
+  if (!p) return;
+  clearTimeout(p.timer);
+  if (Date.now() - p.openedAt >= REVIEW_MAX_MS) fireReview(tab);
+  else p.timer = window.setTimeout(() => fireReview(tab), REVIEW_QUIET_MS);
+}
+
+function cancelReview(tab: number) {
+  const p = pendingReviews.get(tab);
+  if (p) {
+    clearTimeout(p.timer);
+    pendingReviews.delete(tab);
+  }
+}
+
 function relTime(iso: string): string {
   const then = new Date(iso).getTime();
   if (isNaN(then)) return iso;
@@ -451,20 +500,12 @@ function handle(ev: CoreEvent) {
       createTabView(ev.tab, ev.title, ev.cli, ev.pr);
       setActive(ev.tab);
       setStatus(`opened ${ev.title}`);
-      // Auto-review on open (PR tabs only). Delay lets the CLI boot before the
-      // slash command is typed (input queues in the PTY regardless).
-      // Never auto-review a plain shell — it's just a terminal, not an agent.
+      // Auto-review on open (PR tabs only, never a plain shell). We don't fire on a
+      // fixed delay (that can race ahead of a not-yet-ready CLI) — instead we wait for
+      // the agent's boot output to go quiet (prompt rendered, idle). See scheduleAutoReview.
       if (ev.pr && pendingAutoReview && ev.cli !== "shell") {
-        const sel = pendingAutoReview;
-        const tab = ev.tab;
-        setStatus(`auto-review (${sel}) queued for ${ev.title}`);
-        setTimeout(() => {
-          const v = tabs.get(tab);
-          const agent = v ? resolveAgent(v) : undefined;
-          // Ultra is the paid cloud review (a button); tiers go through start_review.
-          if (sel === "ultra") send({ type: "button", tab, button: "ultra", agent });
-          else send({ type: "start_review", tab, tier: sel, agent });
-        }, 2200);
+        setStatus(`auto-review (${pendingAutoReview}) — waiting for ${ev.title} to be ready…`);
+        scheduleAutoReview(ev.tab, pendingAutoReview);
       }
       pendingAutoReview = null; // consume — resumes/new opens never carry it
       break;
@@ -482,9 +523,11 @@ function handle(ev: CoreEvent) {
     }
     case "output": {
       tabs.get(ev.tab)?.term.write(new Uint8Array(ev.bytes));
+      nudgeReview(ev.tab); // booting output resets the "ready when quiet" timer
       break;
     }
     case "tab_closed": {
+      cancelReview(ev.tab);
       closeTabView(ev.tab);
       setStatus(`tab ${ev.tab} closed${ev.code != null ? ` (exit ${ev.code})` : ""}`);
       break;
@@ -508,7 +551,7 @@ function handle(ev: CoreEvent) {
       break;
     }
     case "thought": {
-      if (ev.tab === brainTab) appendThought(ev.kind, ev.text);
+      if (ev.tab === brainTab) appendThought(ev.kind, ev.text, ev.detail);
       break;
     }
     case "history": {
@@ -727,14 +770,36 @@ function brainOpen(): boolean {
   return document.getElementById("workspace")?.classList.contains("brain-open") ?? false;
 }
 
-function appendThought(kind: string, text: string) {
+function appendThought(kind: string, text: string, detail = "") {
   const feed = $("#brain-feed");
   feed.querySelector(".brain-empty")?.remove();
-  const div = document.createElement("div");
-  div.className = `thought ${kind}`;
-  div.textContent = kind === "action" ? `⚒ ${text}` : text;
-  feed.appendChild(div);
-  feed.scrollTop = feed.scrollHeight; // autoscroll to the latest thought
+  // Only autoscroll if the user is already near the bottom (don't yank them while reading).
+  const atBottom = feed.scrollTop + feed.clientHeight >= feed.scrollHeight - 48;
+
+  if (kind === "action") {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "thought action" + (detail ? " has-detail" : "");
+    chip.textContent = `⚒ ${text}`;
+    feed.appendChild(chip);
+    if (detail) {
+      const pre = document.createElement("pre");
+      pre.className = "thought-detail hidden";
+      pre.textContent = detail;
+      chip.addEventListener("click", () => {
+        const open = pre.classList.toggle("hidden");
+        chip.classList.toggle("open", !open);
+      });
+      feed.appendChild(pre);
+    }
+  } else {
+    const div = document.createElement("div");
+    div.className = `thought ${kind}`;
+    div.textContent = text;
+    feed.appendChild(div);
+  }
+
+  if (atBottom) feed.scrollTop = feed.scrollHeight;
 }
 
 /** Watch `tab`'s thinking (stops any previous watcher). Clears the feed. */
