@@ -945,6 +945,30 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#brain-toggle").addEventListener("click", () => setBrain(!brainOpen()));
   $("#brain-close").addEventListener("click", () => setBrain(false));
 
+  // Collapsible sidebar: hard toggle (status ☰ / sidebar ‹ / ⌘B), persisted. When
+  // collapsed it parks off-screen and the left-edge hot-zone floats it back (CSS).
+  const appEl = $("#app");
+  const setSidebar = (collapsed: boolean) => {
+    appEl.classList.toggle("sidebar-collapsed", collapsed);
+    // Suppress the hover-peek while collapsing under the cursor; re-armed on edge enter.
+    appEl.classList.toggle("peek-suppressed", collapsed);
+    $("#sidebar-toggle").classList.toggle("active", !collapsed);
+    localStorage.setItem("pear.sidebarCollapsed", collapsed ? "1" : "0");
+  };
+  const toggleSidebar = () => setSidebar(!appEl.classList.contains("sidebar-collapsed"));
+  // Default open: only collapsed if the user explicitly left it that way.
+  setSidebar(localStorage.getItem("pear.sidebarCollapsed") === "1");
+  $("#sidebar-toggle").addEventListener("click", toggleSidebar);
+  $("#sidebar-collapse").addEventListener("click", () => setSidebar(true));
+  // Re-arm the peek once the cursor reaches the left edge again.
+  $("#edge-peek").addEventListener("mouseenter", () => appEl.classList.remove("peek-suppressed"));
+  window.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === "b" || e.key === "B")) {
+      e.preventDefault();
+      toggleSidebar();
+    }
+  });
+
   // Resizable panel (drag the divider between the terminal and the panel).
   const savedPanelW = localStorage.getItem("pear.panelW");
   if (savedPanelW) stageEl.style.setProperty("--panel-w", savedPanelW);
