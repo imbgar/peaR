@@ -230,6 +230,8 @@ pub enum Command {
     LoadHistory,
     /// Clear the history (backed up first; restorable across runs).
     ClearHistory,
+    /// Delete a single PR's history entry (replied via `Event::History`).
+    DeleteHistory { pr: PrRef },
     /// Restore history from the last clear's backup.
     RestoreHistory,
     /// Report whether the bundled `/pr-*` review skills are installed in

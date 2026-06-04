@@ -303,6 +303,7 @@ button:disabled { opacity: 0.38; cursor: default; }
   justify-content: center;
 }
 .hicon:hover { color: var(--accent); border-color: var(--accent-d); box-shadow: var(--glow); }
+.hicon-danger:hover { color: var(--red); border-color: var(--red); box-shadow: none; }
 
 /* session-tree popover */
 .session-pop {

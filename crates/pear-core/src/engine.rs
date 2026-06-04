@@ -160,6 +160,15 @@ impl Engine {
                     message: format!("clear history: {e}"),
                 }),
             },
+            Command::DeleteHistory { pr } => match self.store.delete_entry(&pr) {
+                Ok(_) => self.emit(Event::History {
+                    entries: self.store.history(),
+                }),
+                Err(e) => self.emit(Event::Error {
+                    tab: None,
+                    message: format!("delete history: {e}"),
+                }),
+            },
             Command::RestoreHistory => match self.store.restore_history() {
                 Ok(0) => self.emit(Event::Notice {
                     tab: None,
