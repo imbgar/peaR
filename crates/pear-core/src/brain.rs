@@ -53,7 +53,29 @@ fn thoughts_in(line: &str) -> Vec<(String, String)> {
             }
             Some("tool_use") => {
                 let name = b.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
-                out.push(("action".to_string(), name.to_string()));
+                // Surface what the tool is actually doing, not just its name. Bash carries a
+                // "description"/"command"; Read/Edit a "file_path"; Grep a "pattern"; etc.
+                let detail = b.get("input").and_then(|i| {
+                    [
+                        "description",
+                        "command",
+                        "file_path",
+                        "pattern",
+                        "query",
+                        "prompt",
+                    ]
+                    .iter()
+                    .find_map(|k| i.get(*k).and_then(|d| d.as_str()))
+                });
+                let text = match detail {
+                    Some(d) => {
+                        let first = d.lines().next().unwrap_or(d);
+                        let snip: String = first.chars().take(90).collect();
+                        format!("{name}: {snip}")
+                    }
+                    None => name.to_string(),
+                };
+                out.push(("action".to_string(), text));
             }
             _ => {}
         }

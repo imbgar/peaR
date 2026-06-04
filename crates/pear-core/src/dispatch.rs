@@ -16,18 +16,12 @@
 
 use crate::protocol::{CliKind, PrRef, ReviewButton, ReviewTier};
 
-/// `/code-review <effort>` reviews the checked-out PR branch (the engine `gh pr
-/// checkout`s it on open). The effort levels (low/high) do NOT accept a PR-number arg —
-/// passing one makes the command silently not run (it just types into the input box).
-fn code_review(effort: &str) -> String {
-    format!("/code-review {effort}\r")
-}
-
-/// `/code-review ultra [<pr#>]` — the cloud mode DOES take a PR target.
-fn code_review_ultra(pr: Option<&PrRef>) -> String {
+/// `/code-review <effort> [<pr#>]`. The PR number targets THIS pull request. (Verified
+/// working — these short slash commands submit fine.)
+fn code_review(effort: &str, pr: Option<&PrRef>) -> String {
     match pr {
-        Some(p) => format!("/code-review ultra {}\r", p.number),
-        None => "/code-review ultra\r".to_string(),
+        Some(p) => format!("/code-review {effort} {}\r", p.number),
+        None => format!("/code-review {effort}\r"),
     }
 }
 
@@ -42,6 +36,17 @@ fn aider_ask(prompt: &str, pr: Option<&PrRef>) -> String {
     }
 }
 
+/// Instruct the agent to persist the review it just produced as a markdown file.
+fn save_review_prompt(pr: Option<&PrRef>) -> String {
+    let name = pr
+        .map(|p| format!("pr-review-{}.md", p.number))
+        .unwrap_or_else(|| "pr-review.md".to_string());
+    format!(
+        "Save the full review you just produced — verbatim and uncondensed, every section — \
+         to a markdown file `{name}` in this repo, then print the path.\r"
+    )
+}
+
 /// Keystrokes for an action [`ReviewButton`] under `cli`, targeting `pr` (trailing CR).
 pub fn keystrokes(button: ReviewButton, cli: CliKind, pr: Option<&PrRef>) -> Option<String> {
     use CliKind::*;
@@ -53,8 +58,9 @@ pub fn keystrokes(button: ReviewButton, cli: CliKind, pr: Option<&PrRef>) -> Opt
         (Claude, WalkThrough) => "/pr-walkthru\r".to_string(),
         (Claude, Explain) => "/pr-explain\r".to_string(),
         (Claude, Video) => "/pr-video\r".to_string(),
-        (Claude, Ultra) => code_review_ultra(pr), // paid cloud review of THIS PR
+        (Claude, Ultra) => code_review("ultra", pr), // paid cloud review of THIS PR
         (Claude, CopyContent) => "/pr-copy\r".to_string(),
+        (Claude, SaveReview) => save_review_prompt(pr),
 
         (Codex, PostReview) => "/review post\r".to_string(),
         (Codex, Distill) => "/review summarize\r".to_string(),
@@ -63,6 +69,7 @@ pub fn keystrokes(button: ReviewButton, cli: CliKind, pr: Option<&PrRef>) -> Opt
         (Codex, Video) => return None,
         (Codex, Ultra) => return None,
         (Codex, CopyContent) => "/review copy\r".to_string(),
+        (Codex, SaveReview) => save_review_prompt(pr),
 
         (Aider, PostReview) => "/run gh pr review --comment -F -\r".to_string(),
         (Aider, Distill) => {
@@ -75,6 +82,7 @@ pub fn keystrokes(button: ReviewButton, cli: CliKind, pr: Option<&PrRef>) -> Opt
         (Aider, Video) => return None,
         (Aider, Ultra) => return None,
         (Aider, CopyContent) => "/run pbcopy\r".to_string(),
+        (Aider, SaveReview) => format!("/ask {}", save_review_prompt(pr)),
 
         // Plain shell has no agent slash commands.
         (Shell, _) => return None,
@@ -92,8 +100,8 @@ pub fn tier_keystrokes(tier: ReviewTier, cli: CliKind, pr: Option<&PrRef>) -> Op
     use CliKind::*;
     use ReviewTier::*;
     let s = match (cli, tier) {
-        (Claude, Light) => code_review("low"),
-        (Claude, Standard) => code_review("high"),
+        (Claude, Light) => code_review("low", pr),
+        (Claude, Standard) => code_review("high", pr),
         (Claude, Complex) => match pr {
             Some(p) => format!(
                 "deeply review pull request {}/{}#{} across a diverse set of agents. \
@@ -166,11 +174,10 @@ mod tests {
     #[test]
     fn reviews_name_the_pr() {
         let p = pr();
-        // Effort tiers review the checked-out branch — NO PR-number arg (it breaks the
-        // command); only ultra accepts a PR target.
+        // Tiers + ultra append the PR number to /code-review.
         assert_eq!(
             tier_keystrokes(ReviewTier::Standard, CliKind::Claude, Some(&p)).unwrap(),
-            "/code-review high\r"
+            "/code-review high 42\r"
         );
         assert_eq!(
             keystrokes(ReviewButton::Ultra, CliKind::Claude, Some(&p)).unwrap(),

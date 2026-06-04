@@ -106,6 +106,9 @@ pub enum ReviewButton {
     /// web. Surfaced as a distinct, money-marked button so the cost is never implicit.
     Ultra,
     CopyContent,
+    /// Instruct the agent to write the full review it produced, verbatim, to a
+    /// markdown file (replaces the old buffer-capture Save).
+    SaveReview,
 }
 
 /// Intensity of a launched review. Maps to review-command effort / agent breadth.

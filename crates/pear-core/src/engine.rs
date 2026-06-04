@@ -483,7 +483,7 @@ impl Engine {
         let err = self
             .tabs
             .get_mut(&tab)
-            .and_then(|t| t.session.write_input(keys.as_bytes()).err());
+            .and_then(|t| t.session.write_then_submit(keys.as_bytes()).err());
         if let Some(e) = err {
             self.emit(Event::Notice {
                 tab: Some(tab),
@@ -513,7 +513,7 @@ impl Engine {
         let err = self
             .tabs
             .get_mut(&tab)
-            .and_then(|t| t.session.write_input(keys.as_bytes()).err());
+            .and_then(|t| t.session.write_then_submit(keys.as_bytes()).err());
         if let Some(e) = err {
             self.emit(Event::Notice {
                 tab: Some(tab),

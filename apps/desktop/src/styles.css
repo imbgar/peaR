@@ -357,8 +357,10 @@ button:disabled { opacity: 0.38; cursor: default; }
 #workspace { display: grid; grid-template-rows: auto auto 1fr 0 auto; min-width: 0; min-height: 0; background: var(--bg); transition: grid-template-rows 0.18s var(--ease); }
 #workspace.brain-open { grid-template-rows: auto auto 1fr var(--brain-h, 240px) auto; }
 
-#brain-drawer { display: flex; flex-direction: column; min-height: 0; border-top: 1px solid var(--bd); background: var(--panel); overflow: hidden; }
-#workspace:not(.brain-open) #brain-drawer { display: none; }
+/* Always a grid item (NOT display:none — that would re-flow the statusbar into the
+   collapsed brain row). Closed = 0-height row + overflow:hidden clips it. */
+#brain-drawer { display: flex; flex-direction: column; min-height: 0; background: var(--panel); overflow: hidden; }
+#workspace.brain-open #brain-drawer { border-top: 1px solid var(--bd); }
 .brain-head {
   display: flex; align-items: center; gap: 9px; padding: 6px 12px;
   border-bottom: 1px solid var(--bd); font-family: var(--font-mono); font-size: 11px;

@@ -3,7 +3,7 @@
 
 use std::io::{Read, Write};
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
@@ -17,7 +17,8 @@ pub type EventSink = Arc<dyn Fn(Event) + Send + Sync>;
 
 pub struct Session {
     pub tab: TabId,
-    writer: Box<dyn Write + Send>,
+    /// Shared so a delayed-submit thread (see `write_then_submit`) can also write.
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Box<dyn MasterPty + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
 }
@@ -112,16 +113,36 @@ impl Session {
 
         Ok(Session {
             tab,
-            writer,
+            writer: Arc::new(Mutex::new(writer)),
             master: pair.master,
             killer,
         })
     }
 
     /// Forward keystrokes to the child's stdin.
-    pub fn write_input(&mut self, bytes: &[u8]) -> Result<()> {
-        self.writer.write_all(bytes)?;
-        self.writer.flush()?;
+    pub fn write_input(&self, bytes: &[u8]) -> Result<()> {
+        let mut w = self.writer.lock().unwrap();
+        w.write_all(bytes)?;
+        w.flush()?;
+        Ok(())
+    }
+
+    /// Type `body`, then submit it with a SEPARATE, slightly-delayed Enter. A long
+    /// prompt written in one burst can be buffered by the agent's input like a paste,
+    /// so a trailing `\r` in the same write lands as a newline instead of a submit.
+    /// Sending the Enter as its own keystroke a beat later makes it a clean submit.
+    pub fn write_then_submit(&self, macro_bytes: &[u8]) -> Result<()> {
+        // Strip a trailing CR — we re-send it as a separate, delayed keystroke below.
+        let body = macro_bytes.strip_suffix(b"\r").unwrap_or(macro_bytes);
+        self.write_input(body)?;
+        let writer = self.writer.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            if let Ok(mut w) = writer.lock() {
+                let _ = w.write_all(b"\r");
+                let _ = w.flush();
+            }
+        });
         Ok(())
     }
 

@@ -11,7 +11,8 @@ export type ReviewButton =
   | "explain"
   | "video"
   | "ultra"
-  | "copy_content";
+  | "copy_content"
+  | "save_review";
 
 export type ReviewTier = "light" | "standard" | "complex";
 

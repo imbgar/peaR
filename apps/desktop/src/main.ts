@@ -72,6 +72,11 @@ interface TabView {
 const tabs = new Map<number, TabView>();
 let active: number | null = null;
 
+// Feature flag: the saved-review "Insight" panel (markdown render of a stored review) is
+// hard-coded off for now — the diff panel reuses #panel, so we only hide Insight's own
+// controls (the toggle + ⟳ reload). Flip to revive it later.
+const INSIGHT_ENABLED = false;
+
 // ── element handles ─────────────────────────────────────────────────────────
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 let tabbarEl: HTMLElement;
@@ -554,13 +559,6 @@ function pressButton(button: ReviewButton) {
   send({ type: "button", tab: active, button, agent: resolveAgent(v) });
 }
 
-function saveReview() {
-  if (active === null) return;
-  const v = tabs.get(active);
-  if (!v) return;
-  send({ type: "save_review", tab: active, content: terminalText(v.term) });
-}
-
 // ── copy-content modal ──────────────────────────────────────────────────────
 function setCopyStatus(msg: string, warn = false) {
   copyStatusEl.textContent = msg;
@@ -856,13 +854,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#history-clear").addEventListener("click", () => send({ type: "clear_history" }));
   $("#history-restore").addEventListener("click", () => send({ type: "restore_history" }));
 
-  // Action buttons. copy_content + save_review are frontend-handled; the rest are
-  // slash macros dispatched by the core.
+  // Action buttons. copy_content is frontend-handled (clipboard); the rest — including
+  // save_review (now an agent "write the review to markdown" command) — are core macros.
   toolbarEl.querySelectorAll<HTMLButtonElement>("button[data-btn]").forEach((b) => {
     const which = b.dataset.btn!;
     b.addEventListener("click", () => {
       if (which === "copy_content") copyContent();
-      else if (which === "save_review") saveReview();
       else pressButton(which as ReviewButton);
     });
   });
@@ -872,6 +869,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#panel-close").addEventListener("click", () => setPanel(false));
   $("#panel-load").addEventListener("click", loadPanel);
   $("#diff-btn").addEventListener("click", loadDiff);
+  // Insight is hard-coded off for now — hide its controls (the panel itself is reused
+  // by the diff view, so it stays). Flip INSIGHT_ENABLED to bring these back.
+  if (!INSIGHT_ENABLED) {
+    panelToggleBtn.style.display = "none";
+    $("#panel-load").style.display = "none";
+  }
 
   // Brain drawer toggle (status bar) + close button.
   $("#brain-toggle").addEventListener("click", () => setBrain(!brainOpen()));
