@@ -335,6 +335,12 @@ function renderHistory(entries: PrRecord[]) {
         openPr(rec.pr, rec.cli, { fresh: true });
       }),
     );
+    const del = iconBtn("×", "Delete this history entry", (e) => {
+      e.stopPropagation();
+      send({ type: "delete_history", pr: rec.pr });
+    });
+    del.classList.add("hicon-danger");
+    actions.appendChild(del);
     li.appendChild(actions);
 
     historyEl.appendChild(li);

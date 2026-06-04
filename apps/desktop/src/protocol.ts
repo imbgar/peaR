@@ -80,6 +80,7 @@ export type Command =
   | { type: "set_claude_permission"; mode: string }
   | { type: "load_history" }
   | { type: "clear_history" }
+  | { type: "delete_history"; pr: PrRef }
   | { type: "restore_history" }
   | { type: "check_skills" }
   | { type: "install_skills" }

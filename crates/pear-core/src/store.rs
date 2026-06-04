@@ -99,6 +99,18 @@ impl Store {
         Ok(recs.len())
     }
 
+    /// Remove a single PR's history entry. Returns true if it was present.
+    pub fn delete_entry(&self, pr: &PrRef) -> Result<bool> {
+        let mut recs = self.history();
+        let before = recs.len();
+        recs.retain(|r| r.pr != *pr);
+        let removed = recs.len() != before;
+        if removed {
+            self.write_history(&recs)?;
+        }
+        Ok(removed)
+    }
+
     /// The id of the PR's most recently used session, if any.
     pub fn most_recent_session(&self, pr: &PrRef) -> Option<String> {
         self.history()
