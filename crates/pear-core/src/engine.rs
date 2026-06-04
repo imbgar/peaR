@@ -109,8 +109,8 @@ impl Engine {
             Command::CloseTab { tab } => self.close(tab),
             Command::Input { tab, bytes } => self.input(tab, &bytes),
             Command::Resize { tab, cols, rows } => self.resize(tab, cols, rows),
-            Command::Button { tab, button } => self.button(tab, button),
-            Command::StartReview { tab, tier } => self.start_review(tab, tier),
+            Command::Button { tab, button, agent } => self.button(tab, button, agent),
+            Command::StartReview { tab, tier, agent } => self.start_review(tab, tier, agent),
             Command::SaveReview { tab, content } => self.save_review(tab, &content),
             Command::LoadPanel { tab } => self.load_panel(tab),
             Command::SetClaudePermission { mode } => {
@@ -443,9 +443,9 @@ impl Engine {
         }
     }
 
-    fn button(&mut self, tab: TabId, button: ReviewButton) {
+    fn button(&mut self, tab: TabId, button: ReviewButton, agent: Option<CliKind>) {
         let (cli, pr) = match self.tabs.get(&tab) {
-            Some(t) => (t.cli, t.pr.clone()),
+            Some(t) => (agent.unwrap_or(t.cli), t.pr.clone()),
             None => {
                 self.emit(Event::Notice {
                     tab: Some(tab),
@@ -473,9 +473,9 @@ impl Engine {
         }
     }
 
-    fn start_review(&mut self, tab: TabId, tier: ReviewTier) {
+    fn start_review(&mut self, tab: TabId, tier: ReviewTier, agent: Option<CliKind>) {
         let (cli, pr) = match self.tabs.get(&tab) {
-            Some(t) => (t.cli, t.pr.clone()),
+            Some(t) => (agent.unwrap_or(t.cli), t.pr.clone()),
             None => {
                 self.emit(Event::Notice {
                     tab: Some(tab),

@@ -434,7 +434,10 @@ function handle(ev: CoreEvent) {
         const tier = pendingAutoReview;
         const tab = ev.tab;
         setStatus(`auto-review (${tier}) queued for ${ev.title}`);
-        setTimeout(() => send({ type: "start_review", tab, tier }), 2200);
+        setTimeout(() => {
+          const v = tabs.get(tab);
+          send({ type: "start_review", tab, tier, agent: v ? resolveAgent(v) : undefined });
+        }, 2200);
       }
       pendingAutoReview = null; // consume — resumes/new opens never carry it
       break;
@@ -493,9 +496,26 @@ function handle(ev: CoreEvent) {
 }
 
 // ── wiring ──────────────────────────────────────────────────────────────────
+// Recognise the agent actually running in a tab so review actions dispatch the right
+// macros. A declared agent (claude/codex/aider) wins; for a "shell" tab we sniff the
+// terminal banner. Order matters: match specific agents before claude (broadest).
+const AGENT_SIGNATURES: [RegExp, CliKind][] = [
+  [/\bcodex\b|openai codex/i, "codex"],
+  [/\baider\b/i, "aider"],
+  [/claude code|claude-flow|\bruflo\b|anthropic|claude max|\bopus\b|\bsonnet\b/i, "claude"],
+];
+function resolveAgent(v: TabView): CliKind {
+  if (v.cli !== "shell") return v.cli;
+  const text = terminalText(v.term);
+  for (const [re, cli] of AGENT_SIGNATURES) if (re.test(text)) return cli;
+  return "claude"; // sensible default for an unrecognised agent shell
+}
+
 function pressButton(button: ReviewButton) {
   if (active === null) return;
-  send({ type: "button", tab: active, button });
+  const v = tabs.get(active);
+  if (!v) return;
+  send({ type: "button", tab: active, button, agent: resolveAgent(v) });
 }
 
 function saveReview() {
@@ -590,7 +610,9 @@ function toggleTheme() {
 // ── review tiers ────────────────────────────────────────────────────────────
 function startReview(tier: ReviewTier) {
   if (active === null) return;
-  send({ type: "start_review", tab: active, tier });
+  const v = tabs.get(active);
+  if (!v) return;
+  send({ type: "start_review", tab: active, tier, agent: resolveAgent(v) });
   setStatus(`launching ${tier} review…`);
 }
 

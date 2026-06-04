@@ -66,8 +66,8 @@ export type Command =
   | { type: "close_tab"; tab: number }
   | { type: "input"; tab: number; bytes: number[] }
   | { type: "resize"; tab: number; cols: number; rows: number }
-  | { type: "button"; tab: number; button: ReviewButton }
-  | { type: "start_review"; tab: number; tier: ReviewTier }
+  | { type: "button"; tab: number; button: ReviewButton; agent?: CliKind }
+  | { type: "start_review"; tab: number; tier: ReviewTier; agent?: CliKind }
   | { type: "save_review"; tab: number; content: string }
   | { type: "load_panel"; tab: number }
   | { type: "set_claude_permission"; mode: string }

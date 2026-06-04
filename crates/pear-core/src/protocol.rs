@@ -188,10 +188,23 @@ pub enum Command {
     /// Terminal widget resized; update the PTY window size.
     Resize { tab: TabId, cols: u16, rows: u16 },
     /// A review button was pressed; the engine writes the mapped macro to the PTY.
-    Button { tab: TabId, button: ReviewButton },
+    /// `agent` overrides which CLI's macros to use (the frontend resolves the actual
+    /// agent — declared, or detected from the terminal for a "shell" tab); falls back
+    /// to the tab's own cli when absent.
+    Button {
+        tab: TabId,
+        button: ReviewButton,
+        #[serde(default)]
+        agent: Option<CliKind>,
+    },
     /// Launch a review at a given intensity; the engine writes the mapped review
-    /// command to the PTY.
-    StartReview { tab: TabId, tier: ReviewTier },
+    /// command to the PTY. `agent` overrides the dispatch CLI (see `Button`).
+    StartReview {
+        tab: TabId,
+        tier: ReviewTier,
+        #[serde(default)]
+        agent: Option<CliKind>,
+    },
     /// Persist an arbitrary review artifact (e.g. captured agent output).
     SaveReview { tab: TabId, content: String },
     /// Load the latest persisted review for the tab's PR into the Insight panel
