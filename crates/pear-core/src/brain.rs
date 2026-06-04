@@ -55,6 +55,14 @@ fn thoughts_in(line: &str) -> Vec<Thought> {
                     }
                 }
             }
+            // Claude's narration between reasoning and tools — the readable "what I'm doing".
+            Some("text") => {
+                if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
+                    if !t.trim().is_empty() {
+                        out.push(("say".to_string(), t.trim().to_string(), String::new()));
+                    }
+                }
+            }
             Some("tool_use") => {
                 let name = b.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
                 let input = b.get("input");

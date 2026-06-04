@@ -375,6 +375,7 @@ button:disabled { opacity: 0.38; cursor: default; }
 }
 .thought { margin: 0 0 10px; white-space: pre-wrap; }
 .thought.thinking { color: var(--dim); font-style: italic; border-left: 2px solid var(--bd2); padding-left: 10px; }
+.thought.say { color: var(--tx); border-left: 2px solid var(--accent-d); padding-left: 10px; }
 .thought.note { color: var(--faint); }
 .thought.action {
   display: inline-block; margin: 0 6px 8px 0; padding: 2px 10px; max-width: 100%;
