@@ -14,6 +14,7 @@
 //! engine.handle(Command::OpenScratch { cli: CliKind::Shell, cwd: None });
 //! ```
 
+pub mod brain;
 pub mod dispatch;
 pub mod engine;
 pub mod error;

@@ -242,6 +242,11 @@ pub enum Command {
     /// Fetch the tab's PR diff + existing review comments for the diff panel
     /// (replied via `Event::Diff`).
     LoadDiff { tab: TabId },
+    /// Start streaming the tab's Claude session *thinking* to the brain panel
+    /// (replied via `Event::Thought`s). No-op for non-Claude / session-less tabs.
+    WatchBrain { tab: TabId },
+    /// Stop streaming the tab's thinking (e.g. the brain panel was closed).
+    StopBrain { tab: TabId },
 }
 
 /// Events the engine emits to the frontend.
@@ -270,6 +275,13 @@ pub enum Event {
         tab: TabId,
         diff: String,
         comments: Vec<DiffComment>,
+    },
+    /// One streamed item from the tab's Claude transcript for the brain panel.
+    /// `kind` is `thinking` | `action` | `note`.
+    Thought {
+        tab: TabId,
+        kind: String,
+        text: String,
     },
     /// Reply to `LoadHistory`.
     History { entries: Vec<PrRecord> },

@@ -407,6 +407,8 @@ function setActive(id: number) {
   if (stageEl.classList.contains("panel-open") && panelBodyEl.classList.contains("diff-mode")) {
     syncDiffToActive();
   }
+  // The brain drawer also follows the active tab.
+  if (brainOpen() && brainTab !== id) watchBrainFor(id);
 }
 
 function closeTabView(id: number) {
@@ -498,6 +500,10 @@ function handle(ev: CoreEvent) {
       const changed =
         !prev || prev.diff !== ev.diff || prev.comments.length !== ev.comments.length;
       if (ev.tab === active && changed) showDiff(ev.tab, ev.diff, ev.comments);
+      break;
+    }
+    case "thought": {
+      if (ev.tab === brainTab) appendThought(ev.kind, ev.text);
       break;
     }
     case "history": {
@@ -715,6 +721,54 @@ function loadDiff() {
   syncDiffToActive();
 }
 
+// ── brain drawer (tail Claude's thinking) ─────────────────────────────────────
+// The tab whose thinking is currently being streamed (null = not watching).
+let brainTab: number | null = null;
+
+function brainOpen(): boolean {
+  return document.getElementById("workspace")?.classList.contains("brain-open") ?? false;
+}
+
+function appendThought(kind: string, text: string) {
+  const feed = $("#brain-feed");
+  feed.querySelector(".brain-empty")?.remove();
+  const div = document.createElement("div");
+  div.className = `thought ${kind}`;
+  div.textContent = kind === "action" ? `⚒ ${text}` : text;
+  feed.appendChild(div);
+  feed.scrollTop = feed.scrollHeight; // autoscroll to the latest thought
+}
+
+/** Watch `tab`'s thinking (stops any previous watcher). Clears the feed. */
+function watchBrainFor(tab: number | null) {
+  if (brainTab !== null && brainTab !== tab) send({ type: "stop_brain", tab: brainTab });
+  brainTab = tab;
+  const feed = $("#brain-feed");
+  const sub = $("#brain-sub");
+  feed.innerHTML = "";
+  if (tab === null) {
+    feed.innerHTML = `<div class="brain-empty">No active tab.</div>`;
+    sub.textContent = "";
+    return;
+  }
+  const v = tabs.get(tab);
+  sub.textContent = v ? (v.pr ? shortLabel(v.pr) : v.title) : "";
+  feed.innerHTML = `<div class="brain-empty">waiting for thinking…</div>`;
+  send({ type: "watch_brain", tab });
+}
+
+function setBrain(open: boolean) {
+  $("#workspace").classList.toggle("brain-open", open);
+  $("#brain-toggle").classList.toggle("active", open);
+  if (open) {
+    watchBrainFor(active);
+  } else if (brainTab !== null) {
+    send({ type: "stop_brain", tab: brainTab });
+    brainTab = null;
+  }
+  requestAnimationFrame(refitActive);
+}
+
 function renderPanel(p: PanelPayload) {
   panelTitleEl.textContent = p.title || "Insight";
   panelBodyEl.classList.remove("diff-mode");
@@ -818,6 +872,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#panel-close").addEventListener("click", () => setPanel(false));
   $("#panel-load").addEventListener("click", loadPanel);
   $("#diff-btn").addEventListener("click", loadDiff);
+
+  // Brain drawer toggle (status bar) + close button.
+  $("#brain-toggle").addEventListener("click", () => setBrain(!brainOpen()));
+  $("#brain-close").addEventListener("click", () => setBrain(false));
 
   // Resizable panel (drag the divider between the terminal and the panel).
   const savedPanelW = localStorage.getItem("pear.panelW");

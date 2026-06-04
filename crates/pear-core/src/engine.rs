@@ -7,7 +7,9 @@
 //! `TabOpened`, which the protocol allows).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
@@ -42,6 +44,8 @@ pub struct Engine {
     /// engine can drop the dead tab (drained in `reap_dead`, called each `handle`).
     reaper_tx: Sender<TabId>,
     reaper_rx: Receiver<TabId>,
+    /// Stop flags for active brain (thinking-tail) watchers, keyed by tab.
+    brain_watchers: HashMap<TabId, Arc<AtomicBool>>,
 }
 
 /// Claude's real `--permission-mode` choices. Anything else falls back to `auto`.
@@ -80,6 +84,7 @@ impl Engine {
             claude_perm: "auto".to_string(),
             reaper_tx,
             reaper_rx,
+            brain_watchers: HashMap::new(),
         })
     }
 
@@ -129,6 +134,8 @@ impl Engine {
                 entries: self.store.history(),
             }),
             Command::LoadDiff { tab } => self.load_diff(tab),
+            Command::WatchBrain { tab } => self.watch_brain(tab),
+            Command::StopBrain { tab } => self.stop_brain(tab),
             Command::CheckSkills => self.emit(Event::SkillsStatus {
                 installed: crate::skills_install::skills_installed(),
             }),
@@ -413,6 +420,7 @@ impl Engine {
         // Dropping the Tab kills the PTY; the wait-thread then signals the reaper.
         // An unknown tab is normal here — the process may have self-exited and already
         // been reaped — so this is a silent no-op rather than an error.
+        self.stop_brain(tab);
         self.tabs.remove(&tab);
     }
 
@@ -421,6 +429,7 @@ impl Engine {
     /// stale entry and spuriously forks. Drained at the start of every `handle`.
     fn reap_dead(&mut self) {
         while let Ok(tab) = self.reaper_rx.try_recv() {
+            self.stop_brain(tab);
             self.tabs.remove(&tab);
         }
     }
@@ -593,6 +602,32 @@ impl Engine {
                 message: format!("diff: {e}"),
             }),
         });
+    }
+
+    /// Start streaming the tab's Claude session thinking to the brain panel. No-op if
+    /// the tab has no session id (non-Claude / session-less) or is already watched.
+    fn watch_brain(&mut self, tab: TabId) {
+        if self.brain_watchers.contains_key(&tab) {
+            return;
+        }
+        let Some(session_id) = self.tabs.get(&tab).and_then(|t| t.session_id.clone()) else {
+            self.emit(Event::Notice {
+                tab: Some(tab),
+                message: "brain: this tab has no Claude session to read".into(),
+            });
+            return;
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        self.brain_watchers.insert(tab, stop.clone());
+        let sink = self.sink.clone();
+        std::thread::spawn(move || crate::brain::watch(session_id, tab, sink, stop));
+    }
+
+    /// Stop a tab's brain watcher (panel closed / tab switched / tab closed).
+    fn stop_brain(&mut self, tab: TabId) {
+        if let Some(stop) = self.brain_watchers.remove(&tab) {
+            stop.store(true, Ordering::Relaxed);
+        }
     }
 
     fn save_review(&mut self, tab: TabId, content: &str) {

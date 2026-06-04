@@ -106,7 +106,18 @@
           </aside>
         </div>
 
+        <section id="brain-drawer" aria-label="Claude's thinking">
+          <div class="brain-head">
+            <span class="brain-title">🧠 thinking</span>
+            <span id="brain-sub" class="brain-sub"></span>
+            <span class="toolbar-spacer"></span>
+            <button id="brain-close" title="Close (toggle from the status bar)">×</button>
+          </div>
+          <div id="brain-feed" class="brain-feed"></div>
+        </section>
+
         <footer id="statusbar">
+          <button id="brain-toggle" class="statusbtn" title="Show Claude's thinking">🧠 brain</button>
           <span id="status">starting…</span>
           <span class="status-spacer"></span>
           <button id="theme-toggle" class="theme-toggle"><span class="swatch">◉</span> <span id="theme-name">phosphor</span></button>

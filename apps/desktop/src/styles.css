@@ -353,7 +353,41 @@ button:disabled { opacity: 0.38; cursor: default; }
 /* min-height:0 is essential: as a grid item, default min-height:auto lets #workspace
    grow to its content (a tall diff) instead of staying viewport-bounded, which would
    stop the 1fr #stage row — and the panel inside it — from ever scrolling. */
-#workspace { display: grid; grid-template-rows: auto auto 1fr auto; min-width: 0; min-height: 0; background: var(--bg); }
+/* rows: tabbar · toolbar · stage(1fr) · brain-drawer(collapsible) · statusbar */
+#workspace { display: grid; grid-template-rows: auto auto 1fr 0 auto; min-width: 0; min-height: 0; background: var(--bg); transition: grid-template-rows 0.18s var(--ease); }
+#workspace.brain-open { grid-template-rows: auto auto 1fr var(--brain-h, 240px) auto; }
+
+#brain-drawer { display: flex; flex-direction: column; min-height: 0; border-top: 1px solid var(--bd); background: var(--panel); overflow: hidden; }
+#workspace:not(.brain-open) #brain-drawer { display: none; }
+.brain-head {
+  display: flex; align-items: center; gap: 9px; padding: 6px 12px;
+  border-bottom: 1px solid var(--bd); font-family: var(--font-mono); font-size: 11px;
+}
+.brain-title { color: var(--accent); text-shadow: var(--glow); letter-spacing: 0.4px; }
+.brain-sub { color: var(--faint); }
+.brain-head button { background: transparent; border: none; color: var(--faint); font-size: 16px; line-height: 1; padding: 0 4px; }
+.brain-head button:hover { color: var(--red); }
+.brain-feed {
+  flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 10px 14px;
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.55;
+}
+.thought { margin: 0 0 10px; white-space: pre-wrap; }
+.thought.thinking { color: var(--dim); font-style: italic; border-left: 2px solid var(--bd2); padding-left: 10px; }
+.thought.note { color: var(--faint); }
+.thought.action {
+  display: inline-block; margin: 0 6px 8px 0; padding: 2px 9px;
+  font-style: normal; color: var(--blue); white-space: nowrap;
+  background: color-mix(in srgb, var(--blue) 9%, transparent);
+  border: 1px solid var(--bd2); border-radius: 999px; font-size: 11px;
+}
+.brain-empty { color: var(--faint); padding: 16px 2px; font-style: italic; }
+
+.statusbtn {
+  background: transparent; border: 1px solid var(--bd2); color: var(--dim);
+  border-radius: var(--r-sm); padding: 2px 9px; font-size: 11px; font-family: var(--font-mono);
+}
+.statusbtn:hover { color: var(--accent); border-color: var(--accent-d); }
+.statusbtn.active { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: var(--glow); }
 
 #tabbar {
   display: flex;
