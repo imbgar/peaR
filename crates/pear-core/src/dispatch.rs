@@ -16,8 +16,8 @@
 
 use crate::protocol::{CliKind, PrRef, ReviewButton, ReviewTier};
 
-/// `/code-review <effort> [<pr#>]`. The PR number makes the built-in review THIS pull
-/// request via `gh`, not whatever branch is checked out against a stale local base.
+/// `/code-review <effort> [<pr#>]`. The PR number targets THIS pull request. (Verified
+/// working — these short slash commands submit fine.)
 fn code_review(effort: &str, pr: Option<&PrRef>) -> String {
     match pr {
         Some(p) => format!("/code-review {effort} {}\r", p.number),
@@ -36,6 +36,17 @@ fn aider_ask(prompt: &str, pr: Option<&PrRef>) -> String {
     }
 }
 
+/// Instruct the agent to persist the review it just produced as a markdown file.
+fn save_review_prompt(pr: Option<&PrRef>) -> String {
+    let name = pr
+        .map(|p| format!("pr-review-{}.md", p.number))
+        .unwrap_or_else(|| "pr-review.md".to_string());
+    format!(
+        "Save the full review you just produced — verbatim and uncondensed, every section — \
+         to a markdown file `{name}` in this repo, then print the path.\r"
+    )
+}
+
 /// Keystrokes for an action [`ReviewButton`] under `cli`, targeting `pr` (trailing CR).
 pub fn keystrokes(button: ReviewButton, cli: CliKind, pr: Option<&PrRef>) -> Option<String> {
     use CliKind::*;
@@ -49,6 +60,7 @@ pub fn keystrokes(button: ReviewButton, cli: CliKind, pr: Option<&PrRef>) -> Opt
         (Claude, Video) => "/pr-video\r".to_string(),
         (Claude, Ultra) => code_review("ultra", pr), // paid cloud review of THIS PR
         (Claude, CopyContent) => "/pr-copy\r".to_string(),
+        (Claude, SaveReview) => save_review_prompt(pr),
 
         (Codex, PostReview) => "/review post\r".to_string(),
         (Codex, Distill) => "/review summarize\r".to_string(),
@@ -57,6 +69,7 @@ pub fn keystrokes(button: ReviewButton, cli: CliKind, pr: Option<&PrRef>) -> Opt
         (Codex, Video) => return None,
         (Codex, Ultra) => return None,
         (Codex, CopyContent) => "/review copy\r".to_string(),
+        (Codex, SaveReview) => save_review_prompt(pr),
 
         (Aider, PostReview) => "/run gh pr review --comment -F -\r".to_string(),
         (Aider, Distill) => {
@@ -69,6 +82,7 @@ pub fn keystrokes(button: ReviewButton, cli: CliKind, pr: Option<&PrRef>) -> Opt
         (Aider, Video) => return None,
         (Aider, Ultra) => return None,
         (Aider, CopyContent) => "/run pbcopy\r".to_string(),
+        (Aider, SaveReview) => format!("/ask {}", save_review_prompt(pr)),
 
         // Plain shell has no agent slash commands.
         (Shell, _) => return None,

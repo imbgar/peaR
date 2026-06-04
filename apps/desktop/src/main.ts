@@ -72,6 +72,11 @@ interface TabView {
 const tabs = new Map<number, TabView>();
 let active: number | null = null;
 
+// Feature flag: the saved-review "Insight" panel (markdown render of a stored review) is
+// hard-coded off for now — the diff panel reuses #panel, so we only hide Insight's own
+// controls (the toggle + ⟳ reload). Flip to revive it later.
+const INSIGHT_ENABLED = false;
+
 // ── element handles ─────────────────────────────────────────────────────────
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 let tabbarEl: HTMLElement;
@@ -182,6 +187,55 @@ function openPr(
     session_id: opts.session_id ?? null,
   });
   closeSessionPop();
+}
+
+// ── auto-review readiness ─────────────────────────────────────────────────────
+// Fire the review when the agent's boot output goes QUIET (prompt rendered, idle),
+// not on a fixed delay that can type into a not-yet-ready CLI. Bounded by a min (don't
+// fire absurdly early) and a max (give up waiting if output never settles).
+const REVIEW_QUIET_MS = 900;
+const REVIEW_MIN_MS = 1800;
+const REVIEW_MAX_MS = 20000;
+const pendingReviews = new Map<number, { sel: LaunchReview; openedAt: number; timer: number }>();
+
+function fireReview(tab: number) {
+  const p = pendingReviews.get(tab);
+  if (!p) return;
+  const elapsed = Date.now() - p.openedAt;
+  if (elapsed < REVIEW_MIN_MS) {
+    p.timer = window.setTimeout(() => fireReview(tab), REVIEW_MIN_MS - elapsed);
+    return;
+  }
+  pendingReviews.delete(tab);
+  const v = tabs.get(tab);
+  const agent = v ? resolveAgent(v) : undefined;
+  setStatus(`auto-review (${p.sel}) → ${v?.title ?? `tab ${tab}`}`);
+  if (p.sel === "ultra") send({ type: "button", tab, button: "ultra", agent });
+  else send({ type: "start_review", tab, tier: p.sel, agent });
+}
+
+function scheduleAutoReview(tab: number, sel: LaunchReview) {
+  cancelReview(tab);
+  const p = { sel, openedAt: Date.now(), timer: 0 };
+  pendingReviews.set(tab, p);
+  p.timer = window.setTimeout(() => fireReview(tab), REVIEW_QUIET_MS);
+}
+
+/** New output for a tab = still booting; push the quiet-timer back (force-fire at max). */
+function nudgeReview(tab: number) {
+  const p = pendingReviews.get(tab);
+  if (!p) return;
+  clearTimeout(p.timer);
+  if (Date.now() - p.openedAt >= REVIEW_MAX_MS) fireReview(tab);
+  else p.timer = window.setTimeout(() => fireReview(tab), REVIEW_QUIET_MS);
+}
+
+function cancelReview(tab: number) {
+  const p = pendingReviews.get(tab);
+  if (p) {
+    clearTimeout(p.timer);
+    pendingReviews.delete(tab);
+  }
 }
 
 function relTime(iso: string): string {
@@ -407,6 +461,8 @@ function setActive(id: number) {
   if (stageEl.classList.contains("panel-open") && panelBodyEl.classList.contains("diff-mode")) {
     syncDiffToActive();
   }
+  // The brain drawer also follows the active tab.
+  if (brainOpen() && brainTab !== id) watchBrainFor(id);
 }
 
 function closeTabView(id: number) {
@@ -444,20 +500,12 @@ function handle(ev: CoreEvent) {
       createTabView(ev.tab, ev.title, ev.cli, ev.pr);
       setActive(ev.tab);
       setStatus(`opened ${ev.title}`);
-      // Auto-review on open (PR tabs only). Delay lets the CLI boot before the
-      // slash command is typed (input queues in the PTY regardless).
-      // Never auto-review a plain shell — it's just a terminal, not an agent.
+      // Auto-review on open (PR tabs only, never a plain shell). We don't fire on a
+      // fixed delay (that can race ahead of a not-yet-ready CLI) — instead we wait for
+      // the agent's boot output to go quiet (prompt rendered, idle). See scheduleAutoReview.
       if (ev.pr && pendingAutoReview && ev.cli !== "shell") {
-        const sel = pendingAutoReview;
-        const tab = ev.tab;
-        setStatus(`auto-review (${sel}) queued for ${ev.title}`);
-        setTimeout(() => {
-          const v = tabs.get(tab);
-          const agent = v ? resolveAgent(v) : undefined;
-          // Ultra is the paid cloud review (a button); tiers go through start_review.
-          if (sel === "ultra") send({ type: "button", tab, button: "ultra", agent });
-          else send({ type: "start_review", tab, tier: sel, agent });
-        }, 2200);
+        setStatus(`auto-review (${pendingAutoReview}) — waiting for ${ev.title} to be ready…`);
+        scheduleAutoReview(ev.tab, pendingAutoReview);
       }
       pendingAutoReview = null; // consume — resumes/new opens never carry it
       break;
@@ -475,9 +523,11 @@ function handle(ev: CoreEvent) {
     }
     case "output": {
       tabs.get(ev.tab)?.term.write(new Uint8Array(ev.bytes));
+      nudgeReview(ev.tab); // booting output resets the "ready when quiet" timer
       break;
     }
     case "tab_closed": {
+      cancelReview(ev.tab);
       closeTabView(ev.tab);
       setStatus(`tab ${ev.tab} closed${ev.code != null ? ` (exit ${ev.code})` : ""}`);
       break;
@@ -498,6 +548,10 @@ function handle(ev: CoreEvent) {
       const changed =
         !prev || prev.diff !== ev.diff || prev.comments.length !== ev.comments.length;
       if (ev.tab === active && changed) showDiff(ev.tab, ev.diff, ev.comments);
+      break;
+    }
+    case "thought": {
+      if (ev.tab === brainTab) appendThought(ev.kind, ev.text, ev.detail);
       break;
     }
     case "history": {
@@ -546,13 +600,6 @@ function pressButton(button: ReviewButton) {
   const v = tabs.get(active);
   if (!v) return;
   send({ type: "button", tab: active, button, agent: resolveAgent(v) });
-}
-
-function saveReview() {
-  if (active === null) return;
-  const v = tabs.get(active);
-  if (!v) return;
-  send({ type: "save_review", tab: active, content: terminalText(v.term) });
 }
 
 // ── copy-content modal ──────────────────────────────────────────────────────
@@ -715,6 +762,76 @@ function loadDiff() {
   syncDiffToActive();
 }
 
+// ── brain drawer (tail Claude's thinking) ─────────────────────────────────────
+// The tab whose thinking is currently being streamed (null = not watching).
+let brainTab: number | null = null;
+
+function brainOpen(): boolean {
+  return document.getElementById("workspace")?.classList.contains("brain-open") ?? false;
+}
+
+function appendThought(kind: string, text: string, detail = "") {
+  const feed = $("#brain-feed");
+  feed.querySelector(".brain-empty")?.remove();
+  // Only autoscroll if the user is already near the bottom (don't yank them while reading).
+  const atBottom = feed.scrollTop + feed.clientHeight >= feed.scrollHeight - 48;
+
+  if (kind === "action") {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "thought action" + (detail ? " has-detail" : "");
+    chip.textContent = `⚒ ${text}`;
+    feed.appendChild(chip);
+    if (detail) {
+      const pre = document.createElement("pre");
+      pre.className = "thought-detail hidden";
+      pre.textContent = detail;
+      chip.addEventListener("click", () => {
+        const open = pre.classList.toggle("hidden");
+        chip.classList.toggle("open", !open);
+      });
+      feed.appendChild(pre);
+    }
+  } else {
+    const div = document.createElement("div");
+    div.className = `thought ${kind}`;
+    div.textContent = text;
+    feed.appendChild(div);
+  }
+
+  if (atBottom) feed.scrollTop = feed.scrollHeight;
+}
+
+/** Watch `tab`'s thinking (stops any previous watcher). Clears the feed. */
+function watchBrainFor(tab: number | null) {
+  if (brainTab !== null && brainTab !== tab) send({ type: "stop_brain", tab: brainTab });
+  brainTab = tab;
+  const feed = $("#brain-feed");
+  const sub = $("#brain-sub");
+  feed.innerHTML = "";
+  if (tab === null) {
+    feed.innerHTML = `<div class="brain-empty">No active tab.</div>`;
+    sub.textContent = "";
+    return;
+  }
+  const v = tabs.get(tab);
+  sub.textContent = v ? (v.pr ? shortLabel(v.pr) : v.title) : "";
+  feed.innerHTML = `<div class="brain-empty">waiting for thinking…</div>`;
+  send({ type: "watch_brain", tab });
+}
+
+function setBrain(open: boolean) {
+  $("#workspace").classList.toggle("brain-open", open);
+  $("#brain-toggle").classList.toggle("active", open);
+  if (open) {
+    watchBrainFor(active);
+  } else if (brainTab !== null) {
+    send({ type: "stop_brain", tab: brainTab });
+    brainTab = null;
+  }
+  requestAnimationFrame(refitActive);
+}
+
 function renderPanel(p: PanelPayload) {
   panelTitleEl.textContent = p.title || "Insight";
   panelBodyEl.classList.remove("diff-mode");
@@ -802,13 +919,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#history-clear").addEventListener("click", () => send({ type: "clear_history" }));
   $("#history-restore").addEventListener("click", () => send({ type: "restore_history" }));
 
-  // Action buttons. copy_content + save_review are frontend-handled; the rest are
-  // slash macros dispatched by the core.
+  // Action buttons. copy_content is frontend-handled (clipboard); the rest — including
+  // save_review (now an agent "write the review to markdown" command) — are core macros.
   toolbarEl.querySelectorAll<HTMLButtonElement>("button[data-btn]").forEach((b) => {
     const which = b.dataset.btn!;
     b.addEventListener("click", () => {
       if (which === "copy_content") copyContent();
-      else if (which === "save_review") saveReview();
       else pressButton(which as ReviewButton);
     });
   });
@@ -818,6 +934,16 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#panel-close").addEventListener("click", () => setPanel(false));
   $("#panel-load").addEventListener("click", loadPanel);
   $("#diff-btn").addEventListener("click", loadDiff);
+  // Insight is hard-coded off for now — hide its controls (the panel itself is reused
+  // by the diff view, so it stays). Flip INSIGHT_ENABLED to bring these back.
+  if (!INSIGHT_ENABLED) {
+    panelToggleBtn.style.display = "none";
+    $("#panel-load").style.display = "none";
+  }
+
+  // Brain drawer toggle (status bar) + close button.
+  $("#brain-toggle").addEventListener("click", () => setBrain(!brainOpen()));
+  $("#brain-close").addEventListener("click", () => setBrain(false));
 
   // Resizable panel (drag the divider between the terminal and the panel).
   const savedPanelW = localStorage.getItem("pear.panelW");

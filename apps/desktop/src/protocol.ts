@@ -11,7 +11,8 @@ export type ReviewButton =
   | "explain"
   | "video"
   | "ultra"
-  | "copy_content";
+  | "copy_content"
+  | "save_review";
 
 export type ReviewTier = "light" | "standard" | "complex";
 
@@ -84,7 +85,9 @@ export type Command =
   | { type: "restore_history" }
   | { type: "check_skills" }
   | { type: "install_skills" }
-  | { type: "load_diff"; tab: number };
+  | { type: "load_diff"; tab: number }
+  | { type: "watch_brain"; tab: number }
+  | { type: "stop_brain"; tab: number };
 
 export type Event =
   | { type: "tab_opened"; tab: number; title: string; pr: PrRef | null; cli: CliKind }
@@ -94,6 +97,7 @@ export type Event =
   | { type: "review_saved"; tab: number; path: string }
   | { type: "panel"; tab: number; payload: PanelPayload }
   | { type: "diff"; tab: number; diff: string; comments: DiffComment[] }
+  | { type: "thought"; tab: number; kind: string; text: string; detail: string }
   | { type: "history"; entries: PrRecord[] }
   | { type: "skills_status"; installed: boolean }
   | { type: "notice"; tab: number | null; message: string }

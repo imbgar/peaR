@@ -106,6 +106,9 @@ pub enum ReviewButton {
     /// web. Surfaced as a distinct, money-marked button so the cost is never implicit.
     Ultra,
     CopyContent,
+    /// Instruct the agent to write the full review it produced, verbatim, to a
+    /// markdown file (replaces the old buffer-capture Save).
+    SaveReview,
 }
 
 /// Intensity of a launched review. Maps to review-command effort / agent breadth.
@@ -242,6 +245,11 @@ pub enum Command {
     /// Fetch the tab's PR diff + existing review comments for the diff panel
     /// (replied via `Event::Diff`).
     LoadDiff { tab: TabId },
+    /// Start streaming the tab's Claude session *thinking* to the brain panel
+    /// (replied via `Event::Thought`s). No-op for non-Claude / session-less tabs.
+    WatchBrain { tab: TabId },
+    /// Stop streaming the tab's thinking (e.g. the brain panel was closed).
+    StopBrain { tab: TabId },
 }
 
 /// Events the engine emits to the frontend.
@@ -270,6 +278,15 @@ pub enum Event {
         tab: TabId,
         diff: String,
         comments: Vec<DiffComment>,
+    },
+    /// One streamed item from the tab's Claude transcript for the brain panel.
+    /// `kind` is `thinking` | `action` | `note`; `detail` is the full content revealed
+    /// on click (e.g. a tool's whole command/input), empty when there's nothing more.
+    Thought {
+        tab: TabId,
+        kind: String,
+        text: String,
+        detail: String,
     },
     /// Reply to `LoadHistory`.
     History { entries: Vec<PrRecord> },
