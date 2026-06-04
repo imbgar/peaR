@@ -43,13 +43,19 @@ impl Session {
             })
             .map_err(|e| CoreError::Pty(e.to_string()))?;
 
-        let mut cmd = CommandBuilder::new(program);
+        // A Finder/Dock launch inherits only the bare system PATH, so resolve the
+        // program against the user's real login-shell PATH and inject that PATH into
+        // the child so tools used *inside* the session (gh, git, node) also resolve.
+        let path = crate::shellenv::login_path();
+        let resolved = crate::shellenv::resolve_program(program, path);
+        let mut cmd = CommandBuilder::new(&resolved);
         for a in args {
             cmd.arg(a);
         }
         if let Some(dir) = cwd {
             cmd.cwd(dir);
         }
+        cmd.env("PATH", path);
         cmd.env("TERM", "xterm-256color");
 
         let mut child = pair
