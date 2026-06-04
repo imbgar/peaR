@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Opt-in pre-push gate. Runs the same checks as CI so you never push a red build.
+#
+# Enable (once, per clone):
+#     git config core.hooksPath scripts/hooks
+# Disable:
+#     git config --unset core.hooksPath
+# Bypass for a single push (e.g. a docs-only WIP):
+#     git push --no-verify
+#
+# Kept out of .git/hooks on purpose: living in-repo means it's reviewable and
+# shared, and core.hooksPath keeps it strictly opt-in for contributors.
+set -euo pipefail
+
+repo="$(git rev-parse --show-toplevel)"
+exec "$repo/scripts/check.sh" "$@"
