@@ -1,5 +1,8 @@
 version: 2
 updates:
+  # Group only minor + patch bumps so they land as one low-risk PR. MAJOR bumps come
+  # as individual PRs (ungrouped) — they often carry breaking changes that need a
+  # deliberate, separately-validated upgrade rather than riding in with patches.
   - package-ecosystem: cargo
     directory: "/"
     schedule:
@@ -8,6 +11,7 @@ updates:
     groups:
       rust-dependencies:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: npm
     directory: "/apps/desktop"
@@ -17,8 +21,12 @@ updates:
     groups:
       frontend-dependencies:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
