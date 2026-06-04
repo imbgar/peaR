@@ -207,6 +207,11 @@ pub enum Command {
     ClearHistory,
     /// Restore history from the last clear's backup.
     RestoreHistory,
+    /// Report whether the bundled `/pr-*` review skills are installed in
+    /// `~/.claude/skills` (replied via `Event::SkillsStatus`).
+    CheckSkills,
+    /// Install the bundled `/pr-*` review skills into `~/.claude/skills`.
+    InstallSkills,
 }
 
 /// Events the engine emits to the frontend.
@@ -232,6 +237,9 @@ pub enum Event {
     Panel { tab: TabId, payload: PanelPayload },
     /// Reply to `LoadHistory`.
     History { entries: Vec<PrRecord> },
+    /// Whether the bundled `/pr-*` skills are installed (reply to `CheckSkills`,
+    /// also emitted after `InstallSkills`).
+    SkillsStatus { installed: bool },
     /// A non-fatal problem the UI should surface (toast).
     Notice { tab: Option<TabId>, message: String },
     /// A fatal-for-this-command error.

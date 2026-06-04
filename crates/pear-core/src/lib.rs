@@ -20,6 +20,7 @@ pub mod error;
 pub mod github;
 pub mod protocol;
 pub mod session;
+pub mod skills_install;
 pub mod store;
 pub mod workdir;
 
