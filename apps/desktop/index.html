@@ -51,10 +51,11 @@
             <input type="checkbox" id="auto-review-toggle" />
             <span>Auto-review on open</span>
           </label>
-          <select id="auto-review-tier" title="Tier used for auto-review on open">
+          <select id="auto-review-tier" title="Review run automatically when the PR opens">
             <option value="light">light · fast single pass</option>
             <option value="standard" selected>standard · deep single pass</option>
             <option value="complex">complex · diverse agents (local)</option>
+            <option value="ultra">ultra 💸 · paid cloud review</option>
           </select>
         </div>
 
@@ -72,12 +73,7 @@
         <header id="tabbar"></header>
 
         <div id="toolbar">
-          <span class="toolbar-group-label">Launch</span>
-          <button data-tier="light" data-needs-tab class="action tier" title="Fast single pass · /code-review low">Light</button>
-          <button data-tier="standard" data-needs-tab class="action tier" title="Deep single pass · /code-review high">Standard</button>
-          <button data-tier="complex" data-needs-tab class="action tier" title="Local diverse multi-agent review (free, runs on your machine)">Complex</button>
-          <button data-btn="ultra" data-needs-tab class="action cost" title="PAID cloud review — uploads your repo to Claude on the web (/code-review ultra)">Ultra&nbsp;💸</button>
-          <span class="toolbar-div"></span>
+          <span class="toolbar-group-label">Actions</span>
           <button data-btn="post_review" data-needs-tab class="action">Post review</button>
           <button data-btn="distill" data-needs-tab class="action">Distill</button>
           <button data-btn="walk_through" data-needs-tab class="action">Walk-thru</button>
@@ -85,12 +81,14 @@
           <button data-btn="video" data-needs-tab class="action">Video</button>
           <button data-btn="copy_content" data-needs-tab class="action">Copy content</button>
           <span class="toolbar-spacer"></span>
+          <button id="diff-btn" data-needs-tab class="action" title="Show this PR's diff + review comments">Diff</button>
           <button id="panel-toggle" class="action subtle">Insight ▸</button>
           <button data-btn="save_review" data-needs-tab class="action subtle">Save review</button>
         </div>
 
         <div id="stage">
           <div id="terminals"></div>
+          <div id="panel-resizer" title="Drag to resize"></div>
           <aside id="panel">
             <div class="panel-head">
               <span class="panel-title" id="panel-title">Insight</span>

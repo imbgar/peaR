@@ -128,6 +128,18 @@ pub struct PanelPayload {
     pub body: String,
 }
 
+/// One existing review comment on a PR, anchored to a file + line in the diff.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiffComment {
+    /// File path the comment is on (matches the diff's `b/` path).
+    pub path: String,
+    /// 1-based line in the file's new side, if the comment is line-anchored
+    /// (`None` for file-level or outdated comments).
+    pub line: Option<u64>,
+    pub author: String,
+    pub body: String,
+}
+
 /// Lightweight metadata about a PR for the UI (subset of the GitHub payload).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrMeta {
@@ -225,6 +237,9 @@ pub enum Command {
     CheckSkills,
     /// Install the bundled `/pr-*` review skills into `~/.claude/skills`.
     InstallSkills,
+    /// Fetch the tab's PR diff + existing review comments for the diff panel
+    /// (replied via `Event::Diff`).
+    LoadDiff { tab: TabId },
 }
 
 /// Events the engine emits to the frontend.
@@ -248,6 +263,12 @@ pub enum Event {
     ReviewSaved { tab: TabId, path: String },
     /// Structured content for the Insight panel.
     Panel { tab: TabId, payload: PanelPayload },
+    /// The tab's PR unified diff + existing review comments (reply to `LoadDiff`).
+    Diff {
+        tab: TabId,
+        diff: String,
+        comments: Vec<DiffComment>,
+    },
     /// Reply to `LoadHistory`.
     History { entries: Vec<PrRecord> },
     /// Whether the bundled `/pr-*` skills are installed (reply to `CheckSkills`,

@@ -12,10 +12,12 @@ import "@fontsource/ibm-plex-mono/700.css";
 import "@fontsource-variable/hanken-grotesk";
 import "@fontsource-variable/jetbrains-mono";
 import { marked } from "marked";
+import { renderDiff } from "./diff";
 import {
   Command,
   Event as CoreEvent,
   CliKind,
+  DiffComment,
   PanelPayload,
   PrMeta,
   PrRecord,
@@ -158,14 +160,17 @@ function renderToolbar() {
 
 /** Open a PR tab. Default = resume the PR's most recent session; `fresh` forces a
  *  new one; `session_id` resumes that exact session. */
+// A review to auto-run on the next opened PR tab: a tier, or "ultra" (the paid cloud
+// review, dispatched as a button rather than a tier).
+type LaunchReview = ReviewTier | "ultra";
 // Auto-review intent for the NEXT tab to open, set per-open so it only applies to
 // a fresh Open-box launch — never to a Resume / session-restore.
-let pendingAutoReview: ReviewTier | null = null;
+let pendingAutoReview: LaunchReview | null = null;
 
 function openPr(
   pr: PrRef,
   cli: CliKind,
-  opts: { fresh?: boolean; session_id?: string; autoReview?: ReviewTier | null } = {},
+  opts: { fresh?: boolean; session_id?: string; autoReview?: LaunchReview | null } = {},
 ) {
   pendingAutoReview = opts.autoReview ?? null;
   send({
@@ -391,6 +396,11 @@ function setActive(id: number) {
   }
   renderTabBar();
   renderToolbar();
+  // The diff panel follows the active tab: if it's open, re-point it at this tab
+  // (instant from cache, fetch if a PR, or a placeholder for a non-PR tab).
+  if (stageEl.classList.contains("panel-open") && panelBodyEl.classList.contains("diff-mode")) {
+    syncDiffToActive();
+  }
 }
 
 function closeTabView(id: number) {
@@ -430,13 +440,17 @@ function handle(ev: CoreEvent) {
       setStatus(`opened ${ev.title}`);
       // Auto-review on open (PR tabs only). Delay lets the CLI boot before the
       // slash command is typed (input queues in the PTY regardless).
-      if (ev.pr && pendingAutoReview) {
-        const tier = pendingAutoReview;
+      // Never auto-review a plain shell — it's just a terminal, not an agent.
+      if (ev.pr && pendingAutoReview && ev.cli !== "shell") {
+        const sel = pendingAutoReview;
         const tab = ev.tab;
-        setStatus(`auto-review (${tier}) queued for ${ev.title}`);
+        setStatus(`auto-review (${sel}) queued for ${ev.title}`);
         setTimeout(() => {
           const v = tabs.get(tab);
-          send({ type: "start_review", tab, tier, agent: v ? resolveAgent(v) : undefined });
+          const agent = v ? resolveAgent(v) : undefined;
+          // Ultra is the paid cloud review (a button); tiers go through start_review.
+          if (sel === "ultra") send({ type: "button", tab, button: "ultra", agent });
+          else send({ type: "start_review", tab, tier: sel, agent });
         }, 2200);
       }
       pendingAutoReview = null; // consume — resumes/new opens never carry it
@@ -468,6 +482,16 @@ function handle(ev: CoreEvent) {
     }
     case "panel": {
       renderPanel(ev.payload);
+      break;
+    }
+    case "diff": {
+      const prev = diffCache.get(ev.tab);
+      diffCache.set(ev.tab, { diff: ev.diff, comments: ev.comments });
+      // Only (re)render if this tab is showing and the content actually changed — keeps
+      // scroll position + collapse state on a background refresh.
+      const changed =
+        !prev || prev.diff !== ev.diff || prev.comments.length !== ev.comments.length;
+      if (ev.tab === active && changed) showDiff(ev.tab, ev.diff, ev.comments);
       break;
     }
     case "history": {
@@ -607,15 +631,6 @@ function toggleTheme() {
   applyTheme(currentTheme() === "phosphor" ? "instrument" : "phosphor");
 }
 
-// ── review tiers ────────────────────────────────────────────────────────────
-function startReview(tier: ReviewTier) {
-  if (active === null) return;
-  const v = tabs.get(active);
-  if (!v) return;
-  send({ type: "start_review", tab: active, tier, agent: resolveAgent(v) });
-  setStatus(`launching ${tier} review…`);
-}
-
 // ── insight panel ───────────────────────────────────────────────────────────
 function refitActive() {
   if (active !== null) tabs.get(active)?.fit.fit();
@@ -624,6 +639,10 @@ function refitActive() {
 function setPanel(open: boolean) {
   stageEl.classList.toggle("panel-open", open);
   panelToggleBtn.textContent = open ? "Insight ◂" : "Insight ▸";
+  // The Diff button is "active" only while the panel is open AND showing a diff.
+  document
+    .getElementById("diff-btn")
+    ?.classList.toggle("active", open && panelBodyEl.classList.contains("diff-mode"));
   requestAnimationFrame(refitActive);
 }
 
@@ -636,8 +655,63 @@ function loadPanel() {
   send({ type: "load_panel", tab: active });
 }
 
+// Per-tab diff cache so reopening the panel is instant instead of re-hitting GitHub.
+const diffCache = new Map<number, { diff: string; comments: DiffComment[] }>();
+
+function diffTitle(tab: number): string {
+  const pr = tabs.get(tab)?.pr ?? null;
+  return pr ? `Diff — ${shortLabel(pr)}` : "Diff";
+}
+
+function showDiff(tab: number, diff: string, comments: DiffComment[]) {
+  panelTitleEl.textContent = diffTitle(tab);
+  panelBodyEl.classList.add("diff-mode");
+  renderDiff(panelBodyEl, diff, comments);
+  setPanel(true);
+  setStatus(`diff · ${comments.length} comment${comments.length === 1 ? "" : "s"}`);
+}
+
+/** Render a placeholder in the diff panel (loading / no-PR / error states). */
+function showDiffMessage(tab: number, msg: string) {
+  panelTitleEl.textContent = diffTitle(tab);
+  panelBodyEl.classList.add("diff-mode");
+  panelBodyEl.innerHTML = "";
+  const div = document.createElement("div");
+  div.className = "diff-empty";
+  div.textContent = msg;
+  panelBodyEl.appendChild(div);
+  setPanel(true);
+}
+
+/** Point the (open) diff panel at the active tab: cache → instant, PR-without-cache →
+ *  fetch, no-PR tab → a placeholder. Called on Diff-button open and on tab switch. */
+function syncDiffToActive() {
+  if (active === null) return;
+  const v = tabs.get(active);
+  const cached = diffCache.get(active);
+  if (cached) {
+    showDiff(active, cached.diff, cached.comments);
+  } else if (v?.pr) {
+    showDiffMessage(active, "loading PR diff…");
+    send({ type: "load_diff", tab: active });
+  } else {
+    showDiffMessage(active, "No diff — this tab isn't a pull request.");
+  }
+}
+
+/** Diff toolbar button: toggle the diff panel for the active tab. */
+function loadDiff() {
+  if (active === null) return;
+  if (stageEl.classList.contains("panel-open") && panelBodyEl.classList.contains("diff-mode")) {
+    setPanel(false);
+    return;
+  }
+  syncDiffToActive();
+}
+
 function renderPanel(p: PanelPayload) {
   panelTitleEl.textContent = p.title || "Insight";
+  panelBodyEl.classList.remove("diff-mode");
   panelBodyEl.innerHTML = "";
   if (p.kind === "diff") {
     const pre = document.createElement("pre");
@@ -692,15 +766,25 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   $("#open-form").addEventListener("submit", (e) => {
     e.preventDefault();
+    const cli = selectedCli();
     const pr = parsePrRef(prInput.value);
+    // A plain shell is just a terminal: no PR required, and never an agent review or
+    // permission/auto-review behaviour. With a PR it opens in that repo's dir.
+    if (cli === "shell") {
+      if (pr) openPr(pr, cli, { fresh: true, autoReview: null });
+      else send({ type: "open_scratch", cli, cwd: null });
+      prInput.value = "";
+      return;
+    }
+    // Agent CLIs run the review workflow, which needs a PR.
     if (!pr) {
-      setStatus("⚠ expected owner/repo#NUMBER", true);
+      setStatus("⚠ enter owner/repo#NUMBER — or pick 'shell' for a plain terminal", true);
       return;
     }
     // The Open box always starts a FRESH session; History is where you resume.
-    openPr(pr, selectedCli(), {
+    openPr(pr, cli, {
       fresh: true,
-      autoReview: autoToggle.checked ? (autoTier.value as ReviewTier) : null,
+      autoReview: autoToggle.checked ? (autoTier.value as LaunchReview) : null,
     });
     prInput.value = "";
   });
@@ -711,11 +795,6 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   $("#history-clear").addEventListener("click", () => send({ type: "clear_history" }));
   $("#history-restore").addEventListener("click", () => send({ type: "restore_history" }));
-
-  // Review-tier launch buttons.
-  toolbarEl.querySelectorAll<HTMLButtonElement>("button[data-tier]").forEach((b) =>
-    b.addEventListener("click", () => startReview(b.dataset.tier as ReviewTier)),
-  );
 
   // Action buttons. copy_content + save_review are frontend-handled; the rest are
   // slash macros dispatched by the core.
@@ -732,8 +811,37 @@ window.addEventListener("DOMContentLoaded", async () => {
   panelToggleBtn.addEventListener("click", togglePanel);
   $("#panel-close").addEventListener("click", () => setPanel(false));
   $("#panel-load").addEventListener("click", loadPanel);
+  $("#diff-btn").addEventListener("click", loadDiff);
 
-  autoToggle.checked = localStorage.getItem("pear.autoReview") === "1";
+  // Resizable panel (drag the divider between the terminal and the panel).
+  const savedPanelW = localStorage.getItem("pear.panelW");
+  if (savedPanelW) stageEl.style.setProperty("--panel-w", savedPanelW);
+  const resizer = $<HTMLElement>("#panel-resizer");
+  resizer.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    resizer.setPointerCapture(e.pointerId);
+    stageEl.classList.add("resizing");
+    const onMove = (ev: PointerEvent) => {
+      const rect = stageEl.getBoundingClientRect();
+      const w = Math.min(Math.max(rect.right - ev.clientX, 300), rect.width - 360);
+      stageEl.style.setProperty("--panel-w", `${Math.round(w)}px`);
+      refitActive();
+    };
+    const onUp = () => {
+      stageEl.classList.remove("resizing");
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      const w = stageEl.style.getPropertyValue("--panel-w");
+      if (w) localStorage.setItem("pear.panelW", w);
+      refitActive();
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  });
+
+  // Auto-review on open defaults ON (the launch buttons are gone — review is configured
+  // here on the left and fires when the PR opens). Off only if explicitly turned off.
+  autoToggle.checked = localStorage.getItem("pear.autoReview") !== "0";
   autoTier.value = localStorage.getItem("pear.tier") || "standard";
   autoToggle.addEventListener("change", () =>
     localStorage.setItem("pear.autoReview", autoToggle.checked ? "1" : "0"),
