@@ -6,6 +6,30 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-06-04
+
+### Added
+- **One-time, consent-gated install of the `/pr-*` review skills.** On first launch, if the
+  skills aren't in `~/.claude/skills`, pear offers (via a modal) to install them — so the
+  **Post review / Distill / Walk-thru / Explain / Video** action buttons work out of the box.
+  The review *tiers* already worked, since they use Claude's built-in `/code-review`. (#15)
+
+### Fixed
+- **History sidebar updates live on open** instead of only after an app restart — a freshly
+  opened PR appears in the list immediately (it was always recorded on disk; the list just
+  wasn't re-rendering). (#14)
+- **`pr-video` is now optional.** It checks for the video-explainer runtime first and prints
+  setup guidance (linking a public gist of the engine) instead of failing when the deps are
+  missing. (#16)
+
+### Changed
+- Dependency bumps (#13): `portable-pty` 0.8→0.9, `directories` 5→6, and **`ureq` 2→3**
+  (the GitHub client was migrated to ureq 3.x — no behavior change).
+
+### Internal
+- `scripts/check.sh` mirrors the CI matrix locally (rustfmt, core + desktop clippy, core tests,
+  eslint, frontend build) with an opt-in `core.hooksPath` pre-push hook. (#17)
+
 ## [0.1.2] — 2026-06-03
 
 ### Added
