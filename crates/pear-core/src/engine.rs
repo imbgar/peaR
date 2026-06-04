@@ -444,8 +444,8 @@ impl Engine {
     }
 
     fn button(&mut self, tab: TabId, button: ReviewButton) {
-        let cli = match self.tabs.get(&tab) {
-            Some(t) => t.cli,
+        let (cli, pr) = match self.tabs.get(&tab) {
+            Some(t) => (t.cli, t.pr.clone()),
             None => {
                 self.emit(Event::Notice {
                     tab: Some(tab),
@@ -454,7 +454,7 @@ impl Engine {
                 return;
             }
         };
-        let Some(keys) = dispatch::keystrokes(button, cli) else {
+        let Some(keys) = dispatch::keystrokes(button, cli, pr.as_ref()) else {
             self.emit(Event::Notice {
                 tab: Some(tab),
                 message: format!("{:?} has no macro for {:?}", button, cli),
@@ -474,8 +474,8 @@ impl Engine {
     }
 
     fn start_review(&mut self, tab: TabId, tier: ReviewTier) {
-        let cli = match self.tabs.get(&tab) {
-            Some(t) => t.cli,
+        let (cli, pr) = match self.tabs.get(&tab) {
+            Some(t) => (t.cli, t.pr.clone()),
             None => {
                 self.emit(Event::Notice {
                     tab: Some(tab),
@@ -484,7 +484,7 @@ impl Engine {
                 return;
             }
         };
-        let Some(keys) = dispatch::tier_keystrokes(tier, cli) else {
+        let Some(keys) = dispatch::tier_keystrokes(tier, cli, pr.as_ref()) else {
             self.emit(Event::Notice {
                 tab: Some(tab),
                 message: format!("{:?} review has no macro for {:?}", tier, cli),
