@@ -50,24 +50,32 @@ impl GitHub {
     }
 
     fn get(&self, path: &str) -> Result<serde_json::Value> {
-        let resp = ureq::get(&format!("{API}{path}"))
-            .set("Authorization", &format!("Bearer {}", self.token))
-            .set("Accept", "application/vnd.github+json")
-            .set("X-GitHub-Api-Version", "2022-11-28")
-            .set("User-Agent", UA)
-            .call();
-        match resp {
-            Ok(r) => r
-                .into_json::<serde_json::Value>()
-                .map_err(|e| CoreError::GitHub(e.to_string())),
-            Err(ureq::Error::Status(code, r)) => {
-                let body = r.into_string().unwrap_or_default();
-                Err(CoreError::GitHub(format!(
-                    "HTTP {code}: {}",
-                    body.chars().take(200).collect::<String>()
-                )))
-            }
-            Err(e) => Err(CoreError::GitHub(e.to_string())),
+        // ureq 3.x treats non-2xx as `Err(StatusCode)` by default and drops the body;
+        // disable that so we can still surface GitHub's error message on failure.
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .build()
+            .into();
+        let mut resp = agent
+            .get(format!("{API}{path}"))
+            .header("Authorization", &format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("User-Agent", UA)
+            .call()
+            .map_err(|e| CoreError::GitHub(e.to_string()))?;
+        let status = resp.status();
+        if status.is_success() {
+            resp.body_mut()
+                .read_json::<serde_json::Value>()
+                .map_err(|e| CoreError::GitHub(e.to_string()))
+        } else {
+            let body = resp.body_mut().read_to_string().unwrap_or_default();
+            Err(CoreError::GitHub(format!(
+                "HTTP {}: {}",
+                status.as_u16(),
+                body.chars().take(200).collect::<String>()
+            )))
         }
     }
 
