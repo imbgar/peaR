@@ -130,7 +130,10 @@ impl Engine {
                     });
                     self.emit(Event::SkillsStatus { installed: true });
                 }
-                Err(e) => self.emit(Event::Error { tab: None, message: format!("install skills: {e}") }),
+                Err(e) => self.emit(Event::Error {
+                    tab: None,
+                    message: format!("install skills: {e}"),
+                }),
             },
             Command::ClearHistory => match self.store.clear_history() {
                 Ok(n) => {

@@ -91,6 +91,9 @@ mod tests {
         let n = install_skills().unwrap();
         assert_eq!(n, 6);
         assert!(skills_installed());
-        assert!(tmp.path().join(".claude/skills/pr-post-review/SKILL.md").exists());
+        assert!(tmp
+            .path()
+            .join(".claude/skills/pr-post-review/SKILL.md")
+            .exists());
     }
 }
