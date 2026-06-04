@@ -283,6 +283,12 @@ impl Engine {
             let _ = self
                 .store
                 .record_open(&pr, &pr.full_label(), cli, session_id.as_deref(), &now);
+            // Refresh the sidebar now — history is recorded on OPEN (not close), so the
+            // just-opened PR should appear immediately. The gh-meta thread below
+            // re-emits once the real title resolves.
+            self.emit(Event::History {
+                entries: self.store.history(),
+            });
 
             // Working dir: either check out the PR branch in the found repo, or tell
             // the user we couldn't locate it (reviews won't have a repo otherwise).
@@ -338,8 +344,10 @@ impl Engine {
                     let store = self.store.clone();
                     std::thread::spawn(move || match gh.pr_meta(&pr) {
                         Ok(meta) => {
-                            // Update the title only (no session change).
+                            // Update the title only (no session change), then re-emit
+                            // history so the sidebar entry shows the real PR title.
                             let _ = store.record_open(&pr, &meta.title, cli, None, &now);
+                            sink(Event::History { entries: store.history() });
                             sink(Event::PrMeta { tab, meta });
                         }
                         Err(e) => sink(Event::Notice {
