@@ -596,6 +596,14 @@ button:disabled { opacity: 0.38; cursor: default; }
 }
 #stage.comments-open { --cres: 5px; --cw: var(--comments-w, 340px); }
 #stage.panel-open { --dres: 5px; --dw: var(--panel-w, 420px); }
+/* Pin each child to its column. Essential: when a panel is closed its resizer +
+   panel are display:none, so auto-placement would otherwise shift the *other*
+   visible panel into the wrong (0px) track — making it vanish. */
+#terminals { grid-column: 1; }
+#comments-resizer { grid-column: 2; }
+#comments-panel { grid-column: 3; }
+#panel-resizer { grid-column: 4; }
+#panel { grid-column: 5; }
 /* While dragging a resizer, drop the transition so it tracks the pointer 1:1. */
 #stage.resizing { transition: none; }
 
