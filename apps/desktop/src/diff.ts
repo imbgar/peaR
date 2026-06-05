@@ -2,7 +2,7 @@
 // DOM (textContent), so diff content is never injected as HTML. Comment *bodies* are
 // markdown, rendered through the sanitizing `renderMarkdown` helper (see markdown.ts).
 
-import { Comment, DiffComment, Reaction, ReviewThread } from "./protocol";
+import { Comment, DiffComment, ReviewThread } from "./protocol";
 import { renderMarkdown } from "./markdown";
 
 type LineKind = "add" | "del" | "ctx";
@@ -326,19 +326,78 @@ export function commentEl(c: Comment): HTMLElement {
   body.className = "cv-body markdown";
   renderMarkdown(body, c.body);
   wrap.append(top, body);
-  if (c.reactions.length) wrap.appendChild(reactionRow(c.reactions));
+  wrap.appendChild(reactionRow(c));
   return wrap;
 }
 
-function reactionRow(reactions: Reaction[]): HTMLElement {
+// The eight reactions GitHub supports, in its display order (emoji ↔ enum).
+const REACTIONS: ReadonlyArray<{ emoji: string; content: string }> = [
+  { emoji: "👍", content: "THUMBS_UP" },
+  { emoji: "👎", content: "THUMBS_DOWN" },
+  { emoji: "😄", content: "LAUGH" },
+  { emoji: "🎉", content: "HOORAY" },
+  { emoji: "😕", content: "CONFUSED" },
+  { emoji: "❤️", content: "HEART" },
+  { emoji: "🚀", content: "ROCKET" },
+  { emoji: "👀", content: "EYES" },
+];
+
+// Set once by the app (main.ts) — toggles a reaction on a comment node id.
+type ReactFn = (subjectId: string, content: string, add: boolean) => void;
+let onReact: ReactFn | null = null;
+export function setReactionHandler(fn: ReactFn) {
+  onReact = fn;
+}
+
+// Close any open reaction picker when clicking elsewhere (the toggles below
+// stopPropagation, so opening one doesn't immediately close it).
+document.addEventListener("click", () => {
+  document.querySelectorAll(".cv-picker:not(.hidden)").forEach((p) => p.classList.add("hidden"));
+});
+
+function reactionRow(c: Comment): HTMLElement {
   const row = document.createElement("div");
   row.className = "cv-react";
-  for (const r of reactions) {
-    const pill = document.createElement("span");
+  for (const r of c.reactions) {
+    const pill = document.createElement("button");
+    pill.type = "button";
     pill.className = "cv-pill" + (r.me ? " me" : "");
     pill.textContent = `${r.emoji} ${r.count}`;
+    pill.title = r.me ? "Remove your reaction" : "React";
+    pill.addEventListener("click", () => onReact?.(c.id, r.content, !r.me));
     row.appendChild(pill);
   }
+  // "+" opens a small picker of the eight reactions; clicking one toggles it.
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "cv-addreact";
+  add.textContent = "＋";
+  add.title = "Add reaction";
+  const picker = document.createElement("div");
+  picker.className = "cv-picker hidden";
+  for (const opt of REACTIONS) {
+    const mine = c.reactions.find((x) => x.content === opt.content)?.me ?? false;
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "cv-pick" + (mine ? " me" : "");
+    b.textContent = opt.emoji;
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      picker.classList.add("hidden");
+      onReact?.(c.id, opt.content, !mine);
+    });
+    picker.appendChild(b);
+  }
+  add.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const wasHidden = picker.classList.contains("hidden");
+    document.querySelectorAll(".cv-picker:not(.hidden)").forEach((p) => p.classList.add("hidden"));
+    picker.classList.toggle("hidden", !wasHidden);
+  });
+  const wrap = document.createElement("span");
+  wrap.className = "cv-react-add";
+  wrap.append(add, picker);
+  row.appendChild(wrap);
   return row;
 }
 

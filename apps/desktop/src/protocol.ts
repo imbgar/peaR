@@ -30,6 +30,7 @@ export interface DiffComment {
 }
 
 export interface Reaction {
+  content: string; // GraphQL ReactionContent enum, e.g. "THUMBS_UP"
   emoji: string;
   count: number;
   me: boolean;
@@ -117,6 +118,7 @@ export type Command =
   | { type: "install_skills" }
   | { type: "load_diff"; tab: number }
   | { type: "load_comments"; tab: number }
+  | { type: "toggle_reaction"; tab: number; subject_id: string; content: string; add: boolean }
   | { type: "watch_brain"; tab: number }
   | { type: "stop_brain"; tab: number }
   | { type: "save_layout"; active?: number | null }

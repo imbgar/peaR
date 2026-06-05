@@ -13,8 +13,12 @@ All notable changes to this project are documented here. The format is based on
   rollups. Inline review comments now render **inside the diff**, GitHub-style: each
   anchored line gets a collapsible **💬 bubble** that toggles its thread (collapsed by
   default), carrying resolved/outdated state and reactions. Both panels are independently
-  resizable and follow the active tab. Fetched in a single `gh`-token GraphQL round-trip.
-  Writing (reply/edit/resolve/react/post) lands in later phases. (#43)
+  resizable and follow the active tab. Comment bodies render as sanitized markdown.
+  Fetched in a single `gh`-token GraphQL round-trip. (#43)
+- **React to comments.** Click a reaction pill to add/remove it, or the **＋** for the
+  full eight-emoji picker — on any conversation comment or inline-thread comment. Toggles
+  via GraphQL (`addReaction`/`removeReaction`); the panel re-syncs to authoritative state.
+  Other writes (reply/edit/resolve/post) land in later phases. (#43)
 
 ## [0.1.7] — 2026-06-05
 

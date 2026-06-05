@@ -12,7 +12,7 @@ import "@fontsource/ibm-plex-mono/700.css";
 import "@fontsource-variable/hanken-grotesk";
 import "@fontsource-variable/jetbrains-mono";
 import { marked } from "marked";
-import { renderDiff, commentEl } from "./diff";
+import { renderDiff, commentEl, setReactionHandler } from "./diff";
 import {
   Command,
   Event as CoreEvent,
@@ -1127,6 +1127,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#diff-btn").addEventListener("click", loadDiff);
   $("#comments-btn").addEventListener("click", loadComments);
   $("#comments-close").addEventListener("click", () => setComments(false));
+  // Reactions (shared by the conversation panel + inline diff threads): toggle on the
+  // active tab; the engine re-fetches and re-emits comments with authoritative state.
+  setReactionHandler((subject_id, content, add) => {
+    if (active === null) return;
+    send({ type: "toggle_reaction", tab: active, subject_id, content, add });
+  });
   // Insight is hard-coded off for now — hide its controls (the panel itself is reused
   // by the diff view, so it stays). Flip INSIGHT_ENABLED to bring these back.
   if (!INSIGHT_ENABLED) {

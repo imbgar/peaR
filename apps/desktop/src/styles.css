@@ -700,12 +700,36 @@ button:disabled { opacity: 0.38; cursor: default; }
 .cv-body.markdown table { border-collapse: collapse; margin: 6px 0; }
 .cv-body.markdown th, .cv-body.markdown td { border: 1px solid var(--bd); padding: 3px 7px; }
 .cv-body.markdown input[type="checkbox"] { margin-right: 5px; vertical-align: middle; }
-.cv-react { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 5px; }
+.cv-react { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
 .cv-pill {
   font-family: var(--font-mono); font-size: 11px; color: var(--dim);
   border: 1px solid var(--bd2); border-radius: 999px; padding: 1px 7px;
+  background: transparent; cursor: pointer; line-height: 1.5;
 }
-.cv-pill.me { border-color: var(--accent-d); color: var(--accent); }
+.cv-pill:hover { border-color: var(--accent-d); color: var(--tx); }
+.cv-pill.me { border-color: var(--accent-d); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+/* add-reaction "+" + its emoji picker popover */
+.cv-react-add { position: relative; display: inline-flex; }
+.cv-addreact {
+  font-family: var(--font-mono); font-size: 12px; line-height: 1; color: var(--faint);
+  border: 1px solid var(--bd2); border-radius: 999px; padding: 1px 6px;
+  background: transparent; cursor: pointer;
+}
+.cv-addreact:hover { color: var(--accent); border-color: var(--accent-d); }
+.cv-picker {
+  position: absolute; bottom: calc(100% + 5px); left: 0; z-index: 20;
+  display: flex; gap: 1px; padding: 4px;
+  background: var(--elev); border: 1px solid var(--bd2); border-radius: var(--r-sm);
+  box-shadow: 0 8px 24px -10px rgba(0, 0, 0, 0.7);
+}
+.cv-picker.hidden { display: none; }
+.cv-pick {
+  font-size: 15px; line-height: 1; padding: 3px 4px; border-radius: 5px;
+  background: transparent; border: none; cursor: pointer;
+}
+.cv-pick:hover { background: var(--inp); transform: scale(1.18); }
+.cv-pick.me { background: color-mix(in srgb, var(--accent) 20%, transparent); }
 
 /* inline review thread inside the diff (toggled by the 💬 bubble on the line) */
 .diff-bubble {

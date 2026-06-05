@@ -218,6 +218,21 @@ impl GitHub {
         })
     }
 
+    /// Add or remove a reaction on any reactable subject (comment node id).
+    /// `content` is a `ReactionContent` enum value (e.g. `THUMBS_UP`).
+    pub fn set_reaction(&self, subject_id: &str, content: &str, add: bool) -> Result<()> {
+        let mutation = if add {
+            "mutation($id:ID!,$c:ReactionContent!){addReaction(input:{subjectId:$id,content:$c}){clientMutationId}}"
+        } else {
+            "mutation($id:ID!,$c:ReactionContent!){removeReaction(input:{subjectId:$id,content:$c}){clientMutationId}}"
+        };
+        self.graphql(
+            mutation,
+            serde_json::json!({ "id": subject_id, "c": content }),
+        )?;
+        Ok(())
+    }
+
     /// Fetch metadata for a single PR.
     pub fn pr_meta(&self, pr: &PrRef) -> Result<PrMeta> {
         let v = self.get(&format!(
@@ -322,8 +337,10 @@ fn parse_reactions(node: &serde_json::Value) -> Vec<Reaction> {
                     if count == 0 {
                         return None;
                     }
+                    let content = g["content"].as_str().unwrap_or("").to_string();
                     Some(Reaction {
-                        emoji: reaction_emoji(g["content"].as_str().unwrap_or("")).to_string(),
+                        emoji: reaction_emoji(&content).to_string(),
+                        content,
                         count,
                         me: g["viewerHasReacted"].as_bool().unwrap_or(false),
                     })

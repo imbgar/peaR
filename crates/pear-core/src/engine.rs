@@ -157,6 +157,12 @@ impl Engine {
             }),
             Command::LoadDiff { tab } => self.load_diff(tab),
             Command::LoadComments { tab } => self.load_comments(tab),
+            Command::ToggleReaction {
+                tab,
+                subject_id,
+                content,
+                add,
+            } => self.toggle_reaction(tab, subject_id, content, add),
             Command::WatchBrain { tab } => self.watch_brain(tab),
             Command::StopBrain { tab } => self.stop_brain(tab),
             Command::SaveLayout { active } => self.persist_layout(active),
@@ -746,6 +752,45 @@ impl Engine {
                 tab: Some(tab),
                 message: format!("comments: {e}"),
             }),
+        });
+    }
+
+    /// Add/remove a reaction on a comment, then re-fetch the PR's comments so the UI
+    /// reflects authoritative state (count + viewer flag) via `Event::Comments`.
+    fn toggle_reaction(&mut self, tab: TabId, subject_id: String, content: String, add: bool) {
+        let pr = match self.tabs.get(&tab).and_then(|t| t.pr.clone()) {
+            Some(pr) => pr,
+            None => {
+                self.emit(Event::Notice {
+                    tab: Some(tab),
+                    message: "reaction: this tab is not a PR".into(),
+                });
+                return;
+            }
+        };
+        let Some(gh) = self.github() else {
+            self.emit(Event::Notice {
+                tab: Some(tab),
+                message: "no GitHub token — can't react (run `gh auth login`)".into(),
+            });
+            return;
+        };
+        let sink = self.sink.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = gh.set_reaction(&subject_id, &content, add) {
+                sink(Event::Notice {
+                    tab: Some(tab),
+                    message: format!("reaction: {e}"),
+                });
+                return;
+            }
+            match gh.pr_comments(&pr) {
+                Ok(comments) => sink(Event::Comments { tab, comments }),
+                Err(e) => sink(Event::Notice {
+                    tab: Some(tab),
+                    message: format!("comments: {e}"),
+                }),
+            }
         });
     }
 

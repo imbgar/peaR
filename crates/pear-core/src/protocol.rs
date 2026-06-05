@@ -147,6 +147,8 @@ pub struct DiffComment {
 /// authenticated viewer has reacted with this emoji.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Reaction {
+    /// The GraphQL `ReactionContent` enum (e.g. `THUMBS_UP`) — sent back on toggle.
+    pub content: String,
     pub emoji: String,
     pub count: u64,
     #[serde(default)]
@@ -325,6 +327,15 @@ pub enum Command {
     /// Fetch the tab's PR conversation comments + inline review threads for the
     /// comments panel (replied via `Event::Comments`). One GraphQL round-trip.
     LoadComments { tab: TabId },
+    /// Add (`add: true`) or remove a reaction on a comment, identified by its GraphQL
+    /// node id. `content` is the `ReactionContent` enum. The engine re-fetches and
+    /// replies with a fresh `Event::Comments`.
+    ToggleReaction {
+        tab: TabId,
+        subject_id: String,
+        content: String,
+        add: bool,
+    },
     /// Start streaming the tab's Claude session *thinking* to the brain panel
     /// (replied via `Event::Thought`s). No-op for non-Claude / session-less tabs.
     WatchBrain { tab: TabId },
