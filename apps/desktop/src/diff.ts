@@ -321,13 +321,33 @@ export function commentEl(c: Comment): HTMLElement {
   const when = document.createElement("span");
   when.className = "cv-when";
   when.textContent = relTime(c.created_at);
-  top.append(who, when);
-  const body = document.createElement("div");
-  body.className = "cv-body markdown";
-  renderMarkdown(body, c.body);
-  wrap.append(top, body);
+  top.append(who);
+  if (c.review_state) top.appendChild(reviewBadge(c.review_state));
+  top.appendChild(when);
+  wrap.append(top);
+  if (c.body.trim()) {
+    const body = document.createElement("div");
+    body.className = "cv-body markdown";
+    renderMarkdown(body, c.body);
+    wrap.appendChild(body);
+  }
   wrap.appendChild(reactionRow(c));
   return wrap;
+}
+
+const REVIEW_STATE: Record<string, { label: string; cls: string }> = {
+  APPROVED: { label: "approved", cls: "ok" },
+  CHANGES_REQUESTED: { label: "requested changes", cls: "warn" },
+  COMMENTED: { label: "reviewed", cls: "" },
+  DISMISSED: { label: "dismissed", cls: "dim" },
+};
+
+function reviewBadge(state: string): HTMLElement {
+  const meta = REVIEW_STATE[state] ?? { label: state.toLowerCase().replace(/_/g, " "), cls: "" };
+  const b = document.createElement("span");
+  b.className = "cv-review-state" + (meta.cls ? ` ${meta.cls}` : "");
+  b.textContent = meta.label;
+  return b;
 }
 
 // The eight reactions GitHub supports, in its display order (emoji ↔ enum).

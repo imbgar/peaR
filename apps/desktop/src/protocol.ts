@@ -43,6 +43,8 @@ export interface Comment {
   created_at: string;
   mine: boolean;
   reactions: Reaction[];
+  // For a PR review summary in the conversation: its state, else null.
+  review_state: string | null;
 }
 
 export interface ReviewThread {

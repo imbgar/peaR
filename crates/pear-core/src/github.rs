@@ -199,7 +199,24 @@ impl GitHub {
             serde_json::json!({ "owner": pr.owner, "repo": pr.repo, "number": pr.number }),
         )?;
         let p = &data["repository"]["pullRequest"];
-        let conversation = nodes(&p["comments"]).iter().map(parse_comment).collect();
+        // The conversation timeline = issue comments + review *summaries*. A review
+        // summary (Approve / Request changes / Comment-with-body) is a PullRequestReview,
+        // not an issue comment, so it'd otherwise be invisible. Skip empty-bodied
+        // COMMENTED/PENDING reviews (those are just containers for inline thread comments).
+        let mut conversation: Vec<Comment> =
+            nodes(&p["comments"]).iter().map(parse_comment).collect();
+        for r in nodes(&p["reviews"]) {
+            let state = r["state"].as_str().unwrap_or("");
+            let empty_body = r["body"].as_str().unwrap_or("").trim().is_empty();
+            if empty_body && (state == "COMMENTED" || state == "PENDING") {
+                continue;
+            }
+            let mut c = parse_comment(r);
+            c.review_state = Some(state.to_string());
+            conversation.push(c);
+        }
+        // GitHub shows the conversation oldest→newest; RFC3339 sorts chronologically.
+        conversation.sort_by(|a, b| a.created_at.cmp(&b.created_at));
         let threads = nodes(&p["reviewThreads"])
             .iter()
             .map(|t| ReviewThread {
@@ -291,6 +308,10 @@ query($owner:String!,$repo:String!,$number:Int!){
         id author{login} body createdAt viewerDidAuthor
         reactionGroups{ content viewerHasReacted reactors{ totalCount } }
       } }
+      reviews(first:100){ nodes {
+        id author{login} body createdAt state viewerDidAuthor
+        reactionGroups{ content viewerHasReacted reactors{ totalCount } }
+      } }
       reviewThreads(first:100){ nodes {
         id isResolved isOutdated path line originalLine
         comments(first:50){ nodes {
@@ -362,5 +383,6 @@ fn parse_comment(node: &serde_json::Value) -> Comment {
         created_at: node["createdAt"].as_str().unwrap_or("").to_string(),
         mine: node["viewerDidAuthor"].as_bool().unwrap_or(false),
         reactions: parse_reactions(node),
+        review_state: None,
     }
 }

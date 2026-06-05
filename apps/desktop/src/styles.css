@@ -582,7 +582,14 @@ button:disabled { opacity: 0.38; cursor: default; }
 #stage {
   display: grid;
   --cres: 0px; --cw: 0px; --dres: 0px; --dw: 0px;
-  grid-template-columns: minmax(0, 1fr) var(--cres) var(--cw) var(--dres) var(--dw);
+  /* Terminal keeps a floor (xterm collapses to a 1-char-wide vertical sliver below
+     ~120px); the panels are capped at a fraction of the stage so on a narrow window
+     they shrink instead of crushing the terminal. min(0px, %) = 0 when a panel is
+     closed. */
+  grid-template-columns:
+    minmax(140px, 1fr)
+    var(--cres) min(var(--cw), 36%)
+    var(--dres) min(var(--dw), 40%);
   min-height: 0;
   min-width: 0;
   transition: grid-template-columns 0.18s var(--ease);
@@ -673,6 +680,14 @@ button:disabled { opacity: 0.38; cursor: default; }
 .cv-who { font-weight: 600; font-size: 12px; color: var(--tx); }
 .cv-who.me { color: var(--accent); text-shadow: var(--glow); }
 .cv-when { font-size: 10px; color: var(--faint); font-family: var(--font-mono); }
+/* PR review summary state badge (approved / requested changes / …) */
+.cv-review-state {
+  font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.8px;
+  border: 1px solid var(--bd2); border-radius: 999px; padding: 1px 7px; color: var(--dim);
+}
+.cv-review-state.ok { color: var(--green); border-color: color-mix(in srgb, var(--green) 55%, transparent); }
+.cv-review-state.warn { color: #e8b84b; border-color: #7a5f1e; }
+.cv-review-state.dim { color: var(--faint); }
 .cv-body { font-size: 12px; color: var(--dim); line-height: 1.5; word-break: break-word; }
 /* rendered markdown inside a comment body — tight, comment-appropriate spacing */
 .cv-body.markdown > :first-child { margin-top: 0; }
@@ -697,7 +712,7 @@ button:disabled { opacity: 0.38; cursor: default; }
 }
 .cv-body.markdown img { max-width: 100%; border-radius: var(--r-sm); }
 .cv-body.markdown hr { border: none; border-top: 1px solid var(--bd); margin: 8px 0; }
-.cv-body.markdown table { border-collapse: collapse; margin: 6px 0; }
+.cv-body.markdown table { border-collapse: collapse; margin: 6px 0; display: block; overflow-x: auto; max-width: 100%; }
 .cv-body.markdown th, .cv-body.markdown td { border: 1px solid var(--bd); padding: 3px 7px; }
 .cv-body.markdown input[type="checkbox"] { margin-right: 5px; vertical-align: middle; }
 .cv-react { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }

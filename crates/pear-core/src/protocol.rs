@@ -169,6 +169,11 @@ pub struct Comment {
     pub mine: bool,
     #[serde(default)]
     pub reactions: Vec<Reaction>,
+    /// For a PR *review* summary surfaced in the conversation, its state
+    /// (`APPROVED` | `CHANGES_REQUESTED` | `COMMENTED` | `DISMISSED`). `None` for a
+    /// plain issue comment.
+    #[serde(default)]
+    pub review_state: Option<String>,
 }
 
 /// One inline review thread anchored to a file + line in the diff, with its
