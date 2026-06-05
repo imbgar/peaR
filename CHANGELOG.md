@@ -6,6 +6,31 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.6] — 2026-06-04
+
+### Added
+- **🧠 Claude's brain drawer.** A toggleable full-width bottom drawer (🧠 from the status bar)
+  that streams the running Claude session's thinking and tool actions live — tailed from the
+  session transcript, separate from the noisy terminal, with clickable actions. The produced
+  review itself is kept out of the feed (it's the deliverable in the terminal). (#33, #34)
+- **Collapsible sidebar with a floating edge-peek.** A hard toggle (status-bar ☰, the sidebar's
+  ‹ button, or ⌘B) collapses the sidebar to reclaim width; while collapsed, a glowing left-edge
+  hot-zone floats it back in on hover and tucks it away when you leave. State persists. (#35)
+- **Reworked launcher.** The CLI dropdown and "Auto-review on open" section are replaced by a
+  compact, title-less stack: a segmented engine bar (claude/codex/aider), 2×2 review-intensity
+  chips (Light/Standard/Complex/Ultra — money-guarded), and a dedicated "+ New empty shell"
+  button. Pick an intensity to auto-run on Open, or click the selected one again for "just open".
+  Chips track what each engine supports. (#36, #31)
+- **Compact icon + label toolbar.** The action toolbar is restyled from big lettered buttons to
+  grouped icon + label buttons — `Post · Distill · Walk · Explain · Video │ Copy · Diff · Save`,
+  with full names in tooltips. (#37)
+- **Resizable PR diff panel** with the unified diff and existing review comments inline, plus a
+  per-tab cache for instant reopen. (#29)
+- **Per-tab agent detection + dispatch override**, so review actions target the right CLI even in
+  a shell tab. (#30)
+- **Delete a single history entry** from the sidebar. (#32)
+- **Save review** writes the full review the agent just produced, verbatim, to a markdown file. (#33)
+
 ## [0.1.5] — 2026-06-04
 
 ### Fixed
