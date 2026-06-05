@@ -1185,7 +1185,14 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  // Resizable panel (drag the divider between the terminal and the panel).
+  // Smallest the terminal may get squeezed to by a panel drag (keeps xterm rendering
+  // horizontally; below ~120px it collapses to a 1-char vertical sliver).
+  const TERMINAL_MIN = 160;
+  const commentsPanelEl = $<HTMLElement>("#comments-panel");
+  const diffPanelEl = $<HTMLElement>("#panel");
+
+  // Resizable diff panel (drag the divider on its left). Free drag, but bounded so the
+  // terminal (and the other panel, if open) keep their minimum — no hard width cap.
   const savedPanelW = localStorage.getItem("pear.panelW");
   if (savedPanelW) stageEl.style.setProperty("--panel-w", savedPanelW);
   const resizer = $<HTMLElement>("#panel-resizer");
@@ -1195,7 +1202,11 @@ window.addEventListener("DOMContentLoaded", async () => {
     stageEl.classList.add("resizing");
     const onMove = (ev: PointerEvent) => {
       const rect = stageEl.getBoundingClientRect();
-      const w = Math.min(Math.max(rect.right - ev.clientX, 300), rect.width - 360);
+      const commentsW = stageEl.classList.contains("comments-open")
+        ? commentsPanelEl.getBoundingClientRect().width
+        : 0;
+      const maxDiff = rect.width - commentsW - 10 - TERMINAL_MIN;
+      const w = Math.min(Math.max(rect.right - ev.clientX, 300), maxDiff);
       stageEl.style.setProperty("--panel-w", `${Math.round(w)}px`);
       refitActive();
     };
@@ -1215,16 +1226,20 @@ window.addEventListener("DOMContentLoaded", async () => {
   const savedCommentsW = localStorage.getItem("pear.commentsW");
   if (savedCommentsW) stageEl.style.setProperty("--comments-w", savedCommentsW);
   const cResizer = $<HTMLElement>("#comments-resizer");
-  const commentsPanelEl = $<HTMLElement>("#comments-panel");
   cResizer.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     cResizer.setPointerCapture(e.pointerId);
     stageEl.classList.add("resizing");
     const onMove = (ev: PointerEvent) => {
       // The panel is right-anchored (terminals absorb the change), so its right edge
-      // is stable during the drag — width is just (right edge − pointer).
+      // is stable during the drag — width is just (right edge − pointer). Bounded so
+      // the terminal (and the diff, if open) keep their minimum.
+      const rect = stageEl.getBoundingClientRect();
+      const diffW = stageEl.classList.contains("panel-open")
+        ? diffPanelEl.getBoundingClientRect().width
+        : 0;
       const right = commentsPanelEl.getBoundingClientRect().right;
-      const max = stageEl.getBoundingClientRect().width - 420;
+      const max = rect.width - diffW - 10 - TERMINAL_MIN;
       const w = Math.min(Math.max(right - ev.clientX, 240), max);
       stageEl.style.setProperty("--comments-w", `${Math.round(w)}px`);
       refitActive();

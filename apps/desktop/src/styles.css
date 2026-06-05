@@ -582,14 +582,13 @@ button:disabled { opacity: 0.38; cursor: default; }
 #stage {
   display: grid;
   --cres: 0px; --cw: 0px; --dres: 0px; --dw: 0px;
-  /* Terminal keeps a floor (xterm collapses to a 1-char-wide vertical sliver below
-     ~120px); the panels are capped at a fraction of the stage so on a narrow window
-     they shrink instead of crushing the terminal. min(0px, %) = 0 when a panel is
-     closed. */
+  /* Panels keep their (freely resizable) width; the terminal flexes with a floor so
+     it never collapses to a 1-char vertical sliver. The resizers are terminal-aware
+     (see main.ts) so dragging can't crush past the floor either. */
   grid-template-columns:
     minmax(140px, 1fr)
-    var(--cres) min(var(--cw), 36%)
-    var(--dres) min(var(--dw), 40%);
+    var(--cres) var(--cw)
+    var(--dres) var(--dw);
   min-height: 0;
   min-width: 0;
   transition: grid-template-columns 0.18s var(--ease);
@@ -809,7 +808,6 @@ button:disabled { opacity: 0.38; cursor: default; }
   padding: 8px 11px; background: var(--elev); border: none;
   border-bottom: 1px solid var(--bd); cursor: pointer; text-align: left;
   font-family: var(--font-mono); font-size: 11.5px; color: var(--tx);
-  position: sticky; top: 36px; z-index: 2;
 }
 .diff-file-head:hover { background: var(--inp); }
 .diff-chev { color: var(--faint); transition: transform 0.15s var(--ease); font-size: 10px; flex: none; }
