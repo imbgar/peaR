@@ -156,6 +156,7 @@ impl Engine {
                 entries: self.store.history(),
             }),
             Command::LoadDiff { tab } => self.load_diff(tab),
+            Command::LoadComments { tab } => self.load_comments(tab),
             Command::WatchBrain { tab } => self.watch_brain(tab),
             Command::StopBrain { tab } => self.stop_brain(tab),
             Command::SaveLayout { active } => self.persist_layout(active),
@@ -707,6 +708,43 @@ impl Engine {
             Err(e) => sink(Event::Notice {
                 tab: Some(tab),
                 message: format!("diff: {e}"),
+            }),
+        });
+    }
+
+    /// Fetch the tab's PR conversation comments + inline review threads (one GraphQL
+    /// round-trip, on a worker thread) and emit `Event::Comments`.
+    fn load_comments(&mut self, tab: TabId) {
+        let pr = match self.tabs.get(&tab) {
+            Some(t) => t.pr.clone(),
+            None => {
+                self.emit(Event::Notice {
+                    tab: Some(tab),
+                    message: "comments: unknown tab".into(),
+                });
+                return;
+            }
+        };
+        let Some(pr) = pr else {
+            self.emit(Event::Notice {
+                tab: Some(tab),
+                message: "comments: this tab is not a PR".into(),
+            });
+            return;
+        };
+        let Some(gh) = self.github() else {
+            self.emit(Event::Notice {
+                tab: Some(tab),
+                message: "no GitHub token — comments unavailable (run `gh auth login`)".into(),
+            });
+            return;
+        };
+        let sink = self.sink.clone();
+        std::thread::spawn(move || match gh.pr_comments(&pr) {
+            Ok(comments) => sink(Event::Comments { tab, comments }),
+            Err(e) => sink(Event::Notice {
+                tab: Some(tab),
+                message: format!("comments: {e}"),
             }),
         });
     }

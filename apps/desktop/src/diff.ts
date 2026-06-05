@@ -1,7 +1,7 @@
 // Unified-diff parser + renderer for the PR diff panel. Dependency-free; all output
 // is built with the DOM (textContent), so PR content is never injected as HTML.
 
-import { DiffComment } from "./protocol";
+import { Comment, DiffComment, Reaction, ReviewThread } from "./protocol";
 
 type LineKind = "add" | "del" | "ctx";
 interface DLine {
@@ -122,8 +122,18 @@ const STATUS_LETTER: Record<string, string> = {
   modified: "M",
 };
 
-/** Render the parsed diff (with existing review comments) into `container`. */
-export function renderDiff(container: HTMLElement, diff: string, comments: DiffComment[]) {
+/**
+ * Render the parsed diff into `container`. When `threads` is provided (full review
+ * threads with resolved state + reactions) it drives the inline UI — each anchored
+ * line gets a collapsible 💬 bubble that toggles a GitHub-style thread. Otherwise we
+ * fall back to the flat `comments` list (rendered open) until threads arrive.
+ */
+export function renderDiff(
+  container: HTMLElement,
+  diff: string,
+  comments: DiffComment[],
+  threads: ReviewThread[] = [],
+) {
   container.innerHTML = "";
   const files = parseDiff(diff);
   if (!files.length) {
@@ -134,7 +144,17 @@ export function renderDiff(container: HTMLElement, diff: string, comments: DiffC
     return;
   }
 
-  // Index comments by path → new-side line.
+  const useThreads = threads.length > 0;
+  // Index inline threads by path → anchored line (current line, else original).
+  const threadByPath = new Map<string, Map<number, ReviewThread[]>>();
+  for (const t of threads) {
+    const line = t.line ?? t.original_line;
+    if (line == null) continue;
+    const m = threadByPath.get(t.path) ?? new Map<number, ReviewThread[]>();
+    (m.get(line) ?? m.set(line, []).get(line)!).push(t);
+    threadByPath.set(t.path, m);
+  }
+  // Fallback: index flat comments by path → new-side line.
   const byPath = new Map<string, Map<number, DiffComment[]>>();
   for (const c of comments) {
     if (c.line == null) continue;
@@ -143,6 +163,9 @@ export function renderDiff(container: HTMLElement, diff: string, comments: DiffC
     byPath.set(c.path, m);
   }
 
+  const cmtCount = useThreads
+    ? threads.reduce((s, t) => s + t.comments.length, 0)
+    : comments.length;
   const totAdd = files.reduce((s, f) => s + f.adds, 0);
   const totDel = files.reduce((s, f) => s + f.dels, 0);
   const summary = document.createElement("div");
@@ -156,10 +179,10 @@ export function renderDiff(container: HTMLElement, diff: string, comments: DiffC
   const d = document.createElement("span");
   d.className = "diff-dels";
   d.textContent = `−${totDel}`;
-  if (comments.length) {
+  if (cmtCount) {
     const cc = document.createElement("span");
     cc.className = "diff-ccount";
-    cc.textContent = `${comments.length} comment${comments.length > 1 ? "s" : ""}`;
+    cc.textContent = `${cmtCount} comment${cmtCount > 1 ? "s" : ""}`;
     summary.append(fc, a, d, cc);
   } else {
     summary.append(fc, a, d);
@@ -201,6 +224,7 @@ export function renderDiff(container: HTMLElement, diff: string, comments: DiffC
       b.textContent = "Binary file — not shown";
       body.appendChild(b);
     }
+    const threadMap = threadByPath.get(f.path);
     const cmtMap = byPath.get(f.path);
     for (const hunk of f.hunks) {
       const hh = document.createElement("div");
@@ -223,9 +247,36 @@ export function renderDiff(container: HTMLElement, diff: string, comments: DiffC
         code.className = "diff-code";
         code.textContent = line.text.length ? line.text : " ";
         row.append(go, gn, sign, code);
+        // Inline threads (collapsible, GitHub-style): render a 💬 bubble on the line
+        // that toggles the thread, collapsed by default.
+        const lineThreads = line.newNo != null ? threadMap?.get(line.newNo) : undefined;
+        if (lineThreads) {
+          row.classList.add("has-cmt");
+          const blocks: HTMLElement[] = [];
+          for (const t of lineThreads) {
+            const block = renderThread(t);
+            const n = t.comments.length;
+            const bubble = document.createElement("button");
+            bubble.type = "button";
+            bubble.className = "diff-bubble" + (t.is_resolved ? " resolved" : "");
+            const setLabel = () =>
+              (bubble.textContent = `💬 ${n}${block.classList.contains("hidden") ? " ▸" : " ▾"}`);
+            bubble.addEventListener("click", () => {
+              block.classList.toggle("hidden");
+              setLabel();
+            });
+            setLabel();
+            code.appendChild(bubble);
+            blocks.push(block);
+          }
+          body.appendChild(row);
+          for (const b of blocks) body.appendChild(b);
+          continue;
+        }
         body.appendChild(row);
+        // Fallback (pre-threads): render flat comments open under the line.
         if (line.newNo != null && cmtMap?.has(line.newNo)) {
-          for (const c of cmtMap.get(line.newNo)!) body.appendChild(renderComment(c));
+          for (const c of cmtMap.get(line.newNo)!) body.appendChild(renderFlatComment(c));
         }
       }
     }
@@ -235,7 +286,78 @@ export function renderDiff(container: HTMLElement, diff: string, comments: DiffC
   }
 }
 
-function renderComment(c: DiffComment): HTMLElement {
+/** A short relative time ("2h", "3d", "5mo") from an RFC3339 timestamp. */
+export function relTime(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 60) return "now";
+  const m = s / 60;
+  if (m < 60) return `${Math.floor(m)}m`;
+  const h = m / 60;
+  if (h < 24) return `${Math.floor(h)}h`;
+  const d = h / 24;
+  if (d < 30) return `${Math.floor(d)}d`;
+  const mo = d / 30;
+  if (mo < 12) return `${Math.floor(mo)}mo`;
+  return `${Math.floor(mo / 12)}y`;
+}
+
+/**
+ * Render one comment — author, relative time, body, and reaction rollups. Shared
+ * by the inline diff threads and the conversation panel (same `Comment` shape).
+ * All text is set via `textContent`, so comment bodies are never injected as HTML.
+ */
+export function commentEl(c: Comment): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "cv-cmt";
+  const top = document.createElement("div");
+  top.className = "cv-top";
+  const who = document.createElement("span");
+  who.className = "cv-who" + (c.mine ? " me" : "");
+  who.textContent = c.author;
+  const when = document.createElement("span");
+  when.className = "cv-when";
+  when.textContent = relTime(c.created_at);
+  top.append(who, when);
+  const body = document.createElement("div");
+  body.className = "cv-body";
+  body.textContent = c.body;
+  wrap.append(top, body);
+  if (c.reactions.length) wrap.appendChild(reactionRow(c.reactions));
+  return wrap;
+}
+
+function reactionRow(reactions: Reaction[]): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "cv-react";
+  for (const r of reactions) {
+    const pill = document.createElement("span");
+    pill.className = "cv-pill" + (r.me ? " me" : "");
+    pill.textContent = `${r.emoji} ${r.count}`;
+    row.appendChild(pill);
+  }
+  return row;
+}
+
+/** An inline review thread block (collapsed by default via the `hidden` class). */
+function renderThread(t: ReviewThread): HTMLElement {
+  const block = document.createElement("div");
+  block.className = "diff-thread hidden" + (t.is_resolved ? " resolved" : "");
+  if (t.is_resolved || t.is_outdated) {
+    const tag = document.createElement("div");
+    tag.className = "dt-state";
+    tag.textContent = [t.is_resolved ? "✓ resolved" : "", t.is_outdated ? "outdated" : ""]
+      .filter(Boolean)
+      .join(" · ");
+    block.appendChild(tag);
+  }
+  for (const c of t.comments) block.appendChild(commentEl(c));
+  return block;
+}
+
+/** Fallback inline render of a flat REST review comment (before threads arrive). */
+function renderFlatComment(c: DiffComment): HTMLElement {
   const wrap = document.createElement("div");
   wrap.className = "diff-comment";
   const who = document.createElement("div");

@@ -143,6 +143,56 @@ pub struct DiffComment {
     pub body: String,
 }
 
+/// One emoji reaction rollup on a comment (read side). `me` is whether the
+/// authenticated viewer has reacted with this emoji.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Reaction {
+    pub emoji: String,
+    pub count: u64,
+    #[serde(default)]
+    pub me: bool,
+}
+
+/// A single comment — used for both PR conversation (issue) comments and the
+/// comments inside an inline review thread. `id` is the GraphQL node id (used by
+/// later phases to edit/delete/react). `mine` = the viewer authored it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Comment {
+    pub id: String,
+    pub author: String,
+    pub body: String,
+    /// RFC3339 creation timestamp.
+    pub created_at: String,
+    #[serde(default)]
+    pub mine: bool,
+    #[serde(default)]
+    pub reactions: Vec<Reaction>,
+}
+
+/// One inline review thread anchored to a file + line in the diff, with its
+/// resolved/outdated state and the ordered comments in it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewThread {
+    /// GraphQL node id (used by later phases to resolve/unresolve/reply).
+    pub id: String,
+    pub path: String,
+    /// Current new-side line (`None` when the thread is outdated).
+    pub line: Option<u64>,
+    /// The line in the diff the thread was originally left on.
+    pub original_line: Option<u64>,
+    pub is_resolved: bool,
+    pub is_outdated: bool,
+    pub comments: Vec<Comment>,
+}
+
+/// All comments on a PR: the conversation (issue-level) comments plus the inline
+/// review threads. Reply to [`Command::LoadComments`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PrComments {
+    pub conversation: Vec<Comment>,
+    pub threads: Vec<ReviewThread>,
+}
+
 /// Lightweight metadata about a PR for the UI (subset of the GitHub payload).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrMeta {
@@ -272,6 +322,9 @@ pub enum Command {
     /// Fetch the tab's PR diff + existing review comments for the diff panel
     /// (replied via `Event::Diff`).
     LoadDiff { tab: TabId },
+    /// Fetch the tab's PR conversation comments + inline review threads for the
+    /// comments panel (replied via `Event::Comments`). One GraphQL round-trip.
+    LoadComments { tab: TabId },
     /// Start streaming the tab's Claude session *thinking* to the brain panel
     /// (replied via `Event::Thought`s). No-op for non-Claude / session-less tabs.
     WatchBrain { tab: TabId },
@@ -321,6 +374,9 @@ pub enum Event {
         diff: String,
         comments: Vec<DiffComment>,
     },
+    /// The tab's PR conversation comments + inline review threads (reply to
+    /// `LoadComments`).
+    Comments { tab: TabId, comments: PrComments },
     /// One streamed item from the tab's Claude transcript for the brain panel.
     /// `kind` is `thinking` | `action` | `note`; `detail` is the full content revealed
     /// on click (e.g. a tool's whole command/input), empty when there's nothing more.

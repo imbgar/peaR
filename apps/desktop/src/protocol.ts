@@ -29,6 +29,36 @@ export interface DiffComment {
   body: string;
 }
 
+export interface Reaction {
+  emoji: string;
+  count: number;
+  me: boolean;
+}
+
+export interface Comment {
+  id: string;
+  author: string;
+  body: string;
+  created_at: string;
+  mine: boolean;
+  reactions: Reaction[];
+}
+
+export interface ReviewThread {
+  id: string;
+  path: string;
+  line: number | null;
+  original_line: number | null;
+  is_resolved: boolean;
+  is_outdated: boolean;
+  comments: Comment[];
+}
+
+export interface PrComments {
+  conversation: Comment[];
+  threads: ReviewThread[];
+}
+
 export interface PrRef {
   owner: string;
   repo: string;
@@ -86,6 +116,7 @@ export type Command =
   | { type: "check_skills" }
   | { type: "install_skills" }
   | { type: "load_diff"; tab: number }
+  | { type: "load_comments"; tab: number }
   | { type: "watch_brain"; tab: number }
   | { type: "stop_brain"; tab: number }
   | { type: "save_layout"; active?: number | null }
@@ -100,6 +131,7 @@ export type Event =
   | { type: "review_saved"; tab: number; path: string }
   | { type: "panel"; tab: number; payload: PanelPayload }
   | { type: "diff"; tab: number; diff: string; comments: DiffComment[] }
+  | { type: "comments"; tab: number; comments: PrComments }
   | { type: "thought"; tab: number; kind: string; text: string; detail: string }
   | { type: "history"; entries: PrRecord[] }
   | { type: "skills_status"; installed: boolean }

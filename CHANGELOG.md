@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **PR comments — phase 1 (read).** A new **💬 Comments** toolbar button opens a
+  conversation panel that splits in to the **left of the diff** (terminal │ conversation │
+  diff), showing the PR's issue-level comments with author, relative time, and reaction
+  rollups. Inline review comments now render **inside the diff**, GitHub-style: each
+  anchored line gets a collapsible **💬 bubble** that toggles its thread (collapsed by
+  default), carrying resolved/outdated state and reactions. Both panels are independently
+  resizable and follow the active tab. Fetched in a single `gh`-token GraphQL round-trip.
+  Writing (reply/edit/resolve/react/post) lands in later phases. (#43)
+
 ## [0.1.7] — 2026-06-05
 
 ### Added

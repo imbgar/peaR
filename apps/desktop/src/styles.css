@@ -575,21 +575,29 @@ button:disabled { opacity: 0.38; cursor: default; }
 [data-theme="phosphor"] .action.tier::before { content: "("; color: var(--accent-d); }
 [data-theme="phosphor"] .action.tier::after { content: ")"; color: var(--accent-d); }
 
-/* ── stage: terminals + panel ──────────────────────────────────────────── */
+/* ── stage: terminals | conversation | diff ────────────────────────────────
+   Five tracks: terminals (flex) | comments-resizer | comments | diff-resizer |
+   diff. Each panel is an independent toggle, composed via per-track CSS vars so
+   any combination (comments only, diff only, both) lays out correctly. */
 #stage {
   display: grid;
-  grid-template-columns: 1fr 0 0;
+  --cres: 0px; --cw: 0px; --dres: 0px; --dw: 0px;
+  grid-template-columns: minmax(0, 1fr) var(--cres) var(--cw) var(--dres) var(--dw);
   min-height: 0;
   min-width: 0;
   transition: grid-template-columns 0.18s var(--ease);
 }
-#stage.panel-open { grid-template-columns: 1fr 5px var(--panel-w, 420px); }
-/* While dragging the resizer, drop the transition so it tracks the pointer 1:1. */
+#stage.comments-open { --cres: 5px; --cw: var(--comments-w, 340px); }
+#stage.panel-open { --dres: 5px; --dw: var(--panel-w, 420px); }
+/* While dragging a resizer, drop the transition so it tracks the pointer 1:1. */
 #stage.resizing { transition: none; }
 
-#panel-resizer { background: transparent; cursor: col-resize; }
-#panel-resizer:hover, #stage.resizing #panel-resizer { background: var(--accent-d); }
+#panel-resizer, #comments-resizer { background: transparent; cursor: col-resize; }
+#panel-resizer:hover, #comments-resizer:hover,
+#stage.resizing #panel-resizer, #stage.resizing #comments-resizer { background: var(--accent-d); }
 #stage:not(.panel-open) #panel-resizer { display: none; }
+#stage:not(.comments-open) #comments-resizer,
+#stage:not(.comments-open) #comments-panel { display: none; }
 
 #terminals { position: relative; min-height: 0; min-width: 0; background: var(--term-bg); }
 .terminal-host { position: absolute; inset: 0; padding: 8px 10px; }
@@ -640,6 +648,61 @@ button:disabled { opacity: 0.38; cursor: default; }
 .panel-diff .d-add { color: var(--green); }
 .panel-diff .d-del { color: var(--red); }
 .panel-diff .d-hunk { color: var(--blue); }
+
+/* ── PR conversation panel (splits left of the diff) ───────────────────────── */
+#comments-panel {
+  border-left: 1px solid var(--bd);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.cv-count {
+  font-family: var(--font-mono); font-size: 11px; color: var(--dim);
+  border: 1px solid var(--bd2); border-radius: 999px; padding: 0 7px;
+}
+.cv-card {
+  border: 1px solid var(--bd); border-radius: var(--r); margin-bottom: 10px;
+  padding: 8px 10px; background: var(--elev);
+}
+/* one comment (shared: conversation cards + inline diff threads) */
+.cv-cmt { padding: 0; }
+.cv-top { display: flex; align-items: baseline; gap: 7px; margin-bottom: 3px; }
+.cv-who { font-weight: 600; font-size: 12px; color: var(--tx); }
+.cv-who.me { color: var(--accent); text-shadow: var(--glow); }
+.cv-when { font-size: 10px; color: var(--faint); font-family: var(--font-mono); }
+.cv-body { font-size: 12px; color: var(--dim); line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.cv-react { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 5px; }
+.cv-pill {
+  font-family: var(--font-mono); font-size: 11px; color: var(--dim);
+  border: 1px solid var(--bd2); border-radius: 999px; padding: 1px 7px;
+}
+.cv-pill.me { border-color: var(--accent-d); color: var(--accent); }
+
+/* inline review thread inside the diff (toggled by the 💬 bubble on the line) */
+.diff-bubble {
+  display: inline-flex; align-items: center; gap: 3px; margin-left: 8px;
+  font-family: var(--font-mono); font-size: 10px; color: var(--accent);
+  border: 1px solid var(--accent-d); border-radius: 999px; padding: 0 7px;
+  cursor: pointer; vertical-align: middle; background: transparent;
+}
+.diff-bubble:hover { box-shadow: var(--glow); }
+.diff-bubble.resolved { color: var(--green); border-color: var(--green); }
+.diff-row.has-cmt { border-left: 2px solid var(--accent); }
+.diff-thread {
+  background: var(--panel); border-top: 1px solid var(--bd); border-bottom: 1px solid var(--bd);
+  padding: 7px 12px 9px 42px; font-family: var(--font-ui);
+}
+.diff-thread.hidden { display: none; }
+.diff-thread.resolved { opacity: 0.66; }
+.diff-thread .cv-cmt { padding: 5px 0; border-top: 1px solid var(--bd); }
+.diff-thread .cv-cmt:first-of-type { border-top: none; }
+.dt-state {
+  font-family: var(--font-mono); font-size: 9.5px; text-transform: uppercase;
+  letter-spacing: 1px; color: var(--green); margin-bottom: 2px;
+}
 
 /* ── PR diff panel ─────────────────────────────────────────────────────────── */
 .panel-body.diff-mode { padding: 0; }

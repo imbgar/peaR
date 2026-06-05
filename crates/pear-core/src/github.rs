@@ -8,7 +8,7 @@
 use std::process::Command;
 
 use crate::error::{CoreError, Result};
-use crate::protocol::{DiffComment, PrMeta, PrRef};
+use crate::protocol::{Comment, DiffComment, PrComments, PrMeta, PrRef, Reaction, ReviewThread};
 
 const API: &str = "https://api.github.com";
 const UA: &str = concat!("pear/", env!("CARGO_PKG_VERSION"));
@@ -146,6 +146,78 @@ impl GitHub {
             .unwrap_or_default())
     }
 
+    /// POST a GraphQL query (GitHub's REST surface can't express review-thread
+    /// resolved state or per-comment reaction rollups). Returns the `data` object,
+    /// surfacing transport and GraphQL-level errors.
+    fn graphql(&self, query: &str, variables: serde_json::Value) -> Result<serde_json::Value> {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .build()
+            .into();
+        let payload = serde_json::json!({ "query": query, "variables": variables });
+        let mut resp = agent
+            .post(format!("{API}/graphql"))
+            .header("Authorization", &format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", UA)
+            .send_json(&payload)
+            .map_err(|e| CoreError::GitHub(e.to_string()))?;
+        let status = resp.status();
+        let v = resp
+            .body_mut()
+            .read_json::<serde_json::Value>()
+            .map_err(|e| CoreError::GitHub(e.to_string()))?;
+        if !status.is_success() {
+            return Err(CoreError::GitHub(format!(
+                "HTTP {}: {}",
+                status.as_u16(),
+                v.to_string().chars().take(200).collect::<String>()
+            )));
+        }
+        if let Some(errs) = v.get("errors").and_then(|e| e.as_array()) {
+            if !errs.is_empty() {
+                return Err(CoreError::GitHub(format!(
+                    "graphql: {}",
+                    errs.iter()
+                        .filter_map(|e| e["message"].as_str())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                        .chars()
+                        .take(200)
+                        .collect::<String>()
+                )));
+            }
+        }
+        Ok(v.get("data").cloned().unwrap_or(serde_json::Value::Null))
+    }
+
+    /// The PR's conversation comments + inline review threads (with resolved /
+    /// outdated state and reaction rollups) in a single GraphQL round-trip.
+    pub fn pr_comments(&self, pr: &PrRef) -> Result<PrComments> {
+        let data = self.graphql(
+            PR_COMMENTS_QUERY,
+            serde_json::json!({ "owner": pr.owner, "repo": pr.repo, "number": pr.number }),
+        )?;
+        let p = &data["repository"]["pullRequest"];
+        let conversation = nodes(&p["comments"]).iter().map(parse_comment).collect();
+        let threads = nodes(&p["reviewThreads"])
+            .iter()
+            .map(|t| ReviewThread {
+                id: t["id"].as_str().unwrap_or("").to_string(),
+                path: t["path"].as_str().unwrap_or("").to_string(),
+                line: t["line"].as_u64(),
+                original_line: t["originalLine"].as_u64(),
+                is_resolved: t["isResolved"].as_bool().unwrap_or(false),
+                is_outdated: t["isOutdated"].as_bool().unwrap_or(false),
+                comments: nodes(&t["comments"]).iter().map(parse_comment).collect(),
+            })
+            .collect();
+        Ok(PrComments {
+            conversation,
+            threads,
+        })
+    }
+
     /// Fetch metadata for a single PR.
     pub fn pr_meta(&self, pr: &PrRef) -> Result<PrMeta> {
         let v = self.get(&format!(
@@ -189,5 +261,89 @@ impl GitHub {
                 changed_files: 0,
             })
             .collect())
+    }
+}
+
+/// One GraphQL query for everything the comments panel needs: PR conversation
+/// (issue) comments + inline review threads, each with author, body, timestamp,
+/// `viewerDidAuthor`, and reaction rollups; threads also carry resolved/outdated
+/// state and their anchor (path/line/originalLine).
+const PR_COMMENTS_QUERY: &str = r#"
+query($owner:String!,$repo:String!,$number:Int!){
+  repository(owner:$owner,name:$repo){
+    pullRequest(number:$number){
+      comments(first:100){ nodes {
+        id author{login} body createdAt viewerDidAuthor
+        reactionGroups{ content viewerHasReacted reactors{ totalCount } }
+      } }
+      reviewThreads(first:100){ nodes {
+        id isResolved isOutdated path line originalLine
+        comments(first:50){ nodes {
+          id author{login} body createdAt viewerDidAuthor
+          reactionGroups{ content viewerHasReacted reactors{ totalCount } }
+        } }
+      } }
+    }
+  }
+}"#;
+
+/// `connection.nodes` as a slice (empty if missing/null).
+fn nodes(conn: &serde_json::Value) -> &[serde_json::Value] {
+    conn["nodes"]
+        .as_array()
+        .map(|a| a.as_slice())
+        .unwrap_or(&[])
+}
+
+/// Map a GraphQL `ReactionContent` enum to its emoji.
+fn reaction_emoji(content: &str) -> &'static str {
+    match content {
+        "THUMBS_UP" => "👍",
+        "THUMBS_DOWN" => "👎",
+        "LAUGH" => "😄",
+        "HOORAY" => "🎉",
+        "CONFUSED" => "😕",
+        "HEART" => "❤️",
+        "ROCKET" => "🚀",
+        "EYES" => "👀",
+        _ => "❓",
+    }
+}
+
+/// Parse a comment node's non-empty reaction groups into reaction rollups.
+fn parse_reactions(node: &serde_json::Value) -> Vec<Reaction> {
+    node["reactionGroups"]
+        .as_array()
+        .map(|groups| {
+            groups
+                .iter()
+                .filter_map(|g| {
+                    let count = g["reactors"]["totalCount"].as_u64().unwrap_or(0);
+                    if count == 0 {
+                        return None;
+                    }
+                    Some(Reaction {
+                        emoji: reaction_emoji(g["content"].as_str().unwrap_or("")).to_string(),
+                        count,
+                        me: g["viewerHasReacted"].as_bool().unwrap_or(false),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Parse a GraphQL comment node (issue comment or review comment — same shape).
+fn parse_comment(node: &serde_json::Value) -> Comment {
+    Comment {
+        id: node["id"].as_str().unwrap_or("").to_string(),
+        author: node["author"]["login"]
+            .as_str()
+            .unwrap_or("ghost")
+            .to_string(),
+        body: node["body"].as_str().unwrap_or("").to_string(),
+        created_at: node["createdAt"].as_str().unwrap_or("").to_string(),
+        mine: node["viewerDidAuthor"].as_bool().unwrap_or(false),
+        reactions: parse_reactions(node),
     }
 }
