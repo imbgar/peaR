@@ -84,7 +84,6 @@ let terminalsEl: HTMLElement;
 let historyEl: HTMLElement;
 let statusEl: HTMLElement;
 let prInput: HTMLInputElement;
-let cliSelect: HTMLSelectElement;
 let toolbarEl: HTMLElement;
 let copyModalEl: HTMLElement;
 let copyTextEl: HTMLTextAreaElement;
@@ -93,8 +92,6 @@ let stageEl: HTMLElement;
 let panelBodyEl: HTMLElement;
 let panelTitleEl: HTMLElement;
 let panelToggleBtn: HTMLButtonElement;
-let autoToggle: HTMLInputElement;
-let autoTier: HTMLSelectElement;
 let skillsModalEl: HTMLElement;
 let skillsStatusEl: HTMLElement;
 // True once dismissed/installed this session, so we don't re-nag on the next
@@ -110,9 +107,19 @@ async function send(cmd: Command) {
   }
 }
 
-function selectedCli(): CliKind {
-  return cliSelect.value as CliKind;
-}
+// ── launcher state (segmented engine + intensity chips) ──────────────────────
+// Engine excludes "shell" — the "New empty shell" button covers a bare terminal.
+let selectedEngine: CliKind = "claude";
+// The intensity to auto-run on the next Open; null = open without a review.
+let selectedTier: LaunchReview | null = "standard";
+
+// Which intensities each engine actually supports (see dispatch.rs). Unsupported chips
+// are disabled, so the displayed options change with the selected engine.
+const ENGINE_TIERS: Record<string, ReadonlySet<string>> = {
+  claude: new Set(["light", "standard", "complex", "ultra"]),
+  codex: new Set(["light", "standard"]),
+  aider: new Set(["light", "standard", "complex"]),
+};
 
 // ── rendering ───────────────────────────────────────────────────────────────
 function setStatus(msg: string, warn = false) {
@@ -867,13 +874,93 @@ function renderPanel(p: PanelPayload) {
   setPanel(true);
 }
 
+// ── launcher wiring (segmented engine + intensity chips) ─────────────────────
+// Engine pill bar drives which intensities are offered; an intensity chip selects the
+// review to auto-run on Open (click the selected one again = "just open", no review).
+// Ultra is money-guarded: arm on first click, confirm on the second (or a dbl-click).
+function initLauncher(): void {
+  const seg = $("#engine-seg");
+  const intensity = $("#intensity");
+  const openBtn = $<HTMLButtonElement>("#open-btn");
+  const permSelect = $("#perm-select");
+  let ultraArmTimer = 0;
+
+  // Restore persisted choices.
+  const savedEngine = localStorage.getItem("pear.engine");
+  if (savedEngine === "claude" || savedEngine === "codex" || savedEngine === "aider") {
+    selectedEngine = savedEngine;
+  }
+  const savedTier = localStorage.getItem("pear.tier") ?? "standard";
+  selectedTier = savedTier === "off" ? null
+    : (["light", "standard", "complex", "ultra"].includes(savedTier) ? (savedTier as LaunchReview) : "standard");
+
+  const disarmUltra = () => {
+    clearTimeout(ultraArmTimer);
+    intensity.querySelector(".chip.pay")?.classList.remove("armed");
+  };
+
+  // Re-render pills, chip availability, perms visibility, and the CTA label.
+  const refresh = () => {
+    seg.querySelectorAll<HTMLButtonElement>("button[data-engine]").forEach((b) =>
+      b.classList.toggle("on", b.dataset.engine === selectedEngine),
+    );
+    const allowed = ENGINE_TIERS[selectedEngine] ?? new Set<string>();
+    if (selectedTier && !allowed.has(selectedTier)) {
+      selectedTier = allowed.has("standard") ? "standard" : null; // drop what this engine can't run
+    }
+    intensity.querySelectorAll<HTMLButtonElement>(".chip").forEach((c) => {
+      const tier = c.dataset.tier!;
+      c.disabled = !allowed.has(tier);
+      c.classList.toggle("on", tier === selectedTier);
+    });
+    disarmUltra();
+    permSelect.classList.toggle("hidden", selectedEngine !== "claude");
+    openBtn.textContent = selectedTier ? "▸ Open & review" : "▸ Open";
+    localStorage.setItem("pear.engine", selectedEngine);
+    localStorage.setItem("pear.tier", selectedTier ?? "off");
+  };
+
+  seg.querySelectorAll<HTMLButtonElement>("button[data-engine]").forEach((b) =>
+    b.addEventListener("click", () => {
+      selectedEngine = b.dataset.engine as CliKind;
+      refresh();
+    }),
+  );
+
+  const pickTier = (tier: LaunchReview) => {
+    selectedTier = selectedTier === tier ? null : tier; // click the selected one again = just open
+    refresh();
+  };
+  intensity.querySelectorAll<HTMLButtonElement>(".chip").forEach((c) => {
+    const tier = c.dataset.tier as LaunchReview;
+    if (tier === "ultra") {
+      c.addEventListener("click", () => {
+        if (c.disabled) return;
+        if (selectedTier === "ultra" || c.classList.contains("armed")) {
+          pickTier("ultra");
+          return;
+        }
+        c.classList.add("armed");
+        setStatus("Ultra is a paid cloud review — click again to confirm 💸");
+        ultraArmTimer = window.setTimeout(() => { disarmUltra(); refresh(); }, 2500);
+      });
+      c.addEventListener("dblclick", () => {
+        if (!c.disabled) { selectedTier = "ultra"; refresh(); }
+      });
+    } else {
+      c.addEventListener("click", () => { if (!c.disabled) pickTier(tier); });
+    }
+  });
+
+  refresh();
+}
+
 window.addEventListener("DOMContentLoaded", async () => {
   tabbarEl = $("#tabbar");
   terminalsEl = $("#terminals");
   historyEl = $("#history");
   statusEl = $("#status");
   prInput = $("#pr-input");
-  cliSelect = $("#cli-select");
   toolbarEl = $("#toolbar");
   copyModalEl = $("#copy-modal");
   copyTextEl = $("#copy-modal-text");
@@ -884,36 +971,26 @@ window.addEventListener("DOMContentLoaded", async () => {
   panelBodyEl = $("#panel-body");
   panelTitleEl = $("#panel-title");
   panelToggleBtn = $("#panel-toggle");
-  autoToggle = $("#auto-review-toggle");
-  autoTier = $("#auto-review-tier");
+
+  initLauncher();
 
   $("#open-form").addEventListener("submit", (e) => {
     e.preventDefault();
-    const cli = selectedCli();
     const pr = parsePrRef(prInput.value);
-    // A plain shell is just a terminal: no PR required, and never an agent review or
-    // permission/auto-review behaviour. With a PR it opens in that repo's dir.
-    if (cli === "shell") {
-      if (pr) openPr(pr, cli, { fresh: true, autoReview: null });
-      else send({ type: "open_scratch", cli, cwd: null });
-      prInput.value = "";
-      return;
-    }
-    // Agent CLIs run the review workflow, which needs a PR.
+    // Agent engines run the review workflow, which needs a PR. (Bare terminals come from
+    // the "New empty shell" button instead.)
     if (!pr) {
-      setStatus("⚠ enter owner/repo#NUMBER — or pick 'shell' for a plain terminal", true);
+      setStatus("⚠ enter owner/repo#NUMBER — or use “+ New empty shell” for a plain terminal", true);
       return;
     }
     // The Open box always starts a FRESH session; History is where you resume.
-    openPr(pr, cli, {
-      fresh: true,
-      autoReview: autoToggle.checked ? (autoTier.value as LaunchReview) : null,
-    });
+    // selectedTier null = open without a review.
+    openPr(pr, selectedEngine, { fresh: true, autoReview: selectedTier });
     prInput.value = "";
   });
 
   $("#new-shell").addEventListener("click", () =>
-    send({ type: "open_scratch", cli: selectedCli(), cwd: null }),
+    send({ type: "open_scratch", cli: "shell", cwd: null }),
   );
 
   $("#history-clear").addEventListener("click", () => send({ type: "clear_history" }));
@@ -994,15 +1071,6 @@ window.addEventListener("DOMContentLoaded", async () => {
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
   });
-
-  // Auto-review on open defaults ON (the launch buttons are gone — review is configured
-  // here on the left and fires when the PR opens). Off only if explicitly turned off.
-  autoToggle.checked = localStorage.getItem("pear.autoReview") !== "0";
-  autoTier.value = localStorage.getItem("pear.tier") || "standard";
-  autoToggle.addEventListener("change", () =>
-    localStorage.setItem("pear.autoReview", autoToggle.checked ? "1" : "0"),
-  );
-  autoTier.addEventListener("change", () => localStorage.setItem("pear.tier", autoTier.value));
 
   // Theme — Phosphor (default) ↔ Instrument; persisted, restyles terminals live.
   // Deep-link: #instrument / #phosphor forces a theme (handy for previews).

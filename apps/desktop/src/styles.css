@@ -126,7 +126,7 @@ html, body {
   display: flex;
   flex-direction: column;
   padding: 15px 13px;
-  gap: 15px;
+  gap: 11px;
   min-height: 0;
   overflow-y: auto;
   /* No transform-based entrance animation here: animation fill would lock `transform`
@@ -214,8 +214,8 @@ html, body {
   font-family: var(--font-mono);
 }
 
-.open { display: flex; flex-direction: column; gap: 8px; }
-.field { display: flex; flex-direction: column; gap: 5px; }
+.open { display: flex; flex-direction: column; gap: 5px; }
+.field { display: flex; flex-direction: column; gap: 4px; }
 .field-label, .section-head, .toolbar-group-label {
   font-size: 10px;
   text-transform: uppercase;
@@ -230,7 +230,7 @@ input, select {
   border: 1px solid var(--bd2);
   color: var(--tx);
   border-radius: var(--r-sm);
-  padding: 8px 9px;
+  padding: 5px 9px;
   font-family: var(--font-mono);
   font-size: 12px;
   outline: none;
@@ -242,8 +242,30 @@ input:focus, select:focus {
 }
 input::placeholder { color: var(--faint); }
 
-.open-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
 select { cursor: pointer; }
+
+/* ── launcher: segmented engine + intensity chips (workflow refactor) ─────── */
+.seg { display: flex; gap: 3px; background: var(--inp); border: 1px solid var(--bd2); border-radius: var(--r-sm); padding: 3px; }
+.seg button {
+  flex: 1; border: none; background: transparent; color: var(--dim);
+  font-family: var(--font-mono); font-size: 12px; padding: 3px 4px;
+  border-radius: 4px; transition: all 0.15s var(--ease);
+}
+.seg button:hover:not(.on) { color: var(--tx); }
+.seg button.on { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); box-shadow: var(--glow); }
+
+.chips { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.chip {
+  border: 1px solid var(--bd2); background: var(--inp); color: var(--tx);
+  border-radius: var(--r-sm); padding: 3px 8px; font-family: var(--font-mono);
+  font-size: 12px; text-align: center; transition: all 0.15s var(--ease);
+}
+.chip:hover:not(:disabled):not(.on) { border-color: var(--accent-d); }
+.chip:disabled { opacity: 0.32; cursor: default; }
+.chip.on { border-color: var(--accent); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-d), var(--glow); }
+/* Ultra: money-marked; an "armed" state after the first click invites the confirming second. */
+.chip.pay.armed { border-color: var(--red); color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
+.chip.pay.on { border-color: var(--red); color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
 
 button {
   font-family: var(--font-ui);
@@ -251,7 +273,7 @@ button {
   border: 1px solid transparent;
   cursor: pointer;
   font-size: 12px;
-  padding: 8px 12px;
+  padding: 3px 12px;
   color: var(--tx);
   transition: background 0.13s var(--ease), border-color 0.13s var(--ease),
     color 0.13s var(--ease), box-shadow 0.13s var(--ease), opacity 0.13s;
@@ -278,19 +300,8 @@ button:disabled { opacity: 0.38; cursor: default; }
 }
 .ghost:hover { border-color: var(--accent-d); color: var(--tx); }
 
-.auto-review {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 11px;
-  background: var(--elev);
-  border: 1px solid var(--bd);
-  border-radius: var(--r);
-}
-.check { display: flex; align-items: center; gap: 9px; cursor: pointer; font-size: 12px; color: var(--tx); }
-.check input { width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer; }
-
 .perm-field { margin-top: 2px; }
+.perm-field.hidden { display: none; }
 #perm-select.perm-danger { border-color: var(--red); color: var(--red); }
 
 .section-head { padding: 4px 3px 0; }
