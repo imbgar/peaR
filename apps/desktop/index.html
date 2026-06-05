@@ -21,45 +21,33 @@
         </div>
 
         <form id="open-form" class="open">
-          <label class="field">
-            <span class="field-label">Open PR</span>
-            <input id="pr-input" placeholder="owner/repo#123  ·  or paste a GitHub URL" autocomplete="off" spellcheck="false" />
-          </label>
-          <div class="open-row">
-            <select id="cli-select" title="CLI launched in the new tab">
-              <option value="claude">claude</option>
-              <option value="codex">codex</option>
-              <option value="aider">aider</option>
-              <option value="shell">shell</option>
-            </select>
-            <button type="submit" class="primary">Open</button>
-          </div>
-          <button type="button" id="new-shell" class="ghost">+ New shell</button>
-          <label class="field perm-field">
-            <span class="field-label">Claude permissions</span>
-            <select id="perm-select" title="How new Claude tabs handle permission prompts">
-              <option value="auto">auto · smart (recommended)</option>
-              <option value="acceptEdits">accept edits · ask on bash</option>
-              <option value="dontAsk">don't ask</option>
-              <option value="bypassPermissions">bypass 🚨 · no prompts</option>
-              <option value="default">ask each</option>
-              <option value="plan">plan · read-only</option>
-            </select>
-          </label>
-        </form>
+          <input id="pr-input" placeholder="owner/repo#123  ·  or paste a GitHub URL" autocomplete="off" spellcheck="false" />
 
-        <div class="auto-review">
-          <label class="check">
-            <input type="checkbox" id="auto-review-toggle" />
-            <span>Auto-review on open</span>
-          </label>
-          <select id="auto-review-tier" title="Review run automatically when the PR opens">
-            <option value="light">light · fast single pass</option>
-            <option value="standard" selected>standard · deep single pass</option>
-            <option value="complex">complex · diverse agents (local)</option>
-            <option value="ultra">ultra 💸 · paid cloud review</option>
+          <div id="engine-seg" class="seg" role="tablist">
+            <button type="button" data-engine="claude" class="on">claude</button>
+            <button type="button" data-engine="codex">codex</button>
+            <button type="button" data-engine="aider">aider</button>
+          </div>
+
+          <div id="intensity" class="chips">
+            <button type="button" data-tier="light" class="chip" title="Fast single pass">Light</button>
+            <button type="button" data-tier="standard" class="chip" title="Deep single pass">Standard</button>
+            <button type="button" data-tier="complex" class="chip" title="Diverse agents (local)">Complex</button>
+            <button type="button" data-tier="ultra" class="chip pay" title="Paid cloud review — double-click to select">Ultra 💸</button>
+          </div>
+
+          <select id="perm-select" class="perm-field" title="How new Claude tabs handle permission prompts">
+            <option value="auto">auto · smart (recommended)</option>
+            <option value="acceptEdits">accept edits · ask on bash</option>
+            <option value="dontAsk">don't ask</option>
+            <option value="bypassPermissions">bypass 🚨 · no prompts</option>
+            <option value="default">ask each</option>
+            <option value="plan">plan · read-only</option>
           </select>
-        </div>
+
+          <button type="submit" class="primary" id="open-btn">▸ Open &amp; review</button>
+          <button type="button" id="new-shell" class="ghost">+ New empty shell</button>
+        </form>
 
         <div class="section-head section-head-row">
           <span>History</span>
