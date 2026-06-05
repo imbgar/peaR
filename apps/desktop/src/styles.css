@@ -533,23 +533,27 @@ button:disabled { opacity: 0.38; cursor: default; }
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 7px;
-  padding: 9px 12px;
+  gap: 4px;
+  padding: 6px 12px;
   background: var(--elev);
   border-bottom: 1px solid var(--bd);
   animation: rise 0.5s var(--ease) 0.1s both;
 }
 .toolbar-group-label { margin-right: 2px; text-shadow: var(--glow); }
 .toolbar-spacer { flex: 1; }
-.toolbar-div { width: 1px; align-self: stretch; background: var(--bd2); margin: 2px 4px; }
+.toolbar-div { width: 1px; align-self: stretch; background: var(--bd2); margin: 3px 4px; }
 
+/* compact icon + label action button */
 .action {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 9px; font-size: 11px; font-weight: 500;
+  text-transform: none; letter-spacing: 0.2px;
   background: var(--inp);
   border: 1px solid var(--bd2);
   color: var(--tx);
-  text-transform: var(--case);
-  letter-spacing: var(--letter);
 }
+.action svg { width: 13px; height: 13px; flex: none; opacity: 0.82; }
+.action:hover:not(:disabled) svg, .action.active svg { opacity: 1; }
 .action:hover:not(:disabled) { border-color: var(--accent-d); color: var(--accent); box-shadow: var(--glow); }
 /* toggled-on state (e.g. Diff while the diff panel is showing) */
 .action.active {
