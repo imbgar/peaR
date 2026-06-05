@@ -61,6 +61,14 @@ export interface PrRecord {
   sessions: SessionRec[];
 }
 
+export interface LayoutEntry {
+  pr: PrRef | null;
+  cli: CliKind;
+  session_id?: string | null;
+  cwd?: string | null;
+  title: string;
+}
+
 export type Command =
   | {
       type: "open_pr";
@@ -70,7 +78,7 @@ export type Command =
       fresh?: boolean;
       session_id?: string | null;
     }
-  | { type: "open_scratch"; cli: CliKind; cwd: string | null }
+  | { type: "open_scratch"; cli: CliKind; cwd: string | null; session_id?: string | null }
   | { type: "close_tab"; tab: number }
   | { type: "input"; tab: number; bytes: number[] }
   | { type: "resize"; tab: number; cols: number; rows: number }
@@ -87,7 +95,10 @@ export type Command =
   | { type: "install_skills" }
   | { type: "load_diff"; tab: number }
   | { type: "watch_brain"; tab: number }
-  | { type: "stop_brain"; tab: number };
+  | { type: "stop_brain"; tab: number }
+  | { type: "save_layout"; active?: number | null }
+  | { type: "load_layout" }
+  | { type: "clear_layout" };
 
 export type Event =
   | { type: "tab_opened"; tab: number; title: string; pr: PrRef | null; cli: CliKind }
@@ -99,6 +110,7 @@ export type Event =
   | { type: "diff"; tab: number; diff: string; comments: DiffComment[] }
   | { type: "thought"; tab: number; kind: string; text: string; detail: string }
   | { type: "history"; entries: PrRecord[] }
+  | { type: "layout"; entries: LayoutEntry[]; active: number | null }
   | { type: "skills_status"; installed: boolean }
   | { type: "notice"; tab: number | null; message: string }
   | { type: "error"; tab: number | null; message: string };

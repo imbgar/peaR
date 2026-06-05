@@ -21,6 +21,8 @@ pub struct Session {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Box<dyn MasterPty + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
+    /// The spawned child's OS pid, used to read its live cwd for persist-session.
+    pid: Option<u32>,
 }
 
 impl Session {
@@ -78,6 +80,7 @@ impl Session {
             .take_writer()
             .map_err(|e| CoreError::Pty(e.to_string()))?;
         let killer = child.clone_killer();
+        let pid = child.process_id();
 
         // Pump PTY output -> Event::Output.
         let sink_out = sink.clone();
@@ -116,7 +119,13 @@ impl Session {
             writer: Arc::new(Mutex::new(writer)),
             master: pair.master,
             killer,
+            pid,
         })
+    }
+
+    /// The child process's OS pid (for reading its live cwd; see `macproc`).
+    pub fn pid(&self) -> Option<u32> {
+        self.pid
     }
 
     /// Forward keystrokes to the child's stdin.

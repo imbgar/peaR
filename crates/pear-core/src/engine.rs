@@ -19,7 +19,8 @@ use crate::dispatch;
 use crate::error::Result;
 use crate::github::GitHub;
 use crate::protocol::{
-    CliKind, Command, Event, PanelPayload, PrRef, ReviewButton, ReviewTier, TabId,
+    CliKind, Command, Event, Layout, LayoutEntry, PanelPayload, PrRef, ReviewButton, ReviewTier,
+    TabId,
 };
 use crate::session::{EventSink, Session};
 use crate::store::Store;
@@ -30,6 +31,10 @@ struct Tab {
     cli: CliKind,
     /// The Claude session id this tab is running (so we never resume a live one twice).
     session_id: Option<String>,
+    /// Working dir the tab was spawned in (fallback when the live cwd can't be read).
+    cwd: Option<String>,
+    /// Display title (PR short label or `shell N`) — persisted for restore.
+    title: String,
 }
 
 pub struct Engine {
@@ -38,6 +43,8 @@ pub struct Engine {
     github: Option<GitHub>,
     next: TabId,
     tabs: HashMap<TabId, Tab>,
+    /// Tab open order (for persist-session layout; the HashMap is unordered).
+    order: Vec<TabId>,
     /// Claude `--permission-mode` for launches (see `CLAUDE_PERM_MODES`).
     claude_perm: String,
     /// A session's wait-thread sends its `TabId` here when its process exits, so the
@@ -81,6 +88,7 @@ impl Engine {
             github,
             next: 1,
             tabs: HashMap::new(),
+            order: Vec::new(),
             claude_perm: "auto".to_string(),
             reaper_tx,
             reaper_rx,
@@ -120,7 +128,11 @@ impl Engine {
                 fresh,
                 session_id,
             } => self.open(Some(pr), cli, cwd, fresh, session_id),
-            Command::OpenScratch { cli, cwd } => self.open(None, cli, cwd, false, None),
+            Command::OpenScratch {
+                cli,
+                cwd,
+                session_id,
+            } => self.open(None, cli, cwd, false, session_id),
             Command::CloseTab { tab } => self.close(tab),
             Command::Input { tab, bytes } => self.input(tab, &bytes),
             Command::Resize { tab, cols, rows } => self.resize(tab, cols, rows),
@@ -146,6 +158,17 @@ impl Engine {
             Command::LoadDiff { tab } => self.load_diff(tab),
             Command::WatchBrain { tab } => self.watch_brain(tab),
             Command::StopBrain { tab } => self.stop_brain(tab),
+            Command::SaveLayout { active } => self.persist_layout(active),
+            Command::LoadLayout => {
+                let layout = self.store.read_layout();
+                self.emit(Event::Layout {
+                    entries: layout.entries,
+                    active: layout.active,
+                });
+            }
+            Command::ClearLayout => {
+                let _ = self.store.clear_layout();
+            }
             Command::CheckSkills => self.emit(Event::SkillsStatus {
                 installed: crate::skills_install::skills_installed(),
             }),
@@ -321,14 +344,18 @@ impl Engine {
                 pr: pr.clone(),
                 cli,
                 session_id: session_id.clone(),
+                cwd: spawn_cwd.clone(),
+                title: title.clone(),
             },
         );
+        self.order.push(tab);
         self.emit(Event::TabOpened {
             tab,
             title,
             pr: pr.clone(),
             cli,
         });
+        self.persist_layout(None);
         if forked_live {
             self.emit(Event::Notice {
                 tab: Some(tab),
@@ -431,16 +458,60 @@ impl Engine {
         // An unknown tab is normal here — the process may have self-exited and already
         // been reaped — so this is a silent no-op rather than an error.
         self.stop_brain(tab);
-        self.tabs.remove(&tab);
+        let existed = self.tabs.remove(&tab).is_some();
+        self.order.retain(|&t| t != tab);
+        if existed {
+            self.persist_layout(None);
+        }
+    }
+
+    /// The tab's live working directory (a shell that `cd`'d → where it is now), falling
+    /// back to the dir it was spawned in.
+    fn live_cwd(&self, t: &Tab) -> Option<String> {
+        t.session
+            .pid()
+            .and_then(crate::macproc::cwd_of)
+            .or_else(|| t.cwd.clone())
+    }
+
+    /// Snapshot the open tabs (in order) + the focused one, and write them to disk so the
+    /// next launch can restore the session. `active` is the focused tab, if known.
+    fn persist_layout(&self, active: Option<TabId>) {
+        let entries: Vec<LayoutEntry> = self
+            .order
+            .iter()
+            .filter_map(|id| self.tabs.get(id).map(|t| (id, t)))
+            .map(|(_, t)| LayoutEntry {
+                pr: t.pr.clone(),
+                cli: t.cli,
+                session_id: t.session_id.clone(),
+                cwd: self.live_cwd(t),
+                title: t.title.clone(),
+            })
+            .collect();
+        let active = active.and_then(|a| {
+            self.order
+                .iter()
+                .filter(|id| self.tabs.contains_key(id))
+                .position(|&id| id == a)
+        });
+        let _ = self.store.write_layout(&Layout { entries, active });
     }
 
     /// Drop tabs whose child process has exited on its own. Keeps the tab map
     /// authoritative so the resume "is this session still live?" check never sees a
     /// stale entry and spuriously forks. Drained at the start of every `handle`.
     fn reap_dead(&mut self) {
+        let mut reaped = false;
         while let Ok(tab) = self.reaper_rx.try_recv() {
             self.stop_brain(tab);
-            self.tabs.remove(&tab);
+            if self.tabs.remove(&tab).is_some() {
+                self.order.retain(|&t| t != tab);
+                reaped = true;
+            }
+        }
+        if reaped {
+            self.persist_layout(None);
         }
     }
 

@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{CoreError, Result};
-use crate::protocol::{CliKind, PrRecord, PrRef, SessionRec};
+use crate::protocol::{CliKind, Layout, PrRecord, PrRef, SessionRec};
 
 /// Owns the `<data-dir>/pear/` tree.
 #[derive(Debug, Clone)]
@@ -109,6 +109,34 @@ impl Store {
             self.write_history(&recs)?;
         }
         Ok(removed)
+    }
+
+    fn layout_path(&self) -> PathBuf {
+        self.root.join("session.json")
+    }
+
+    /// Persist the open-tab layout for restore on next launch.
+    pub fn write_layout(&self, layout: &Layout) -> Result<()> {
+        let json =
+            serde_json::to_vec_pretty(layout).map_err(|e| CoreError::Storage(e.to_string()))?;
+        fs::write(self.layout_path(), json).map_err(|e| CoreError::Storage(e.to_string()))
+    }
+
+    /// Load the persisted layout (missing/corrupt -> empty).
+    pub fn read_layout(&self) -> Layout {
+        fs::read(self.layout_path())
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    /// Forget the persisted layout (persist toggled off).
+    pub fn clear_layout(&self) -> Result<()> {
+        match fs::remove_file(self.layout_path()) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(CoreError::Storage(e.to_string())),
+        }
     }
 
     /// The id of the PR's most recently used session, if any.

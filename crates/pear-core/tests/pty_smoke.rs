@@ -21,6 +21,7 @@ fn shell_tab_echoes_input() {
     engine.handle(Command::OpenScratch {
         cli: CliKind::Shell,
         cwd: None,
+        session_id: None,
     });
 
     // Grab the tab id from the TabOpened event.
