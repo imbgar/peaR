@@ -72,6 +72,14 @@ interface TabView {
 const tabs = new Map<number, TabView>();
 let active: number | null = null;
 
+// Persist-session restore in flight: re-opening saved tabs, then focusing the saved one.
+let restoring: { remaining: number; activeIndex: number | null; openedIds: number[] } | null =
+  null;
+const persistOn = () => localStorage.getItem("pear.persist") !== "0"; // default ON
+function saveLayout() {
+  if (persistOn()) send({ type: "save_layout", active });
+}
+
 // Feature flag: the saved-review "Insight" panel (markdown render of a stored review) is
 // hard-coded off for now — the diff panel reuses #panel, so we only hide Insight's own
 // controls (the toggle + ⟳ reload). Flip to revive it later.
@@ -530,6 +538,16 @@ function handle(ev: CoreEvent) {
         scheduleAutoReview(ev.tab, pendingAutoReview);
       }
       pendingAutoReview = null; // consume — resumes/new opens never carry it
+      // During a persist-restore, record the new tab ids in order and focus the saved
+      // active one once they're all back.
+      if (restoring) {
+        restoring.openedIds.push(ev.tab);
+        if (--restoring.remaining <= 0) {
+          const idx = restoring.activeIndex;
+          if (idx != null && restoring.openedIds[idx] != null) setActive(restoring.openedIds[idx]);
+          restoring = null;
+        }
+      }
       break;
     }
     case "pr_meta": {
@@ -578,6 +596,21 @@ function handle(ev: CoreEvent) {
     }
     case "history": {
       renderHistory(ev.entries);
+      break;
+    }
+    case "layout": {
+      // Restore the saved tabs (in order). claude tabs resume their exact session via
+      // session_id; shells re-open in their last cwd.
+      if (!ev.entries.length) break;
+      restoring = { remaining: ev.entries.length, activeIndex: ev.active, openedIds: [] };
+      for (const e of ev.entries) {
+        if (e.pr) {
+          openPr(e.pr, e.cli, { fresh: false, session_id: e.session_id ?? undefined });
+        } else {
+          send({ type: "open_scratch", cli: e.cli, cwd: e.cwd ?? null, session_id: e.session_id ?? null });
+        }
+      }
+      setStatus(`restoring ${ev.entries.length} tab${ev.entries.length > 1 ? "s" : ""}…`);
       break;
     }
     case "skills_status": {
@@ -1040,6 +1073,23 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   // Brain drawer toggle (status bar) + close button.
   $("#brain-toggle").addEventListener("click", () => setBrain(!brainOpen()));
+
+  // Persist-session toggle (default ON): reopen the same tabs + sessions next launch.
+  const persistBtn = $("#persist-toggle");
+  persistBtn.classList.toggle("active", persistOn());
+  persistBtn.addEventListener("click", () => {
+    const next = !persistOn();
+    localStorage.setItem("pear.persist", next ? "1" : "0");
+    persistBtn.classList.toggle("active", next);
+    if (next) saveLayout();
+    else send({ type: "clear_layout" });
+    setStatus(next ? "persist on — these tabs reopen next launch" : "persist off — saved layout cleared");
+  });
+  // Best-effort capture of the latest cwd / focused tab before the window goes away.
+  window.addEventListener("beforeunload", saveLayout);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") saveLayout();
+  });
   $("#brain-close").addEventListener("click", () => setBrain(false));
 
   // Collapsible sidebar: hard toggle (status ☰ / sidebar ‹ / ⌘B), persisted. When
@@ -1150,5 +1200,6 @@ window.addEventListener("DOMContentLoaded", async () => {
   renderToolbar();
   send({ type: "load_history" });
   send({ type: "check_skills" }); // → skills_status; consent modal if /pr-* missing
+  if (persistOn()) send({ type: "load_layout" }); // → layout event → restore tabs + sessions
   setStatus("ready");
 });

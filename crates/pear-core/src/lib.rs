@@ -11,7 +11,7 @@
 //!
 //! let sink = Arc::new(|event| println!("{event:?}"));
 //! let mut engine = Engine::new(sink).unwrap();
-//! engine.handle(Command::OpenScratch { cli: CliKind::Shell, cwd: None });
+//! engine.handle(Command::OpenScratch { cli: CliKind::Shell, cwd: None, session_id: None });
 //! ```
 
 pub mod brain;
@@ -19,6 +19,7 @@ pub mod dispatch;
 pub mod engine;
 pub mod error;
 pub mod github;
+pub mod macproc;
 pub mod protocol;
 pub mod session;
 pub mod shellenv;
@@ -30,7 +31,8 @@ pub use engine::Engine;
 pub use error::{CoreError, Result};
 pub use github::GitHub;
 pub use protocol::{
-    CliKind, Command, Event, PrMeta, PrRecord, PrRef, ReviewButton, SessionRec, TabId,
+    CliKind, Command, Event, Layout, LayoutEntry, PrMeta, PrRecord, PrRef, ReviewButton,
+    SessionRec, TabId,
 };
 pub use session::EventSink;
 pub use store::Store;

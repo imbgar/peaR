@@ -177,6 +177,27 @@ pub struct PrRecord {
     pub sessions: Vec<SessionRec>,
 }
 
+/// One persisted open tab for persist-session restore. `cwd` is the tab's live working
+/// directory captured at save time (shells that `cd`'d restore where you left them).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LayoutEntry {
+    pub pr: Option<PrRef>,
+    pub cli: CliKind,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    pub title: String,
+}
+
+/// The persisted window layout: the ordered open tabs + which one was focused.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Layout {
+    pub entries: Vec<LayoutEntry>,
+    #[serde(default)]
+    pub active: Option<usize>,
+}
+
 /// Commands a frontend sends into the engine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -194,8 +215,14 @@ pub enum Command {
         #[serde(default)]
         session_id: Option<String>,
     },
-    /// Open a bare terminal tab not tied to a PR.
-    OpenScratch { cli: CliKind, cwd: Option<String> },
+    /// Open a bare terminal tab not tied to a PR. `session_id` (Claude) resumes that
+    /// session — used by persist-session restore of a non-PR Claude tab.
+    OpenScratch {
+        cli: CliKind,
+        cwd: Option<String>,
+        #[serde(default)]
+        session_id: Option<String>,
+    },
     /// Close a tab and kill its PTY.
     CloseTab { tab: TabId },
     /// Raw keystrokes from the terminal widget -> PTY stdin.
@@ -250,6 +277,16 @@ pub enum Command {
     WatchBrain { tab: TabId },
     /// Stop streaming the tab's thinking (e.g. the brain panel was closed).
     StopBrain { tab: TabId },
+    /// Persist the current window layout for restore on next launch. `active` is the
+    /// focused tab. The engine fills each tab's live cwd / pr / session id itself.
+    SaveLayout {
+        #[serde(default)]
+        active: Option<TabId>,
+    },
+    /// Ask for the persisted layout to restore (replied via `Event::Layout`).
+    LoadLayout,
+    /// Forget the persisted layout (persist toggled off).
+    ClearLayout,
 }
 
 /// Events the engine emits to the frontend.
@@ -290,6 +327,11 @@ pub enum Event {
     },
     /// Reply to `LoadHistory`.
     History { entries: Vec<PrRecord> },
+    /// The persisted layout to restore (reply to `LoadLayout`).
+    Layout {
+        entries: Vec<LayoutEntry>,
+        active: Option<usize>,
+    },
     /// Whether the bundled `/pr-*` skills are installed (reply to `CheckSkills`,
     /// also emitted after `InstallSkills`).
     SkillsStatus { installed: bool },
