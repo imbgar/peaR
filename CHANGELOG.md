@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.7] — 2026-06-05
+
+### Added
+- **Persist session across launches.** Closing and reopening peaR restores your open tabs with
+  the same AI sessions: claude tabs **resume the exact conversation** (via the saved session id),
+  and shell tabs re-open in their **last working directory** (captured the macOS way via
+  `proc_pidinfo`). A bottom-bar **`⟲ persist`** toggle (default on) controls it; off clears the
+  saved layout. (#40)
+
+### Fixed
+- **Diff & PR metadata work when launched from Finder/Dock.** A GUI launch inherits only the bare
+  system PATH, so `gh auth token` couldn't find `gh` and diff/metadata failed with *"no GitHub
+  token"*. peaR now resolves `gh` against the reconstructed login-shell PATH, and resolves the
+  token lazily so it recovers after a `gh auth login` without a restart. (#39)
+- **No duplicate tabs on reload.** Persist-restore was re-running on every frontend reload against
+  a live engine, accumulating duplicate tabs. Restore is now idempotent — it re-syncs existing
+  tabs and only restores from disk on a genuinely fresh start. (#41)
+
 ## [0.1.6] — 2026-06-04
 
 ### Added
