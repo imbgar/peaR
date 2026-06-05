@@ -1,7 +1,9 @@
-// Unified-diff parser + renderer for the PR diff panel. Dependency-free; all output
-// is built with the DOM (textContent), so PR content is never injected as HTML.
+// Unified-diff parser + renderer for the PR diff panel. Diff code is built with the
+// DOM (textContent), so diff content is never injected as HTML. Comment *bodies* are
+// markdown, rendered through the sanitizing `renderMarkdown` helper (see markdown.ts).
 
 import { Comment, DiffComment, Reaction, ReviewThread } from "./protocol";
+import { renderMarkdown } from "./markdown";
 
 type LineKind = "add" | "del" | "ctx";
 interface DLine {
@@ -306,7 +308,7 @@ export function relTime(iso: string): string {
 /**
  * Render one comment — author, relative time, body, and reaction rollups. Shared
  * by the inline diff threads and the conversation panel (same `Comment` shape).
- * All text is set via `textContent`, so comment bodies are never injected as HTML.
+ * The body is GitHub markdown, rendered via the sanitizing `renderMarkdown`.
  */
 export function commentEl(c: Comment): HTMLElement {
   const wrap = document.createElement("div");
@@ -321,8 +323,8 @@ export function commentEl(c: Comment): HTMLElement {
   when.textContent = relTime(c.created_at);
   top.append(who, when);
   const body = document.createElement("div");
-  body.className = "cv-body";
-  body.textContent = c.body;
+  body.className = "cv-body markdown";
+  renderMarkdown(body, c.body);
   wrap.append(top, body);
   if (c.reactions.length) wrap.appendChild(reactionRow(c.reactions));
   return wrap;
