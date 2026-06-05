@@ -283,8 +283,13 @@ pub enum Command {
         #[serde(default)]
         active: Option<TabId>,
     },
-    /// Ask for the persisted layout to restore (replied via `Event::Layout`).
-    LoadLayout,
+    /// Restore the persisted layout. The engine opens the saved tabs itself, and only on a
+    /// fresh start — a reload against a live engine re-syncs existing tabs instead of
+    /// duplicating. `restore` is the persist preference (false = a fresh engine opens nothing).
+    LoadLayout {
+        #[serde(default)]
+        restore: bool,
+    },
     /// Forget the persisted layout (persist toggled off).
     ClearLayout,
 }
@@ -327,11 +332,6 @@ pub enum Event {
     },
     /// Reply to `LoadHistory`.
     History { entries: Vec<PrRecord> },
-    /// The persisted layout to restore (reply to `LoadLayout`).
-    Layout {
-        entries: Vec<LayoutEntry>,
-        active: Option<usize>,
-    },
     /// Whether the bundled `/pr-*` skills are installed (reply to `CheckSkills`,
     /// also emitted after `InstallSkills`).
     SkillsStatus { installed: bool },

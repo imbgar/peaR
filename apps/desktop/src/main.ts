@@ -72,9 +72,6 @@ interface TabView {
 const tabs = new Map<number, TabView>();
 let active: number | null = null;
 
-// Persist-session restore in flight: re-opening saved tabs, then focusing the saved one.
-let restoring: { remaining: number; activeIndex: number | null; openedIds: number[] } | null =
-  null;
 const persistOn = () => localStorage.getItem("pear.persist") !== "0"; // default ON
 function saveLayout() {
   if (persistOn()) send({ type: "save_layout", active });
@@ -538,16 +535,6 @@ function handle(ev: CoreEvent) {
         scheduleAutoReview(ev.tab, pendingAutoReview);
       }
       pendingAutoReview = null; // consume — resumes/new opens never carry it
-      // During a persist-restore, record the new tab ids in order and focus the saved
-      // active one once they're all back.
-      if (restoring) {
-        restoring.openedIds.push(ev.tab);
-        if (--restoring.remaining <= 0) {
-          const idx = restoring.activeIndex;
-          if (idx != null && restoring.openedIds[idx] != null) setActive(restoring.openedIds[idx]);
-          restoring = null;
-        }
-      }
       break;
     }
     case "pr_meta": {
@@ -596,21 +583,6 @@ function handle(ev: CoreEvent) {
     }
     case "history": {
       renderHistory(ev.entries);
-      break;
-    }
-    case "layout": {
-      // Restore the saved tabs (in order). claude tabs resume their exact session via
-      // session_id; shells re-open in their last cwd.
-      if (!ev.entries.length) break;
-      restoring = { remaining: ev.entries.length, activeIndex: ev.active, openedIds: [] };
-      for (const e of ev.entries) {
-        if (e.pr) {
-          openPr(e.pr, e.cli, { fresh: false, session_id: e.session_id ?? undefined });
-        } else {
-          send({ type: "open_scratch", cli: e.cli, cwd: e.cwd ?? null, session_id: e.session_id ?? null });
-        }
-      }
-      setStatus(`restoring ${ev.entries.length} tab${ev.entries.length > 1 ? "s" : ""}…`);
       break;
     }
     case "skills_status": {
@@ -1200,6 +1172,8 @@ window.addEventListener("DOMContentLoaded", async () => {
   renderToolbar();
   send({ type: "load_history" });
   send({ type: "check_skills" }); // → skills_status; consent modal if /pr-* missing
-  if (persistOn()) send({ type: "load_layout" }); // → layout event → restore tabs + sessions
+  // Always sync the engine's tabs into this (possibly reloaded) frontend; the engine only
+  // *restores* the saved layout on a genuinely fresh start, so a reload never duplicates.
+  send({ type: "load_layout", restore: persistOn() });
   setStatus("ready");
 });

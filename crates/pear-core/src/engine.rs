@@ -159,13 +159,7 @@ impl Engine {
             Command::WatchBrain { tab } => self.watch_brain(tab),
             Command::StopBrain { tab } => self.stop_brain(tab),
             Command::SaveLayout { active } => self.persist_layout(active),
-            Command::LoadLayout => {
-                let layout = self.store.read_layout();
-                self.emit(Event::Layout {
-                    entries: layout.entries,
-                    active: layout.active,
-                });
-            }
+            Command::LoadLayout { restore } => self.load_layout(restore),
             Command::ClearLayout => {
                 let _ = self.store.clear_layout();
             }
@@ -496,6 +490,38 @@ impl Engine {
                 .position(|&id| id == a)
         });
         let _ = self.store.write_layout(&Layout { entries, active });
+    }
+
+    /// Restore the persisted layout — but only on a FRESH engine. If tabs are already open
+    /// (the frontend reloaded / HMR'd against a live engine), re-emit the existing tabs to
+    /// re-sync the UI instead of opening duplicates. `restore` is the persist preference;
+    /// when off, a fresh engine opens nothing.
+    fn load_layout(&mut self, restore: bool) {
+        if !self.tabs.is_empty() {
+            let live: Vec<(TabId, String, Option<PrRef>, CliKind)> = self
+                .order
+                .iter()
+                .filter_map(|id| {
+                    self.tabs
+                        .get(id)
+                        .map(|t| (*id, t.title.clone(), t.pr.clone(), t.cli))
+                })
+                .collect();
+            for (tab, title, pr, cli) in live {
+                self.emit(Event::TabOpened {
+                    tab,
+                    title,
+                    pr,
+                    cli,
+                });
+            }
+            return;
+        }
+        if restore {
+            for e in self.store.read_layout().entries {
+                self.open(e.pr, e.cli, e.cwd, false, e.session_id);
+            }
+        }
     }
 
     /// Drop tabs whose child process has exited on its own. Keeps the tab map
