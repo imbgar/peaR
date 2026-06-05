@@ -22,7 +22,16 @@ pub fn resolve_token() -> Option<String> {
             }
         }
     }
-    let out = Command::new("gh").args(["auth", "token"]).output().ok()?;
+    // Resolve `gh` against the login-shell PATH and inject that PATH — a Finder/Dock launch
+    // inherits only the bare system PATH, so a plain `gh` (in Homebrew / `~/.local/bin`) isn't
+    // found and the token can't be read. Mirrors the terminal-spawn PATH fix in `session.rs`.
+    let path = crate::shellenv::login_path();
+    let gh = crate::shellenv::resolve_program("gh", path);
+    let out = Command::new(&gh)
+        .args(["auth", "token"])
+        .env("PATH", path)
+        .output()
+        .ok()?;
     if out.status.success() {
         let t = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if !t.is_empty() {
