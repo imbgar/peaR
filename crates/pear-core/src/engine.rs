@@ -92,6 +92,16 @@ impl Engine {
         (self.sink)(e);
     }
 
+    /// The GitHub client, resolving the token lazily and caching it. Lets PR metadata /
+    /// diff recover after a `gh auth login` (or a Finder-launch PATH that only resolves
+    /// `gh` once warmed) without restarting the app.
+    fn github(&mut self) -> Option<GitHub> {
+        if self.github.is_none() {
+            self.github = GitHub::from_env().ok();
+        }
+        self.github.clone()
+    }
+
     fn alloc(&mut self) -> TabId {
         let id = self.next;
         self.next += 1;
@@ -388,7 +398,7 @@ impl Engine {
                 });
             }
 
-            match self.github.clone() {
+            match self.github() {
                 Some(gh) => {
                     let sink = self.sink.clone();
                     let store = self.store.clone();
@@ -576,7 +586,7 @@ impl Engine {
             });
             return;
         };
-        let Some(gh) = self.github.clone() else {
+        let Some(gh) = self.github() else {
             self.emit(Event::Notice {
                 tab: Some(tab),
                 message: "no GitHub token — diff unavailable (run `gh auth login`)".into(),
