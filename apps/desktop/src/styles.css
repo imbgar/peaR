@@ -712,8 +712,17 @@ button:disabled { opacity: 0.38; cursor: default; }
 }
 .cv-body.markdown img { max-width: 100%; border-radius: var(--r-sm); }
 .cv-body.markdown hr { border: none; border-top: 1px solid var(--bd); margin: 8px 0; }
-.cv-body.markdown table { border-collapse: collapse; margin: 6px 0; display: block; overflow-x: auto; max-width: 100%; }
-.cv-body.markdown th, .cv-body.markdown td { border: 1px solid var(--bd); padding: 3px 7px; }
+/* Tables scroll horizontally rather than crushing (a 3-col table in a ~340px panel
+   would otherwise hard-break every word). display:block + width:max-content makes the
+   table its natural width and the block scrolls when that exceeds the panel. */
+.cv-body.markdown table {
+  border-collapse: collapse; margin: 6px 0;
+  display: block; width: max-content; max-width: 100%; overflow-x: auto;
+}
+.cv-body.markdown th, .cv-body.markdown td {
+  border: 1px solid var(--bd); padding: 3px 8px;
+  word-break: normal; overflow-wrap: normal; white-space: nowrap;
+}
 .cv-body.markdown input[type="checkbox"] { margin-right: 5px; vertical-align: middle; }
 .cv-react { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
 .cv-pill {
