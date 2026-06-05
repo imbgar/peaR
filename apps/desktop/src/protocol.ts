@@ -61,14 +61,6 @@ export interface PrRecord {
   sessions: SessionRec[];
 }
 
-export interface LayoutEntry {
-  pr: PrRef | null;
-  cli: CliKind;
-  session_id?: string | null;
-  cwd?: string | null;
-  title: string;
-}
-
 export type Command =
   | {
       type: "open_pr";
@@ -97,7 +89,7 @@ export type Command =
   | { type: "watch_brain"; tab: number }
   | { type: "stop_brain"; tab: number }
   | { type: "save_layout"; active?: number | null }
-  | { type: "load_layout" }
+  | { type: "load_layout"; restore: boolean }
   | { type: "clear_layout" };
 
 export type Event =
@@ -110,7 +102,6 @@ export type Event =
   | { type: "diff"; tab: number; diff: string; comments: DiffComment[] }
   | { type: "thought"; tab: number; kind: string; text: string; detail: string }
   | { type: "history"; entries: PrRecord[] }
-  | { type: "layout"; entries: LayoutEntry[]; active: number | null }
   | { type: "skills_status"; installed: boolean }
   | { type: "notice"; tab: number | null; message: string }
   | { type: "error"; tab: number | null; message: string };
