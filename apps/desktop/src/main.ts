@@ -1371,12 +1371,12 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (active === null) return;
     send({ type: "reply_review_thread", tab: active, thread_id, body });
   });
-  // "Ask Claude about this section" — type the prompt into the active tab's session
-  // (a single line referencing the file + lines) and submit it, then focus the terminal.
+  // "Ask Claude about this section" — submit the prompt into the active tab's session.
+  // Routes through submit_prompt (delayed-Enter) so a long prompt actually submits
+  // instead of leaving a trailing newline; then focus the terminal.
   setAskHandler((message) => {
     if (active === null) return;
-    const bytes = Array.from(new TextEncoder().encode(message + "\r"));
-    send({ type: "input", tab: active, bytes });
+    send({ type: "submit_prompt", tab: active, text: message });
     tabs.get(active)?.term.focus();
     setStatus("asked Claude about the selected section");
   });

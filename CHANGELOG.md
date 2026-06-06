@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+- **"Ask Claude" buttons now actually submit.** The per-comment insight buttons (and the
+  diff "ask about this section" ✦) typed the prompt into the agent but left it sitting on
+  a trailing newline instead of submitting — they used raw `Input` + `\r`, which a long
+  prompt buffers like a paste (the `\r` lands as a newline). They now route through the
+  same delayed-Enter path (`write_then_submit`) the review macros use, via a new
+  `SubmitPrompt` command. Audited every action button: the toolbar review macros and the
+  launch tiers already submitted correctly; the comment writes go through the GitHub API
+  (not the terminal). This was the only broken submit path. (#53)
+
 ## [0.1.9] — 2026-06-06
 
 Themes, finished comments, and update notifications.

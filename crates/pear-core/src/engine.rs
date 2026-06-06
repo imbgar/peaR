@@ -135,6 +135,7 @@ impl Engine {
             } => self.open(None, cli, cwd, false, session_id),
             Command::CloseTab { tab } => self.close(tab),
             Command::Input { tab, bytes } => self.input(tab, &bytes),
+            Command::SubmitPrompt { tab, text } => self.submit_prompt(tab, &text),
             Command::Resize { tab, cols, rows } => self.resize(tab, cols, rows),
             Command::Button { tab, button, agent } => self.button(tab, button, agent),
             Command::StartReview { tab, tier, agent } => self.start_review(tab, tier, agent),
@@ -627,6 +628,26 @@ impl Engine {
             None => self.emit(Event::Notice {
                 tab: Some(tab),
                 message: "input: unknown tab".into(),
+            }),
+        }
+    }
+
+    /// Type a prompt into the tab's agent and submit it via the delayed-Enter path,
+    /// so a long prompt (e.g. the "ask Claude" buttons) actually submits instead of
+    /// leaving a trailing newline in the input.
+    fn submit_prompt(&mut self, tab: TabId, text: &str) {
+        match self.tabs.get_mut(&tab) {
+            Some(t) => {
+                if let Err(e) = t.session.write_then_submit(text.as_bytes()) {
+                    self.emit(Event::Notice {
+                        tab: Some(tab),
+                        message: format!("submit: {e}"),
+                    });
+                }
+            }
+            None => self.emit(Event::Notice {
+                tab: Some(tab),
+                message: "submit: unknown tab".into(),
             }),
         }
     }

@@ -298,6 +298,11 @@ pub enum Command {
     CloseTab { tab: TabId },
     /// Raw keystrokes from the terminal widget -> PTY stdin.
     Input { tab: TabId, bytes: Vec<u8> },
+    /// Type a prompt into the tab's agent and submit it. Unlike raw `Input`, this routes
+    /// through the delayed-Enter path (`write_then_submit`) so a long prompt actually
+    /// submits instead of leaving a trailing newline in the input. Used by the
+    /// "ask Claude" buttons.
+    SubmitPrompt { tab: TabId, text: String },
     /// Terminal widget resized; update the PTY window size.
     Resize { tab: TabId, cols: u16, rows: u16 },
     /// A review button was pressed; the engine writes the mapped macro to the PTY.

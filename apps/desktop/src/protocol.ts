@@ -110,6 +110,7 @@ export type Command =
   | { type: "open_scratch"; cli: CliKind; cwd: string | null; session_id?: string | null }
   | { type: "close_tab"; tab: number }
   | { type: "input"; tab: number; bytes: number[] }
+  | { type: "submit_prompt"; tab: number; text: string }
   | { type: "resize"; tab: number; cols: number; rows: number }
   | { type: "button"; tab: number; button: ReviewButton; agent?: CliKind }
   | { type: "start_review"; tab: number; tier: ReviewTier; agent?: CliKind }
