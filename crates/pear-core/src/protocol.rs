@@ -234,6 +234,22 @@ pub struct SessionRec {
     pub id: String,
     pub started: String,     // RFC3339
     pub last_opened: String, // RFC3339
+    /// Number of user+assistant messages in the session transcript — a cheap "how much
+    /// happened here" signal for the history view (the busiest session is starred).
+    /// Filled in on history load; defaults to 0 when the transcript can't be read.
+    #[serde(default)]
+    pub messages: u64,
+}
+
+/// Favorited repos + PRs, persisted in the data dir. Repos are `"owner/repo"` keys.
+/// Drives the history tree's ★ marks, the "favorites only" filter, and manually-added
+/// entries (a favorite that has no history still shows in the tree).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Favorites {
+    #[serde(default)]
+    pub repos: Vec<String>,
+    #[serde(default)]
+    pub prs: Vec<PrRef>,
 }
 
 /// A reviewed PR and its session history (newest session first).
@@ -335,6 +351,18 @@ pub enum Command {
     DeleteHistory { pr: PrRef },
     /// Restore history from the last clear's backup.
     RestoreHistory,
+    /// Favorite (`on: true`) or unfavorite a whole repo by `owner`/`repo`. A favorited
+    /// repo shows in the history tree (with a ★) even if it has no sessions yet. Replied
+    /// via `Event::History`.
+    FavoriteRepo {
+        owner: String,
+        repo: String,
+        on: bool,
+    },
+    /// Favorite (`on: true`) or unfavorite a single PR. A favorited PR with no history
+    /// still shows in the tree. Doubles as the "add a PR to the list" action. Replied via
+    /// `Event::History`.
+    FavoritePr { pr: PrRef, on: bool },
     /// Report whether the bundled `/pr-*` review skills are installed in
     /// `~/.claude/skills` (replied via `Event::SkillsStatus`).
     CheckSkills,
@@ -460,8 +488,14 @@ pub enum Event {
         text: String,
         detail: String,
     },
-    /// Reply to `LoadHistory`.
-    History { entries: Vec<PrRecord> },
+    /// Reply to `LoadHistory` (and to the clear/delete/restore/favorite commands).
+    /// `entries` carry per-session message counts; `favorites` drives the ★ marks,
+    /// the favorites-only filter, and manually-added repos/PRs.
+    History {
+        entries: Vec<PrRecord>,
+        #[serde(default)]
+        favorites: Favorites,
+    },
     /// Whether the bundled `/pr-*` skills are installed (reply to `CheckSkills`,
     /// also emitted after `InstallSkills`).
     SkillsStatus { installed: bool },

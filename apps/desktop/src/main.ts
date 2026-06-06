@@ -12,6 +12,7 @@ import "@fontsource/ibm-plex-mono/700.css";
 import "@fontsource-variable/hanken-grotesk";
 import "@fontsource-variable/jetbrains-mono";
 import { marked } from "marked";
+import { parse as parseSearchQuery, type SearchParserResult } from "search-query-parser";
 import { initUpdater } from "./update";
 import {
   renderDiff,
@@ -30,6 +31,7 @@ import {
   CliKind,
   Comment,
   DiffComment,
+  Favorites,
   PanelPayload,
   PrComments,
   PrMeta,
@@ -104,7 +106,7 @@ const TERM_FONT: Record<string, string> = {
 };
 
 function currentTheme(): string {
-  return document.documentElement.dataset.theme || "phosphor";
+  return document.documentElement.dataset.theme || "instrument";
 }
 
 // ── per-tab view state ──────────────────────────────────────────────────────
@@ -376,6 +378,8 @@ function toggleSessionPop(rec: PrRecord, anchor: HTMLElement) {
     empty.textContent = "no Claude sessions yet";
     pop.appendChild(empty);
   } else {
+    // Star the busiest session (most messages) — the one most worth resuming.
+    const maxMsgs = Math.max(0, ...rec.sessions.map((s) => s.messages || 0));
     rec.sessions.forEach((s, i) => {
       const row = document.createElement("div");
       row.className = "session-row";
@@ -389,7 +393,9 @@ function toggleSessionPop(rec: PrRecord, anchor: HTMLElement) {
       when.textContent = (i === 0 ? "latest · " : "") + relTime(s.last_opened);
       const id = document.createElement("div");
       id.className = "session-id";
-      id.textContent = s.id.slice(0, 8);
+      const busiest = maxMsgs > 0 && (s.messages || 0) === maxMsgs;
+      id.textContent = `${s.id.slice(0, 8)} · ${s.messages || 0} msg${busiest ? " ★" : ""}`;
+      if (busiest) id.classList.add("session-busiest");
       meta.append(when, id);
       row.append(tick, meta);
       row.onclick = (e) => {
@@ -417,71 +423,354 @@ function toggleSessionPop(rec: PrRecord, anchor: HTMLElement) {
   sessionPopEl = pop;
 }
 
-function renderHistory(entries: PrRecord[]) {
+// ── history panel: flat list ⇄ org→repo→PR tree · structured search · favorites ──
+let historyEntries: PrRecord[] = [];
+let favorites: Favorites = { repos: [], prs: [] };
+let historyView: "list" | "tree" = localStorage.getItem("pear.histView") === "tree" ? "tree" : "list";
+let favOnly = localStorage.getItem("pear.favOnly") === "1";
+let histQuery = "";
+
+const isRepoFav = (owner: string, repo: string) => favorites.repos.includes(`${owner}/${repo}`);
+const isPrFav = (pr: PrRef) =>
+  favorites.prs.some((p) => p.owner === pr.owner && p.repo === pr.repo && p.number === pr.number);
+const favRepo = (owner: string, repo: string, on: boolean) =>
+  send({ type: "favorite_repo", owner, repo, on });
+const favPr = (pr: PrRef, on: boolean) => send({ type: "favorite_pr", pr, on });
+const isFavRec = (r: PrRecord) => isPrFav(r.pr) || isRepoFav(r.pr.owner, r.pr.repo);
+const totalMessages = (r: PrRecord) => r.sessions.reduce((s, x) => s + (x.messages || 0), 0);
+
+/** Structured search: `repo:x org:y pr:123 cli:claude` tag filters + free text (all AND). */
+function matchFields(owner: string, repo: string, num: string, title: string, cli: string): boolean {
+  const raw = histQuery.trim();
+  if (!raw) return true;
+  const q = parseSearchQuery(raw, {
+    keywords: ["repo", "org", "pr", "cli"],
+    tokenize: true,
+    alwaysArray: true,
+  }) as SearchParserResult;
+  const has = (field: unknown, val: string) => {
+    if (!field) return true;
+    const arr = Array.isArray(field) ? field : [field];
+    return arr.some((f) => val.toLowerCase().includes(String(f).toLowerCase()));
+  };
+  if (!has(q.org, owner) || !has(q.repo, repo) || !has(q.pr, num) || !has(q.cli, cli)) return false;
+  const text = Array.isArray(q.text) ? q.text : q.text ? [q.text] : [];
+  if (text.length) {
+    const hay = `${owner}/${repo}#${num} ${title}`.toLowerCase();
+    if (!text.every((t) => hay.includes(String(t).toLowerCase()))) return false;
+  }
+  return true;
+}
+const matchesRec = (r: PrRecord) =>
+  matchFields(r.pr.owner, r.pr.repo, String(r.pr.number), r.title, r.cli);
+
+function visibleEntries(): PrRecord[] {
+  return historyEntries.filter((r) => (!favOnly || isFavRec(r)) && matchesRec(r));
+}
+
+function renderHistory() {
   closeSessionPop();
+  closeHistCtx();
+  $("#view-list").classList.toggle("on", historyView === "list");
+  $("#view-tree").classList.toggle("on", historyView === "tree");
+  $("#fav-only").classList.toggle("on", favOnly);
+  historyEl.classList.toggle("tree-mode", historyView === "tree");
   historyEl.innerHTML = "";
+  const entries = visibleEntries();
+  if (historyView === "tree") renderHistTree(entries);
+  else renderHistList(entries);
+}
+
+function emptyRow(text: string) {
+  const li = document.createElement("li");
+  li.className = "history-empty";
+  li.textContent = text;
+  historyEl.appendChild(li);
+}
+
+function renderHistList(entries: PrRecord[]) {
   if (entries.length === 0) {
-    const li = document.createElement("li");
-    li.className = "history-empty";
-    li.textContent = "no reviews yet";
-    historyEl.appendChild(li);
+    emptyRow(historyEntries.length ? "no matches" : "no reviews yet");
     return;
   }
-  for (const rec of entries) {
-    const li = document.createElement("li");
-    li.className = "history-item";
-    li.title = `${rec.pr.owner}/${shortLabel(rec.pr)} — ${rec.title}`;
+  for (const rec of entries) historyEl.appendChild(historyItem(rec));
+}
 
-    const main = document.createElement("div");
-    main.className = "history-main";
+function favIconBtn(pr: PrRef): HTMLButtonElement {
+  const on = isPrFav(pr);
+  const b = iconBtn(on ? "★" : "☆", on ? "Unfavorite PR" : "Favorite PR", (e) => {
+    e.stopPropagation();
+    favPr(pr, !on);
+  });
+  b.classList.add("hicon-fav");
+  if (on) b.classList.add("on");
+  return b;
+}
 
-    const ref = document.createElement("span");
-    ref.className = "history-ref";
-    ref.textContent = shortLabel(rec.pr);
-    if (rec.sessions.length > 0) {
-      const badge = document.createElement("span");
-      badge.className = "history-badge";
-      badge.textContent = String(rec.sessions.length);
-      badge.title = `${rec.sessions.length} session(s) — click to expand`;
-      ref.appendChild(badge);
-    }
-    main.appendChild(ref);
+function historyItem(rec: PrRecord): HTMLElement {
+  const li = document.createElement("li");
+  li.className = "history-item";
+  li.title = `${rec.pr.owner}/${shortLabel(rec.pr)} — ${rec.title}`;
 
-    const title = document.createElement("span");
-    title.className = "history-title";
-    title.textContent = rec.title;
-    main.appendChild(title);
-
-    main.onclick = (e) => {
-      e.stopPropagation();
-      toggleSessionPop(rec, li);
-    };
-    li.appendChild(main);
-
-    const actions = document.createElement("div");
-    actions.className = "history-actions";
-    actions.appendChild(
-      iconBtn("⟲", "Resume latest session", (e) => {
-        e.stopPropagation();
-        openPr(rec.pr, rec.cli);
-      }),
-    );
-    actions.appendChild(
-      iconBtn("+", "New session for this PR", (e) => {
-        e.stopPropagation();
-        openPr(rec.pr, rec.cli, { fresh: true });
-      }),
-    );
-    const del = iconBtn("×", "Delete this history entry", (e) => {
-      e.stopPropagation();
-      send({ type: "delete_history", pr: rec.pr });
-    });
-    del.classList.add("hicon-danger");
-    actions.appendChild(del);
-    li.appendChild(actions);
-
-    historyEl.appendChild(li);
+  const main = document.createElement("div");
+  main.className = "history-main";
+  const ref = document.createElement("span");
+  ref.className = "history-ref";
+  if (isFavRec(rec)) {
+    const star = document.createElement("span");
+    star.className = "history-fav-mark";
+    star.textContent = "★";
+    ref.appendChild(star);
   }
+  ref.appendChild(document.createTextNode(shortLabel(rec.pr)));
+  if (rec.sessions.length > 0) {
+    const msgs = totalMessages(rec);
+    const badge = document.createElement("span");
+    badge.className = "history-badge";
+    badge.textContent = msgs > 0 ? `${rec.sessions.length}·${msgs}✦` : String(rec.sessions.length);
+    badge.title = `${rec.sessions.length} session(s), ${msgs} messages — click to expand`;
+    ref.appendChild(badge);
+  }
+  main.appendChild(ref);
+  const title = document.createElement("span");
+  title.className = "history-title";
+  title.textContent = rec.title;
+  main.appendChild(title);
+  main.onclick = (e) => {
+    e.stopPropagation();
+    toggleSessionPop(rec, li);
+  };
+  li.appendChild(main);
+  li.oncontextmenu = (e) => prContextMenu(e, rec.pr, rec);
+
+  const actions = document.createElement("div");
+  actions.className = "history-actions";
+  actions.appendChild(favIconBtn(rec.pr));
+  actions.appendChild(
+    iconBtn("⟲", "Resume latest session", (e) => {
+      e.stopPropagation();
+      openPr(rec.pr, rec.cli);
+    }),
+  );
+  actions.appendChild(
+    iconBtn("+", "New session for this PR", (e) => {
+      e.stopPropagation();
+      openPr(rec.pr, rec.cli, { fresh: true });
+    }),
+  );
+  const del = iconBtn("×", "Delete this history entry", (e) => {
+    e.stopPropagation();
+    send({ type: "delete_history", pr: rec.pr });
+  });
+  del.classList.add("hicon-danger");
+  actions.appendChild(del);
+  li.appendChild(actions);
+  return li;
+}
+
+// ── org → repo → PR tree ──────────────────────────────────────────────────────
+type PrCell = { pr: PrRef; rec: PrRecord | null };
+
+function renderHistTree(entries: PrRecord[]) {
+  const orgs = new Map<string, Map<string, Map<number, PrCell>>>();
+  const repoOf = (owner: string, repo: string) => {
+    const o = orgs.get(owner) ?? orgs.set(owner, new Map()).get(owner)!;
+    return o.get(repo) ?? o.set(repo, new Map()).get(repo)!;
+  };
+  for (const r of entries) repoOf(r.pr.owner, r.pr.repo).set(r.pr.number, { pr: r.pr, rec: r });
+  // Merge favorited repos / PRs so added-but-empty favorites still appear (search-filtered).
+  for (const key of favorites.repos) {
+    const [owner, repo] = key.split("/");
+    if (owner && repo && matchFields(owner, repo, "", "", "")) repoOf(owner, repo);
+  }
+  for (const pr of favorites.prs) {
+    if (!matchFields(pr.owner, pr.repo, String(pr.number), "", "")) continue;
+    const m = repoOf(pr.owner, pr.repo);
+    if (!m.has(pr.number)) m.set(pr.number, { pr, rec: null });
+  }
+
+  if (orgs.size === 0) {
+    emptyRow(historyEntries.length || favorites.repos.length || favorites.prs.length ? "no matches" : "no reviews yet");
+    return;
+  }
+
+  for (const owner of [...orgs.keys()].sort((a, b) => a.localeCompare(b))) {
+    const org = treeNode("org", owner, "");
+    const repos = orgs.get(owner)!;
+    for (const repo of [...repos.keys()].sort((a, b) => a.localeCompare(b))) {
+      const fav = isRepoFav(owner, repo);
+      const repoNode = treeNode("repo", repo, fav ? "★" : "");
+      repoNode.rowBtn.oncontextmenu = (e) => repoContextMenu(e, owner, repo);
+      const cells = repos.get(repo)!;
+      const nums = [...cells.keys()].sort((a, b) => b - a);
+      for (const num of nums) repoNode.children.appendChild(treePrNode(cells.get(num)!));
+      if (nums.length === 0) {
+        const none = document.createElement("div");
+        none.className = "tree-none";
+        none.textContent = "no PRs yet";
+        repoNode.children.appendChild(none);
+      }
+      org.children.appendChild(repoNode.el);
+    }
+    historyEl.appendChild(org.el);
+  }
+}
+
+function treeNode(
+  kind: "org" | "repo",
+  label: string,
+  mark: string,
+): { el: HTMLElement; rowBtn: HTMLElement; children: HTMLElement } {
+  const el = document.createElement("li");
+  el.className = `tree-node tn-${kind}`;
+  const rowBtn = document.createElement("button");
+  rowBtn.type = "button";
+  rowBtn.className = "tree-row";
+  const chev = document.createElement("span");
+  chev.className = "tree-chev";
+  chev.textContent = "▾";
+  const name = document.createElement("span");
+  name.className = "tree-name";
+  name.textContent = label;
+  rowBtn.append(chev, name);
+  if (mark) {
+    const m = document.createElement("span");
+    m.className = "tree-mark on";
+    m.textContent = mark;
+    rowBtn.appendChild(m);
+  }
+  const children = document.createElement("ul");
+  children.className = "tree-children";
+  rowBtn.addEventListener("click", () => {
+    const c = children.classList.toggle("collapsed");
+    rowBtn.classList.toggle("collapsed", c);
+  });
+  el.append(rowBtn, children);
+  return { el, rowBtn, children };
+}
+
+function treePrNode({ pr, rec }: PrCell): HTMLElement {
+  const li = document.createElement("li");
+  li.className = "tree-pr";
+  const row = document.createElement("div");
+  row.className = "tree-row tree-leaf";
+  const fav = isPrFav(pr);
+  const mark = document.createElement("span");
+  mark.className = "tree-mark" + (fav ? " on" : "");
+  mark.textContent = fav ? "★" : "•";
+  const name = document.createElement("span");
+  name.className = "tree-name";
+  name.textContent = `#${pr.number}${rec ? ` · ${rec.title}` : ""}`;
+  row.append(mark, name);
+  if (rec && rec.sessions.length > 0) {
+    const msgs = totalMessages(rec);
+    const badge = document.createElement("span");
+    badge.className = "tree-badge";
+    badge.textContent = `${rec.sessions.length}·${msgs}✦`;
+    badge.title = `${rec.sessions.length} session(s), ${msgs} messages`;
+    row.appendChild(badge);
+  }
+  row.onclick = (e) => {
+    e.stopPropagation();
+    if (rec) toggleSessionPop(rec, li);
+    else openPr(pr, "claude");
+  };
+  row.oncontextmenu = (e) => prContextMenu(e, pr, rec);
+  li.appendChild(row);
+  return li;
+}
+
+// ── right-click context menu + add-favorite prompt ────────────────────────────
+interface CtxItem {
+  label: string;
+  danger?: boolean;
+  on: () => void;
+}
+function openHistCtx(x: number, y: number, items: CtxItem[]) {
+  const ctx = $("#hist-ctx");
+  ctx.innerHTML = "";
+  for (const it of items) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "hist-ctx-item" + (it.danger ? " danger" : "");
+    b.textContent = it.label;
+    b.onclick = () => {
+      closeHistCtx();
+      it.on();
+    };
+    ctx.appendChild(b);
+  }
+  ctx.classList.remove("hidden");
+  ctx.style.left = `${Math.min(x, window.innerWidth - 190)}px`;
+  ctx.style.top = `${Math.min(y, window.innerHeight - ctx.offsetHeight - 8)}px`;
+}
+function closeHistCtx() {
+  $("#hist-ctx").classList.add("hidden");
+}
+function repoContextMenu(e: MouseEvent, owner: string, repo: string) {
+  e.preventDefault();
+  e.stopPropagation();
+  const fav = isRepoFav(owner, repo);
+  openHistCtx(e.clientX, e.clientY, [
+    { label: fav ? "★ Unfavorite repo" : "☆ Favorite repo", on: () => favRepo(owner, repo, !fav) },
+  ]);
+}
+function prContextMenu(e: MouseEvent, pr: PrRef, rec: PrRecord | null) {
+  e.preventDefault();
+  e.stopPropagation();
+  const fav = isPrFav(pr);
+  const cli = rec?.cli ?? "claude";
+  const items: CtxItem[] = [
+    { label: fav ? "★ Unfavorite PR" : "☆ Favorite PR", on: () => favPr(pr, !fav) },
+    { label: "⟲ Resume latest", on: () => openPr(pr, cli) },
+    { label: "+ New session", on: () => openPr(pr, cli, { fresh: true }) },
+  ];
+  if (rec) items.push({ label: "× Delete history", danger: true, on: () => send({ type: "delete_history", pr }) });
+  openHistCtx(e.clientX, e.clientY, items);
+}
+
+/** The "+" add button: a small popover to favorite a repo (`owner/repo`) or PR (`owner/repo#123`). */
+function promptHistAdd() {
+  const ctx = $("#hist-ctx");
+  ctx.innerHTML = "";
+  const form = document.createElement("form");
+  form.className = "hist-add-form";
+  const inp = document.createElement("input");
+  inp.className = "hist-add-input";
+  inp.placeholder = "owner/repo  or  owner/repo#123";
+  inp.autocomplete = "off";
+  const ok = document.createElement("button");
+  ok.type = "submit";
+  ok.className = "hist-add-ok";
+  ok.textContent = "Add";
+  form.append(inp, ok);
+  form.onsubmit = (e) => {
+    e.preventDefault();
+    addFavRef(inp.value.trim());
+    closeHistCtx();
+  };
+  ctx.appendChild(form);
+  ctx.classList.remove("hidden");
+  const r = $("#hist-add").getBoundingClientRect();
+  ctx.style.left = `${Math.max(8, r.right - 210)}px`;
+  ctx.style.top = `${r.bottom + 4}px`;
+  inp.focus();
+}
+function addFavRef(v: string) {
+  if (!v) return;
+  const pr = parsePrRef(v);
+  if (pr) {
+    favPr(pr, true);
+    setStatus(`favorited ${shortLabel(pr)}`);
+    return;
+  }
+  const m = v.match(/^([^/\s]+)\/([^/\s#]+)$/);
+  if (m) {
+    favRepo(m[1], m[2], true);
+    setStatus(`favorited ${m[1]}/${m[2]}`);
+    return;
+  }
+  setStatus("couldn't parse — use owner/repo or owner/repo#123");
 }
 
 // ── terminal lifecycle ──────────────────────────────────────────────────────
@@ -656,7 +945,9 @@ function handle(ev: CoreEvent) {
       break;
     }
     case "history": {
-      renderHistory(ev.entries);
+      historyEntries = ev.entries;
+      favorites = ev.favorites ?? { repos: [], prs: [] };
+      renderHistory();
       break;
     }
     case "skills_status": {
@@ -769,8 +1060,8 @@ function installSkills() {
 // ── theming ─────────────────────────────────────────────────────────────────
 // Display name + a representative accent swatch for the picker.
 const THEMES: ReadonlyArray<{ id: string; label: string; swatch: string }> = [
-  { id: "phosphor", label: "Phosphor", swatch: "#ffb000" },
   { id: "instrument", label: "Instrument", swatch: "#c6f24e" },
+  { id: "phosphor", label: "Phosphor", swatch: "#ffb000" },
   { id: "vscode", label: "VS Code", swatch: "#0a84ff" },
   { id: "dark", label: "Dark", swatch: "#2f81f7" },
   { id: "macos-dark", label: "macOS Dark", swatch: "#0a84ff" },
@@ -778,7 +1069,7 @@ const THEMES: ReadonlyArray<{ id: string; label: string; swatch: string }> = [
 ];
 
 function applyTheme(name: string) {
-  if (!XTERM_THEMES[name]) name = "phosphor";
+  if (!XTERM_THEMES[name]) name = "instrument";
   document.documentElement.dataset.theme = name;
   localStorage.setItem("pear.theme", name);
   const meta = THEMES.find((t) => t.id === name);
@@ -1317,6 +1608,36 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#history-clear").addEventListener("click", () => send({ type: "clear_history" }));
   $("#history-restore").addEventListener("click", () => send({ type: "restore_history" }));
 
+  // History view: list ⇄ org→repo→PR tree, favorites-only filter, add-favorite, search.
+  const setHistView = (v: "list" | "tree") => {
+    historyView = v;
+    localStorage.setItem("pear.histView", v);
+    renderHistory();
+  };
+  $("#view-list").addEventListener("click", () => setHistView("list"));
+  $("#view-tree").addEventListener("click", () => setHistView("tree"));
+  $("#fav-only").addEventListener("click", () => {
+    favOnly = !favOnly;
+    localStorage.setItem("pear.favOnly", favOnly ? "1" : "0");
+    renderHistory();
+  });
+  $("#hist-add").addEventListener("click", (e) => {
+    e.stopPropagation();
+    promptHistAdd();
+  });
+  const searchEl = $<HTMLInputElement>("#hist-search");
+  searchEl.addEventListener("input", () => {
+    histQuery = searchEl.value;
+    renderHistory();
+  });
+  // Dismiss the history context menu / add popover on any outside click or Escape.
+  document.addEventListener("click", (e) => {
+    if (!(e.target as HTMLElement)?.closest("#hist-ctx")) closeHistCtx();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeHistCtx();
+  });
+
   // Action buttons. copy_content is frontend-handled (clipboard); the rest — including
   // save_review (now an agent "write the review to markdown" command) — are core macros.
   toolbarEl.querySelectorAll<HTMLButtonElement>("button[data-btn]").forEach((b) => {
@@ -1515,7 +1836,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   const hashTheme = location.hash.slice(1);
   const initialTheme = XTERM_THEMES[hashTheme]
     ? hashTheme
-    : localStorage.getItem("pear.theme") || "phosphor";
+    : localStorage.getItem("pear.theme") || "instrument";
   initThemePicker();
   applyTheme(initialTheme);
 

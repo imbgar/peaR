@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{CoreError, Result};
-use crate::protocol::{CliKind, Layout, PrRecord, PrRef, SessionRec};
+use crate::protocol::{CliKind, Favorites, Layout, PrRecord, PrRef, SessionRec};
 
 /// Owns the `<data-dir>/pear/` tree.
 #[derive(Debug, Clone)]
@@ -72,6 +72,45 @@ impl Store {
 
     fn history_backup_path(&self) -> PathBuf {
         self.root.join("history.bak.json")
+    }
+
+    fn favorites_path(&self) -> PathBuf {
+        self.root.join("favorites.json")
+    }
+
+    /// Load the favorited repos + PRs (missing/corrupt -> empty).
+    pub fn favorites(&self) -> Favorites {
+        fs::read(self.favorites_path())
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    fn write_favorites(&self, f: &Favorites) -> Result<()> {
+        let json = serde_json::to_vec_pretty(f).map_err(|e| CoreError::Storage(e.to_string()))?;
+        fs::write(self.favorites_path(), json).map_err(|e| CoreError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Favorite / unfavorite a repo (`"owner/repo"` key). Idempotent.
+    pub fn toggle_favorite_repo(&self, owner: &str, repo: &str, on: bool) -> Result<()> {
+        let key = format!("{owner}/{repo}");
+        let mut f = self.favorites();
+        f.repos.retain(|r| r != &key);
+        if on {
+            f.repos.push(key);
+        }
+        self.write_favorites(&f)
+    }
+
+    /// Favorite / unfavorite a single PR. Idempotent.
+    pub fn toggle_favorite_pr(&self, pr: &PrRef, on: bool) -> Result<()> {
+        let mut f = self.favorites();
+        f.prs.retain(|p| p != pr);
+        if on {
+            f.prs.push(pr.clone());
+        }
+        self.write_favorites(&f)
     }
 
     /// Clear the history, backing it up first so it can be restored (across runs —
@@ -187,6 +226,7 @@ impl Store {
                         id: id.to_string(),
                         started: now.to_string(),
                         last_opened: now.to_string(),
+                        messages: 0, // filled in on history load (engine::history_payload)
                     },
                 );
             }

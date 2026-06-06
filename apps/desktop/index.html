@@ -50,13 +50,20 @@
         </form>
 
         <div class="section-head section-head-row">
-          <span>History</span>
+          <span class="hist-tabs">
+            <button type="button" id="view-list" class="hist-tab on">History</button>
+            <button type="button" id="view-tree" class="hist-tab">Tree</button>
+          </span>
           <span class="section-actions">
+            <button type="button" id="fav-only" class="mini icon" title="Show only favorites">★</button>
+            <button type="button" id="hist-add" class="mini icon" title="Add a repo or PR (owner/repo or owner/repo#123)">+</button>
             <button type="button" id="history-clear" class="mini" title="Clear history (restorable)">clear</button>
             <button type="button" id="history-restore" class="mini" title="Restore last cleared history">restore</button>
           </span>
         </div>
+        <input type="text" id="hist-search" class="hist-search" placeholder="search · repo:x org:y pr:123" autocomplete="off" spellcheck="false" />
         <ul id="history"></ul>
+        <div id="hist-ctx" class="hist-ctx hidden"></div>
       </aside>
 
       <section id="workspace">

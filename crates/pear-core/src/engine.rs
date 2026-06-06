@@ -100,6 +100,17 @@ impl Engine {
         (self.sink)(e);
     }
 
+    /// Emit `Event::History` on a worker thread — enriching each session with its message
+    /// count reads transcript files, which we keep off the engine lock.
+    fn emit_history(&self) {
+        let store = self.store.clone();
+        let sink = self.sink.clone();
+        std::thread::spawn(move || {
+            let (entries, favorites) = history_payload(&store);
+            sink(Event::History { entries, favorites });
+        });
+    }
+
     /// The GitHub client, resolving the token lazily and caching it. Lets PR metadata /
     /// diff recover after a `gh auth login` (or a Finder-launch PATH that only resolves
     /// `gh` once warmed) without restarting the app.
@@ -152,9 +163,7 @@ impl Engine {
                     message: format!("Claude permission mode: {mode}"),
                 });
             }
-            Command::LoadHistory => self.emit(Event::History {
-                entries: self.store.history(),
-            }),
+            Command::LoadHistory => self.emit_history(),
             Command::LoadDiff { tab } => self.load_diff(tab),
             Command::LoadComments { tab } => self.load_comments(tab),
             Command::ToggleReaction {
@@ -253,9 +262,7 @@ impl Engine {
                         tab: None,
                         message: format!("cleared {n} PR(s) — Restore to undo"),
                     });
-                    self.emit(Event::History {
-                        entries: self.store.history(),
-                    });
+                    self.emit_history();
                 }
                 Err(e) => self.emit(Event::Error {
                     tab: None,
@@ -263,9 +270,7 @@ impl Engine {
                 }),
             },
             Command::DeleteHistory { pr } => match self.store.delete_entry(&pr) {
-                Ok(_) => self.emit(Event::History {
-                    entries: self.store.history(),
-                }),
+                Ok(_) => self.emit_history(),
                 Err(e) => self.emit(Event::Error {
                     tab: None,
                     message: format!("delete history: {e}"),
@@ -281,13 +286,27 @@ impl Engine {
                         tab: None,
                         message: format!("restored {n} PR(s)"),
                     });
-                    self.emit(Event::History {
-                        entries: self.store.history(),
-                    });
+                    self.emit_history();
                 }
                 Err(e) => self.emit(Event::Error {
                     tab: None,
                     message: format!("restore history: {e}"),
+                }),
+            },
+            Command::FavoriteRepo { owner, repo, on } => {
+                match self.store.toggle_favorite_repo(&owner, &repo, on) {
+                    Ok(()) => self.emit_history(),
+                    Err(e) => self.emit(Event::Error {
+                        tab: None,
+                        message: format!("favorite repo: {e}"),
+                    }),
+                }
+            }
+            Command::FavoritePr { pr, on } => match self.store.toggle_favorite_pr(&pr, on) {
+                Ok(()) => self.emit_history(),
+                Err(e) => self.emit(Event::Error {
+                    tab: None,
+                    message: format!("favorite PR: {e}"),
                 }),
             },
         }
@@ -435,9 +454,7 @@ impl Engine {
             // Refresh the sidebar now — history is recorded on OPEN (not close), so the
             // just-opened PR should appear immediately. The gh-meta thread below
             // re-emits once the real title resolves.
-            self.emit(Event::History {
-                entries: self.store.history(),
-            });
+            self.emit_history();
 
             // Working dir: either check out the PR branch in the found repo, or tell
             // the user we couldn't locate it (reviews won't have a repo otherwise).
@@ -496,9 +513,8 @@ impl Engine {
                             // Update the title only (no session change), then re-emit
                             // history so the sidebar entry shows the real PR title.
                             let _ = store.record_open(&pr, &meta.title, cli, None, &now);
-                            sink(Event::History {
-                                entries: store.history(),
-                            });
+                            let (entries, favorites) = history_payload(&store);
+                            sink(Event::History { entries, favorites });
                             sink(Event::PrMeta { tab, meta });
                         }
                         Err(e) => sink(Event::Notice {
@@ -923,6 +939,19 @@ fn first_line(bytes: &[u8]) -> String {
         .find(|l| !l.trim().is_empty())
         .unwrap_or("")
         .to_string()
+}
+
+/// Build the `Event::History` payload: history records with each session's message count
+/// filled in (read from its transcript), plus the persisted favorites. Reads files, so
+/// run it off the engine lock (see `emit_history`).
+fn history_payload(store: &Store) -> (Vec<crate::protocol::PrRecord>, crate::protocol::Favorites) {
+    let mut entries = store.history();
+    for r in &mut entries {
+        for s in &mut r.sessions {
+            s.messages = crate::brain::count_messages(&s.id);
+        }
+    }
+    (entries, store.favorites())
 }
 
 fn now_rfc3339() -> String {

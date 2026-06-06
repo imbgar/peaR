@@ -88,6 +88,7 @@ export interface SessionRec {
   id: string;
   started: string;
   last_opened: string;
+  messages: number;
 }
 
 export interface PrRecord {
@@ -96,6 +97,11 @@ export interface PrRecord {
   last_opened: string;
   cli: CliKind;
   sessions: SessionRec[];
+}
+
+export interface Favorites {
+  repos: string[]; // "owner/repo" keys
+  prs: PrRef[];
 }
 
 export type Command =
@@ -120,6 +126,8 @@ export type Command =
   | { type: "clear_history" }
   | { type: "delete_history"; pr: PrRef }
   | { type: "restore_history" }
+  | { type: "favorite_repo"; owner: string; repo: string; on: boolean }
+  | { type: "favorite_pr"; pr: PrRef; on: boolean }
   | { type: "check_skills" }
   | { type: "install_skills" }
   | { type: "load_diff"; tab: number }
@@ -158,7 +166,7 @@ export type Event =
   | { type: "diff"; tab: number; diff: string; comments: DiffComment[] }
   | { type: "comments"; tab: number; comments: PrComments }
   | { type: "thought"; tab: number; kind: string; text: string; detail: string }
-  | { type: "history"; entries: PrRecord[] }
+  | { type: "history"; entries: PrRecord[]; favorites: Favorites }
   | { type: "skills_status"; installed: boolean }
   | { type: "notice"; tab: number | null; message: string }
   | { type: "error"; tab: number | null; message: string };
