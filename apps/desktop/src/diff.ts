@@ -668,12 +668,26 @@ function reactionRow(c: Comment): HTMLElement {
 function renderThread(t: ReviewThread): HTMLElement {
   const block = document.createElement("div");
   block.className = "diff-thread hidden" + (t.is_resolved ? " resolved" : "");
-  if (t.is_resolved || t.is_outdated) {
+  if (t.is_resolved || t.is_outdated || (onResolve && t.id)) {
     const tag = document.createElement("div");
     tag.className = "dt-state";
-    tag.textContent = [t.is_resolved ? "✓ resolved" : "", t.is_outdated ? "outdated" : ""]
-      .filter(Boolean)
-      .join(" · ");
+    const label = document.createElement("span");
+    label.textContent =
+      [t.is_resolved ? "✓ resolved" : "", t.is_outdated ? "outdated" : ""].filter(Boolean).join(" · ") ||
+      "open";
+    tag.appendChild(label);
+    if (onResolve && t.id) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "dt-resolve";
+      btn.textContent = t.is_resolved ? "Unresolve" : "Resolve";
+      btn.addEventListener("click", () => {
+        btn.disabled = true;
+        btn.textContent = t.is_resolved ? "Unresolving…" : "Resolving…";
+        onResolve!(t.id, !t.is_resolved);
+      });
+      tag.appendChild(btn);
+    }
     block.appendChild(tag);
   }
   for (const c of t.comments) block.appendChild(commentEl(c));
@@ -736,9 +750,11 @@ export interface NewComment {
 type CreateFn = (c: NewComment) => void;
 type ReplyFn = (threadId: string, body: string) => void;
 type AskFn = (message: string) => void;
+type ResolveFn = (threadId: string, resolved: boolean) => void;
 let onCreate: CreateFn | null = null;
 let onReply: ReplyFn | null = null;
 let onAsk: AskFn | null = null;
+let onResolve: ResolveFn | null = null;
 let pendingReviewId: string | null = null;
 export function setCreateHandler(fn: CreateFn) {
   onCreate = fn;
@@ -749,6 +765,10 @@ export function setReplyHandler(fn: ReplyFn) {
 /** Set the handler that sends an "ask Claude about this section" prompt to the tab. */
 export function setAskHandler(fn: AskFn) {
   onAsk = fn;
+}
+/** Set the handler that resolves / unresolves an inline thread. */
+export function setResolveHandler(fn: ResolveFn) {
+  onResolve = fn;
 }
 /** The viewer's pending review id (drives the composer's review button label). */
 export function setPendingReview(id: string | null) {

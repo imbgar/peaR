@@ -141,6 +141,7 @@ export type Command =
     }
   | { type: "submit_review"; tab: number; review_id: string; event: string; body: string }
   | { type: "reply_review_thread"; tab: number; thread_id: string; body: string }
+  | { type: "resolve_thread"; tab: number; thread_id: string; resolved: boolean }
   | { type: "watch_brain"; tab: number }
   | { type: "stop_brain"; tab: number }
   | { type: "save_layout"; active?: number | null }

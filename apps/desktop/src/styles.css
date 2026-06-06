@@ -818,9 +818,18 @@ button:disabled { opacity: 0.38; cursor: default; }
 .diff-thread .cv-cmt { padding: 5px 0; border-top: 1px solid var(--bd); }
 .diff-thread .cv-cmt:first-of-type { border-top: none; }
 .dt-state {
+  display: flex; align-items: center; gap: 8px;
   font-family: var(--font-mono); font-size: 9.5px; text-transform: uppercase;
-  letter-spacing: 1px; color: var(--green); margin-bottom: 2px;
+  letter-spacing: 1px; color: var(--green); margin-bottom: 4px;
 }
+.diff-thread:not(.resolved) .dt-state { color: var(--dim); }
+.dt-resolve {
+  margin-left: auto; font-family: var(--font-mono); font-size: 10px; text-transform: none;
+  letter-spacing: 0; cursor: pointer; padding: 2px 8px;
+  background: var(--inp); border: 1px solid var(--bd2); color: var(--dim); border-radius: var(--r-sm);
+}
+.dt-resolve:hover:not(:disabled) { color: var(--green); border-color: color-mix(in srgb, var(--green) 55%, transparent); }
+.dt-resolve:disabled { opacity: 0.55; cursor: default; }
 
 /* ── PR diff panel ─────────────────────────────────────────────────────────── */
 .panel-body.diff-mode { padding: 0; }

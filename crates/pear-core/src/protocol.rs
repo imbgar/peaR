@@ -392,6 +392,13 @@ pub enum Command {
         thread_id: String,
         body: String,
     },
+    /// Resolve (`resolved: true`) or unresolve an inline review thread by node id.
+    /// The engine re-fetches and replies with a fresh `Event::Comments`.
+    ResolveThread {
+        tab: TabId,
+        thread_id: String,
+        resolved: bool,
+    },
     /// Start streaming the tab's Claude session *thinking* to the brain panel
     /// (replied via `Event::Thought`s). No-op for non-Claude / session-less tabs.
     WatchBrain { tab: TabId },

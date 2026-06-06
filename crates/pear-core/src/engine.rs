@@ -217,6 +217,13 @@ impl Engine {
             } => self.comment_mutation(tab, move |gh, _pr| {
                 gh.reply_review_thread(&thread_id, &body)
             }),
+            Command::ResolveThread {
+                tab,
+                thread_id,
+                resolved,
+            } => self.comment_mutation(tab, move |gh, _pr| {
+                gh.set_thread_resolved(&thread_id, resolved)
+            }),
             Command::WatchBrain { tab } => self.watch_brain(tab),
             Command::StopBrain { tab } => self.stop_brain(tab),
             Command::SaveLayout { active } => self.persist_layout(active),
