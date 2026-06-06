@@ -15,6 +15,7 @@ import { marked } from "marked";
 import { initUpdater } from "./update";
 import {
   renderDiff,
+  parseDiff,
   commentEl,
   setReactionHandler,
   setCreateHandler,
@@ -23,6 +24,7 @@ import {
   setResolveHandler,
   setPendingReview,
   setDiffCloseHandler,
+  type TreeLevel,
 } from "./diff";
 import {
   Command,
@@ -142,6 +144,7 @@ const TOOLBAR_ICONS: Record<string, string> = {
   video: `<circle cx="8" cy="8" r="5.3"/><path d="M6.8 5.9v4.2l3.4-2.1z"/>`,
   copy: `<rect x="5.2" y="5.2" width="7.3" height="7.3" rx="1.2"/><path d="M3.5 10.8V4.5a1.3 1.3 0 011.3-1.3H10.8"/>`,
   comments: `<path d="M2.8 4.2a1.2 1.2 0 011.2-1.2h8a1.2 1.2 0 011.2 1.2v5a1.2 1.2 0 01-1.2 1.2H6l-2.6 2.3V10.4H4a1.2 1.2 0 01-1.2-1.2z"/>`,
+  tree: `<path d="M4 3v8.5"/><path d="M4 5.4h3.4M4 9.6h3.4"/><rect x="8" y="4.1" width="4.3" height="2.6" rx="0.6"/><rect x="8" y="8.3" width="4.3" height="2.6" rx="0.6"/>`,
   diff: `<path d="M4 6.2h6.5l-2-2M12 9.8H5.5l2 2"/>`,
   save: `<path d="M8 3v6.3M5.3 6.8 8 9.5l2.7-2.7"/><path d="M3.5 12.5h9"/>`,
 };
@@ -544,6 +547,7 @@ function setActive(id: number) {
   if (stageEl.classList.contains("panel-open") && panelBodyEl.classList.contains("diff-mode")) {
     syncDiffToActive();
   }
+  renderTreeRail(); // follow the active tab (re-render for a diff, or hide for a non-diff)
   // The conversation panel + pending-review bar follow the active tab.
   if (stageEl.classList.contains("comments-open")) syncCommentsToActive();
   setPendingReview(commentsCache.get(id)?.pending_review_id ?? null);
@@ -653,6 +657,11 @@ function handle(ev: CoreEvent) {
     }
     case "thought": {
       if (ev.tab === brainTab) appendThought(ev.kind, ev.text, ev.detail);
+      break;
+    }
+    case "repo_tree": {
+      repoTreeCache.set(ev.tab, ev.files);
+      if (ev.tab === active && treeOpen && treeLevel !== "diff") renderTreeRail();
       break;
     }
     case "history": {
@@ -840,6 +849,7 @@ function setPanel(open: boolean) {
   document
     .getElementById("diff-btn")
     ?.classList.toggle("active", open && panelBodyEl.classList.contains("diff-mode"));
+  renderTreeRail(); // hide the file-tree rail when the diff panel isn't showing
   requestAnimationFrame(refitActive);
 }
 
@@ -867,6 +877,7 @@ function showDiff(tab: number, diff: string, comments: DiffComment[]) {
   // present; renderDiff falls back to the flat REST comments until they arrive.
   renderDiff(panelBodyEl, diff, comments, commentsCache.get(tab)?.threads ?? []);
   setPanel(true);
+  renderTreeRail(); // re-sync the file-tree rail (open state persists across diffs)
   setStatus(`diff · ${comments.length} comment${comments.length === 1 ? "" : "s"}`);
 }
 
@@ -880,6 +891,265 @@ function showDiffMessage(tab: number, msg: string) {
   div.textContent = msg;
   panelBodyEl.appendChild(div);
   setPanel(true);
+}
+
+// ── diff file-tree rail ───────────────────────────────────────────────────────
+// A GitHub-style file tree to the left of the diff. The "Files" toolbar button toggles
+// it; the rail's own header drills between three scopes (◂ widens, ▸ narrows):
+//   • "diff" — only the files included in the diff (default; click to jump to one).
+//   • "dir"  — every file under the highest directory that contains a change.
+//   • "repo" — the whole repository.
+// Changed files show their +adds / −dels / 💬 count and are clickable; others are context.
+const repoTreeCache = new Map<number, string[]>(); // tab → repo-relative tracked files
+let treeOpen = false;
+let treeLevel: TreeLevel = "diff";
+
+interface FStat {
+  adds: number;
+  dels: number;
+  comments: number;
+}
+interface TNode {
+  name: string;
+  full: string; // real repo-relative path (matches a .diff-file's data-path)
+  children: Map<string, TNode>;
+  isFile: boolean;
+  hasChange: boolean;
+}
+// One step wider / narrower in scope (◂ / ▸), clamped at the ends.
+const WIDER: Record<TreeLevel, TreeLevel> = { diff: "dir", dir: "repo", repo: "repo" };
+const NARROWER: Record<TreeLevel, TreeLevel> = { repo: "dir", dir: "diff", diff: "diff" };
+
+function diffShowing(): boolean {
+  return stageEl.classList.contains("panel-open") && panelBodyEl.classList.contains("diff-mode");
+}
+
+/** Per-changed-file stats for the active tab: adds/dels from the diff, comment counts
+ *  from the inline review threads. Its keys are exactly the diff's changed paths. */
+function fileStats(tab: number): Map<string, FStat> {
+  const m = new Map<string, FStat>();
+  const d = diffCache.get(tab);
+  if (d) for (const f of parseDiff(d.diff)) m.set(f.path, { adds: f.adds, dels: f.dels, comments: 0 });
+  for (const t of commentsCache.get(tab)?.threads ?? []) {
+    const s = m.get(t.path);
+    if (s) s.comments += t.comments.length;
+  }
+  return m;
+}
+
+/** The deepest directory containing every changed file ("" = repo root). */
+function changedRoot(paths: string[]): string {
+  if (!paths.length) return "";
+  const dirs = paths.map((p) => p.split("/").slice(0, -1));
+  let common = dirs[0];
+  for (const segs of dirs.slice(1)) {
+    let i = 0;
+    while (i < common.length && i < segs.length && common[i] === segs[i]) i++;
+    common = common.slice(0, i);
+  }
+  return common.join("/");
+}
+
+/** Toggle the file-tree rail (the "Files" toolbar button). Opening ensures the diff is shown. */
+function toggleFileTree() {
+  if (active === null) return;
+  if (treeOpen) {
+    closeTree();
+    return;
+  }
+  if (!diffShowing()) syncDiffToActive(); // the tree is the diff's companion
+  treeOpen = true;
+  if (treeLevel !== "diff" && !repoTreeCache.has(active)) send({ type: "load_repo_tree", tab: active });
+  renderTreeRail();
+}
+
+function setTreeLevel(level: TreeLevel) {
+  treeOpen = true;
+  treeLevel = level;
+  // dir / repo need the repo's full file list — fetch lazily, render when it lands.
+  if (level !== "diff" && active !== null && !repoTreeCache.has(active)) {
+    send({ type: "load_repo_tree", tab: active });
+  }
+  renderTreeRail();
+}
+
+function closeTree() {
+  treeOpen = false;
+  renderTreeRail();
+}
+
+/** Reflect tree state on the Files toolbar button + the rail's ◂ / ▸ drilldown buttons. */
+function syncTreeControls() {
+  document.getElementById("files-btn")?.classList.toggle("active", treeOpen);
+  const wider = document.getElementById("dtree-wider") as HTMLButtonElement | null;
+  const narrower = document.getElementById("dtree-narrower") as HTMLButtonElement | null;
+  if (wider) wider.disabled = treeLevel === "repo";
+  if (narrower) narrower.disabled = treeLevel === "diff";
+}
+
+/** Re-render the rail for the active tab + current scope. */
+function renderTreeRail() {
+  syncTreeControls();
+  const rail = $("#diff-tree");
+  const show = treeOpen && active !== null && diffShowing();
+  rail.classList.toggle("hidden", !show);
+  if (!show || active === null) return;
+
+  const tab = active;
+  const stats = fileStats(tab);
+  const changed = [...stats.keys()];
+  const scopeEl = $("#dtree-scope");
+  const body = $("#dtree-body");
+
+  let files: string[];
+  let strip = "";
+  if (treeLevel === "diff") {
+    if (!diffCache.has(tab)) {
+      scopeEl.textContent = "diff";
+      body.innerHTML = `<div class="dtree-empty">loading diff…</div>`;
+      return;
+    }
+    files = changed;
+    scopeEl.textContent = `${changed.length} diff file${changed.length === 1 ? "" : "s"}`;
+  } else {
+    const repo = repoTreeCache.get(tab);
+    if (!repo) {
+      scopeEl.textContent = "listing…";
+      body.innerHTML = `<div class="dtree-empty">listing repo…</div>`;
+      return;
+    }
+    if (treeLevel === "dir") {
+      const root = changedRoot(changed);
+      strip = root;
+      files = root ? repo.filter((p) => p === root || p.startsWith(root + "/")) : repo;
+      scopeEl.textContent = root ? `${root}/` : "repo root";
+    } else {
+      files = repo;
+      scopeEl.textContent = "whole repo";
+    }
+  }
+  body.innerHTML = "";
+  if (!files.length) {
+    body.innerHTML = `<div class="dtree-empty">no files</div>`;
+    return;
+  }
+  body.appendChild(buildTree(files, stats, strip));
+}
+
+/** Build a nested folder/file tree, stripping `strip` (a dir prefix) from the displayed root. */
+function buildTree(files: string[], stats: Map<string, FStat>, strip: string): HTMLElement {
+  const root: TNode = { name: "", full: "", children: new Map(), isFile: false, hasChange: false };
+  for (const full of files) {
+    const isCh = stats.has(full);
+    const rel = strip && full.startsWith(strip + "/") ? full.slice(strip.length + 1) : full;
+    const parts = rel.split("/");
+    let node = root;
+    root.hasChange ||= isCh;
+    let acc = strip;
+    parts.forEach((part, i) => {
+      acc = acc ? `${acc}/${part}` : part;
+      let child = node.children.get(part);
+      if (!child) {
+        child = {
+          name: part,
+          full: acc,
+          children: new Map(),
+          isFile: i === parts.length - 1,
+          hasChange: false,
+        };
+        node.children.set(part, child);
+      }
+      child.hasChange ||= isCh;
+      node = child;
+    });
+  }
+  const out = document.createElement("div");
+  out.className = "dtree-list";
+  renderNodes(root, out, stats);
+  return out;
+}
+
+function renderNodes(node: TNode, container: HTMLElement, stats: Map<string, FStat>) {
+  const kids = [...node.children.values()].sort((a, b) =>
+    a.isFile === b.isFile ? a.name.localeCompare(b.name) : a.isFile ? 1 : -1,
+  );
+  for (const k of kids) {
+    if (k.isFile) {
+      const st = stats.get(k.full);
+      const el = document.createElement("button");
+      el.type = "button";
+      el.className = "dtree-file" + (st ? " changed" : " plain");
+      el.title = k.full;
+      const name = document.createElement("span");
+      name.className = "dtree-fname";
+      name.textContent = k.name;
+      el.appendChild(name);
+      if (st) {
+        const meta = document.createElement("span");
+        meta.className = "dtree-fstat";
+        if (st.comments) {
+          const c = document.createElement("span");
+          c.className = "dtree-fc";
+          c.textContent = `${st.comments}💬`;
+          meta.appendChild(c);
+        }
+        if (st.adds) {
+          const a = document.createElement("span");
+          a.className = "dtree-fa";
+          a.textContent = `+${st.adds}`;
+          meta.appendChild(a);
+        }
+        if (st.dels) {
+          const dd = document.createElement("span");
+          dd.className = "dtree-fd";
+          dd.textContent = `−${st.dels}`;
+          meta.appendChild(dd);
+        }
+        el.appendChild(meta);
+        el.addEventListener("click", () => jumpToFile(k.full));
+      } else {
+        el.disabled = true; // context only — not in the diff
+      }
+      container.appendChild(el);
+    } else {
+      const folder = document.createElement("div");
+      folder.className = "dtree-folder";
+      const head = document.createElement("button");
+      head.type = "button";
+      head.className = "dtree-dir";
+      const chev = document.createElement("span");
+      chev.className = "dtree-chev";
+      chev.textContent = "▾";
+      const name = document.createElement("span");
+      name.className = "dtree-name";
+      name.textContent = k.name;
+      head.append(chev, name);
+      const childWrap = document.createElement("div");
+      childWrap.className = "dtree-children";
+      // Collapse folders with nothing changed inside (keep the changed path expanded).
+      if (!k.hasChange) {
+        head.classList.add("collapsed");
+        childWrap.classList.add("collapsed");
+      }
+      head.addEventListener("click", () => {
+        const c = childWrap.classList.toggle("collapsed");
+        head.classList.toggle("collapsed", c);
+      });
+      folder.append(head, childWrap);
+      renderNodes(k, childWrap, stats);
+      container.appendChild(folder);
+    }
+  }
+}
+
+/** Expand + scroll a file's diff card into view, with a brief highlight. */
+function jumpToFile(path: string) {
+  const card = panelBodyEl.querySelector<HTMLElement>(`.diff-file[data-path="${CSS.escape(path)}"]`);
+  if (!card) return;
+  card.classList.remove("collapsed");
+  card.scrollIntoView({ block: "start", behavior: "smooth" });
+  card.classList.add("dtree-jump");
+  setTimeout(() => card.classList.remove("dtree-jump"), 1100);
 }
 
 /** Point the (open) diff panel at the active tab: cache → instant, PR-without-cache →
@@ -1387,6 +1657,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
   // The diff toolbar's × closes the panel.
   setDiffCloseHandler(() => setPanel(false));
+  // File tree: a top-toolbar "Files" button toggles the rail; the rail's own ◂ / ▸
+  // drill between scopes (◂ widens diff → dir → repo, ▸ narrows back).
+  $("#files-btn").addEventListener("click", toggleFileTree);
+  $("#dtree-wider").addEventListener("click", () => setTreeLevel(WIDER[treeLevel]));
+  $("#dtree-narrower").addEventListener("click", () => setTreeLevel(NARROWER[treeLevel]));
+  $("#dtree-close").addEventListener("click", () => closeTree());
   // Insight is hard-coded off for now — hide its controls (the panel itself is reused
   // by the diff view, so it stays). Flip INSIGHT_ENABLED to bring these back.
   if (!INSIGHT_ENABLED) {

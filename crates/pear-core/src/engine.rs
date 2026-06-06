@@ -224,6 +224,7 @@ impl Engine {
             } => self.comment_mutation(tab, move |gh, _pr| {
                 gh.set_thread_resolved(&thread_id, resolved)
             }),
+            Command::LoadRepoTree { tab } => self.load_repo_tree(tab),
             Command::WatchBrain { tab } => self.watch_brain(tab),
             Command::StopBrain { tab } => self.stop_brain(tab),
             Command::SaveLayout { active } => self.persist_layout(active),
@@ -816,6 +817,24 @@ impl Engine {
         });
     }
 
+    /// List the tab repo's tracked files (`git ls-files` in its live cwd) for the diff
+    /// file-tree panel, on a worker thread. A non-repo / failure yields an empty list.
+    fn load_repo_tree(&mut self, tab: TabId) {
+        let cwd = self.tabs.get(&tab).and_then(|t| self.live_cwd(t));
+        let Some(cwd) = cwd else {
+            self.emit(Event::RepoTree {
+                tab,
+                files: Vec::new(),
+            });
+            return;
+        };
+        let sink = self.sink.clone();
+        std::thread::spawn(move || {
+            let files = git_ls_files(&cwd).unwrap_or_default();
+            sink(Event::RepoTree { tab, files });
+        });
+    }
+
     /// Run a comment-write mutation (`op`) on a worker thread, then re-fetch the PR's
     /// comments and emit a fresh `Event::Comments` so the UI reflects authoritative
     /// state. Shared by reactions, new comments, replies, and review submission.
@@ -923,6 +942,29 @@ fn first_line(bytes: &[u8]) -> String {
         .find(|l| !l.trim().is_empty())
         .unwrap_or("")
         .to_string()
+}
+
+/// Tracked files (repo-relative paths) under `cwd`, via `git ls-files`. `None` when the
+/// dir isn't a git repo or git can't run. Resolves `git` against the login PATH so a
+/// Finder-launched app finds it.
+fn git_ls_files(cwd: &str) -> Option<Vec<String>> {
+    let path = crate::shellenv::login_path();
+    let git = crate::shellenv::resolve_program("git", path);
+    let out = std::process::Command::new(&git)
+        .args(["-C", cwd, "ls-files"])
+        .env("PATH", path)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
 }
 
 fn now_rfc3339() -> String {

@@ -16,7 +16,7 @@ interface DHunk {
   header: string;
   lines: DLine[];
 }
-interface DFile {
+export interface DFile {
   path: string;
   oldPath: string | null;
   status: "added" | "deleted" | "renamed" | "modified";
@@ -378,6 +378,7 @@ export function renderDiff(
     card.dataset.order = String(parseOrder.get(f));
     card.dataset.adds = String(f.adds);
     card.dataset.dels = String(f.dels);
+    card.dataset.path = f.path; // lets the file-tree rail jump to this file's card
 
     const head = document.createElement("button");
     head.type = "button";
@@ -751,6 +752,8 @@ type CreateFn = (c: NewComment) => void;
 type ReplyFn = (threadId: string, body: string) => void;
 type AskFn = (message: string) => void;
 type ResolveFn = (threadId: string, resolved: boolean) => void;
+/** Scope of the diff's file-tree rail (owned + rendered by main.ts). */
+export type TreeLevel = "diff" | "dir" | "repo";
 let onCreate: CreateFn | null = null;
 let onReply: ReplyFn | null = null;
 let onAsk: AskFn | null = null;
