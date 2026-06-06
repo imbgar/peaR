@@ -874,7 +874,7 @@ button:disabled { opacity: 0.38; cursor: default; }
 /* Pin each child to its column. Essential: when a panel is closed its resizer +
    panel are display:none, so auto-placement would otherwise shift the *other*
    visible panel into the wrong (0px) track — making it vanish. */
-#terminals { grid-column: 1; }
+#terminals { grid-column: 1; display: flex; min-width: 0; min-height: 0; overflow: hidden; }
 #comments-resizer { grid-column: 2; }
 #comments-panel { grid-column: 3; }
 #panel-resizer { grid-column: 4; }
@@ -890,8 +890,19 @@ button:disabled { opacity: 0.38; cursor: default; }
 #stage:not(.comments-open) #comments-panel { display: none; }
 
 #terminals { position: relative; min-height: 0; min-width: 0; background: var(--term-bg); }
-.terminal-host { position: absolute; inset: 0; padding: 8px 10px; }
+/* Tiling: #terminals is a flex container holding either one host or a .pane-split tree. */
+.terminal-host { position: relative; flex: 1 1 0; min-width: 0; min-height: 0; padding: 8px 10px; }
 .terminal-host.hidden { display: none; }
+.pane-split { display: flex; flex: 1 1 0; min-width: 0; min-height: 0; }
+.pane-split.row { flex-direction: row; }
+.pane-split.col { flex-direction: column; }
+.pane-gutter { flex: 0 0 5px; background: var(--bd); transition: background 0.12s; }
+.pane-gutter.row { cursor: col-resize; }
+.pane-gutter.col { cursor: row-resize; }
+.pane-gutter:hover { background: var(--accent-d); }
+/* focus ring on the active pane (only when there's more than one) */
+.terminal-host.pane-focus { box-shadow: inset 0 0 0 1px var(--accent-d); border-radius: var(--r-sm); }
+.tab-panes { font-size: 9px; color: var(--dim); margin-left: 5px; }
 .terminal-host .xterm { height: 100%; }
 
 #panel {

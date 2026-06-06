@@ -131,6 +131,26 @@ interface TabView {
 const tabs = new Map<number, TabView>();
 let active: number | null = null;
 
+// ── tiling / pane layout ──────────────────────────────────────────────────────
+// A tabbar "tab" is a WINDOW holding a binary tree of panes; each leaf is a session
+// (TabView). A single-leaf window behaves exactly like the old one-terminal-per-tab.
+// Right-click a pane to split it (into a new session via a quick-launch picker); drag a
+// gutter to resize. `active` stays the focused pane/session id.
+type PaneNode =
+  | { kind: "leaf"; tab: number }
+  | { kind: "split"; dir: "row" | "col"; ratio: number; a: PaneNode; b: PaneNode };
+interface Win {
+  id: number;
+  layout: PaneNode;
+  focus: number; // the focused pane/session in this window
+}
+const windows = new Map<number, Win>();
+const paneWin = new Map<number, number>(); // session id → window id
+let activeWin: number | null = null;
+let nextWinId = 1;
+// When a split is requested, the new session is inserted next to `source` once it opens.
+let pendingSplit: { source: number; dir: "row" | "col"; before: boolean } | null = null;
+
 const persistOn = () => localStorage.getItem("pear.persist") !== "0"; // default ON
 function saveLayout() {
   if (persistOn()) send({ type: "save_layout", active });
@@ -215,9 +235,12 @@ function setStatus(msg: string, warn = false) {
 
 function renderTabBar() {
   tabbarEl.innerHTML = "";
-  for (const t of tabs.values()) {
+  for (const w of windows.values()) {
+    const paneCount = countLeaves(w.layout);
+    const t = tabs.get(w.focus) ?? tabs.get(firstLeaf(w.layout));
+    if (!t) continue;
     const pill = document.createElement("div");
-    pill.className = "tab" + (t.id === active ? " active" : "");
+    pill.className = "tab" + (w.id === activeWin ? " active" : "");
     pill.title = t.subtitle || t.title;
 
     const dot = document.createElement("span");
@@ -229,19 +252,28 @@ function renderTabBar() {
     label.textContent = t.title;
     pill.appendChild(label);
 
+    if (paneCount > 1) {
+      const badge = document.createElement("span");
+      badge.className = "tab-panes";
+      badge.textContent = `⊞${paneCount}`;
+      badge.title = `${paneCount} panes`;
+      pill.appendChild(badge);
+    }
+
     const close = document.createElement("button");
     close.className = "tab-close";
     close.textContent = "×";
     close.onclick = (e) => {
       e.stopPropagation();
-      send({ type: "close_tab", tab: t.id });
+      // Close the whole window (every pane in it).
+      forEachLeaf(w.layout, (tab) => send({ type: "close_tab", tab }));
     };
     pill.appendChild(close);
 
-    pill.onclick = () => setActive(t.id);
+    pill.onclick = () => setActive(w.focus);
     tabbarEl.appendChild(pill);
   }
-  if (tabs.size === 0) {
+  if (windows.size === 0) {
     const empty = document.createElement("div");
     empty.className = "tab-empty";
     empty.textContent = "no open tabs — open a PR or a shell from the left";
@@ -1017,6 +1049,9 @@ function addFavRef(v: string) {
 function createTabView(id: number, title: string, cli: CliKind, pr: PrRef | null): TabView {
   const el = document.createElement("div");
   el.className = "terminal-host hidden";
+  // Focus this pane on click; right-click to split / close it.
+  el.addEventListener("mousedown", () => focusPane(id), true);
+  el.addEventListener("contextmenu", (e) => paneContextMenu(e, id));
   terminalsEl.appendChild(el);
 
   const term = new Terminal({
@@ -1056,8 +1091,13 @@ function createTabView(id: number, title: string, cli: CliKind, pr: PrRef | null
 
 function setActive(id: number) {
   active = id;
-  for (const t of tabs.values()) {
-    t.el.classList.toggle("hidden", t.id !== id);
+  // Render the window this pane belongs to (its full split tree); other windows hide.
+  const winId = paneWin.get(id);
+  if (winId != null) {
+    activeWin = winId;
+    const w = windows.get(winId);
+    if (w) w.focus = id;
+    renderWindow(winId);
   }
   const v = tabs.get(id);
   if (v) {
@@ -1089,13 +1129,213 @@ function closeTabView(id: number) {
     v.el.remove();
     tabs.delete(id);
   }
+  // Remove the pane from its window's layout (collapsing the split). If the window is now
+  // empty, drop it; otherwise focus a surviving pane in it.
+  const winId = paneWin.get(id);
+  paneWin.delete(id);
+  let nextFocus: number | null = null;
+  if (winId != null) {
+    const w = windows.get(winId);
+    if (w) {
+      const layout = removeLeaf(w.layout, id);
+      if (!layout) {
+        windows.delete(winId);
+      } else {
+        w.layout = layout;
+        if (w.focus === id) w.focus = firstLeaf(layout);
+        nextFocus = w.focus;
+      }
+    }
+  }
   if (active === id) {
     active = null;
-    const next = tabs.keys().next();
-    if (!next.done) setActive(next.value);
+    // Prefer another pane in the same window, else any other window's focus.
+    if (nextFocus != null) setActive(nextFocus);
+    else {
+      const otherWin = windows.values().next();
+      if (!otherWin.done) setActive(otherWin.value.focus);
+      else {
+        activeWin = null;
+        terminalsEl.replaceChildren();
+      }
+    }
+  } else if (winId === activeWin) {
+    renderWindow(winId); // a non-focused pane in the active window closed → re-tile
   }
   renderTabBar();
   renderToolbar();
+}
+
+// ── pane tree: build / mutate / render ────────────────────────────────────────
+function newWindow(tab: number): number {
+  const id = nextWinId++;
+  windows.set(id, { id, layout: { kind: "leaf", tab }, focus: tab });
+  paneWin.set(tab, id);
+  return id;
+}
+
+function forEachLeaf(node: PaneNode, fn: (tab: number) => void) {
+  if (node.kind === "leaf") fn(node.tab);
+  else {
+    forEachLeaf(node.a, fn);
+    forEachLeaf(node.b, fn);
+  }
+}
+function firstLeaf(node: PaneNode): number {
+  return node.kind === "leaf" ? node.tab : firstLeaf(node.a);
+}
+function countLeaves(node: PaneNode): number {
+  return node.kind === "leaf" ? 1 : countLeaves(node.a) + countLeaves(node.b);
+}
+function replaceLeaf(node: PaneNode, tab: number, fn: (leaf: PaneNode) => PaneNode): PaneNode {
+  if (node.kind === "leaf") return node.tab === tab ? fn(node) : node;
+  return { ...node, a: replaceLeaf(node.a, tab, fn), b: replaceLeaf(node.b, tab, fn) };
+}
+function removeLeaf(node: PaneNode, tab: number): PaneNode | null {
+  if (node.kind === "leaf") return node.tab === tab ? null : node;
+  const a = removeLeaf(node.a, tab);
+  const b = removeLeaf(node.b, tab);
+  if (!a) return b;
+  if (!b) return a;
+  return { ...node, a, b };
+}
+
+/** Insert `newTab` next to `source` in its window, splitting along `dir`. */
+function insertPane(win: Win, source: number, newTab: number, dir: "row" | "col", before: boolean) {
+  win.layout = replaceLeaf(win.layout, source, (leaf) => {
+    const sib: PaneNode = { kind: "leaf", tab: newTab };
+    return { kind: "split", dir, ratio: 0.5, a: before ? sib : leaf, b: before ? leaf : sib };
+  });
+  paneWin.set(newTab, win.id);
+}
+
+/** Re-render the active window's pane tree into #terminals (hosts are moved, not recreated). */
+function renderWindow(winId: number) {
+  const w = windows.get(winId);
+  if (!w) {
+    terminalsEl.replaceChildren();
+    return;
+  }
+  for (const t of tabs.values()) t.el.classList.add("hidden");
+  terminalsEl.replaceChildren(buildPaneDom(w.layout, w));
+  forEachLeaf(w.layout, (tab) => tabs.get(tab)?.el.classList.remove("hidden"));
+  requestAnimationFrame(() => refitWindow(winId));
+}
+
+function buildPaneDom(node: PaneNode, w: Win): HTMLElement {
+  if (node.kind === "leaf") {
+    const v = tabs.get(node.tab);
+    if (!v) return document.createElement("div");
+    v.el.classList.toggle("pane-focus", node.tab === w.focus && hasSibling(w.layout));
+    v.el.style.flex = "1 1 0";
+    return v.el;
+  }
+  const split = document.createElement("div");
+  split.className = `pane-split ${node.dir}`;
+  const a = buildPaneDom(node.a, w);
+  const b = buildPaneDom(node.b, w);
+  a.style.flex = `${node.ratio} 1 0`;
+  b.style.flex = `${1 - node.ratio} 1 0`;
+  split.append(a, makeGutter(node), b);
+  return split;
+}
+
+/** Whether the layout has more than one pane (drives the focus ring — hidden when solo). */
+function hasSibling(node: PaneNode): boolean {
+  return node.kind === "split";
+}
+
+function makeGutter(node: Extract<PaneNode, { kind: "split" }>): HTMLElement {
+  const g = document.createElement("div");
+  g.className = `pane-gutter ${node.dir}`;
+  g.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    const split = g.parentElement;
+    if (!split) return;
+    const rect = split.getBoundingClientRect();
+    const horiz = node.dir === "row";
+    const a = split.children[0] as HTMLElement;
+    const b = split.children[2] as HTMLElement;
+    const move = (ev: PointerEvent) => {
+      const pos = horiz
+        ? (ev.clientX - rect.left) / rect.width
+        : (ev.clientY - rect.top) / rect.height;
+      node.ratio = Math.min(0.85, Math.max(0.15, pos));
+      a.style.flex = `${node.ratio} 1 0`;
+      b.style.flex = `${1 - node.ratio} 1 0`;
+    };
+    const up = () => {
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", up);
+      if (activeWin != null) refitWindow(activeWin);
+    };
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", up);
+  });
+  return g;
+}
+
+function refitWindow(winId: number) {
+  const w = windows.get(winId);
+  if (!w) return;
+  forEachLeaf(w.layout, (tab) => {
+    const v = tabs.get(tab);
+    if (v) {
+      try {
+        v.fit.fit();
+      } catch {
+        /* host not yet laid out */
+      }
+    }
+  });
+}
+
+/** Focus a pane (lightweight — just the ring + xterm focus, no full window rebuild). */
+function focusPane(tab: number) {
+  if (active === tab) return;
+  setActive(tab);
+}
+
+// ── pane context menu + quick-launch picker ───────────────────────────────────
+const PANE_LAUNCH: { label: string; cli: CliKind }[] = [
+  { label: "＋ New shell", cli: "shell" },
+  { label: "✦ Claude", cli: "claude" },
+  { label: "◆ Codex", cli: "codex" },
+  { label: "⬡ Aider", cli: "aider" },
+];
+
+function paneContextMenu(e: MouseEvent, tab: number) {
+  e.preventDefault();
+  e.stopPropagation();
+  const x = e.clientX;
+  const y = e.clientY;
+  const split = (dir: "row" | "col", before: boolean) => () =>
+    openQuickLaunch(x, y, (cli) => {
+      pendingSplit = { source: tab, dir, before };
+      send({ type: "open_scratch", cli, cwd: null });
+    });
+  const items: CtxItem[] = [
+    { label: "⊟ Split right", on: split("row", false) },
+    { label: "⊟ Split left", on: split("row", true) },
+    { label: "⊟ Split down", on: split("col", false) },
+    { label: "⊟ Split up", on: split("col", true) },
+  ];
+  // Only offer "Close pane" when this is one of several panes (a solo window closes via the tab).
+  const winId = paneWin.get(tab);
+  const w = winId != null ? windows.get(winId) : null;
+  if (w && hasSibling(w.layout)) {
+    items.push({ label: "× Close pane", danger: true, on: () => send({ type: "close_tab", tab }) });
+  }
+  openHistCtx(x, y, items);
+}
+
+/** A small picker of what to launch into a new split (reuses the floating ctx menu). */
+function openQuickLaunch(x: number, y: number, onPick: (cli: CliKind) => void) {
+  openHistCtx(
+    x,
+    y,
+    PANE_LAUNCH.map((l) => ({ label: l.label, on: () => onPick(l.cli) })),
+  );
 }
 
 /** Selection if any, else the full scrollback — used as the saved review artifact. */
@@ -1115,6 +1355,17 @@ function handle(ev: CoreEvent) {
   switch (ev.type) {
     case "tab_opened": {
       createTabView(ev.tab, ev.title, ev.cli, ev.pr);
+      // A pending split inserts this session as a pane beside its source; otherwise it's
+      // a new top-level window (tabbar pill).
+      const ps = pendingSplit;
+      const srcWin = ps ? windows.get(paneWin.get(ps.source) ?? -1) : null;
+      if (ps && srcWin) {
+        pendingSplit = null;
+        insertPane(srcWin, ps.source, ev.tab, ps.dir, ps.before);
+      } else {
+        pendingSplit = null;
+        newWindow(ev.tab);
+      }
       setActive(ev.tab);
       setStatus(`opened ${ev.title}`);
       // Auto-review on open (PR tabs only, never a plain shell). We don't fire on a
@@ -1436,7 +1687,8 @@ function initThemePicker() {
 
 // ── insight panel ───────────────────────────────────────────────────────────
 function refitActive() {
-  if (active !== null) tabs.get(active)?.fit.fit();
+  if (activeWin !== null) refitWindow(activeWin);
+  else if (active !== null) tabs.get(active)?.fit.fit();
 }
 
 function setPanel(open: boolean) {
