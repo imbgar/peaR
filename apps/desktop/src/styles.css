@@ -860,12 +860,15 @@ button:disabled { opacity: 0.38; cursor: default; }
   border-bottom: 1px solid var(--bd);
 }
 .panel-title { font-weight: 600; font-size: 12.5px; text-shadow: var(--glow); }
-.panel-head-actions { display: flex; gap: 4px; }
+.panel-head-actions { display: flex; align-items: center; gap: 5px; }
+/* dull-yellow chip treatment so these small header buttons are easy to see */
 .panel-head-actions button {
-  background: transparent; border: none; color: var(--faint);
-  font-size: 15px; padding: 0 5px; line-height: 1;
+  color: var(--dim); font-size: 14px; padding: 1px 7px; line-height: 1; cursor: pointer;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent); border-radius: var(--r-sm);
 }
-.panel-head-actions button:hover:not(:disabled) { color: var(--accent); }
+.panel-head-actions button:hover:not(:disabled) { color: var(--accent); border-color: var(--accent-d); }
+.panel-head-actions button.close-x:hover:not(:disabled) { color: var(--red); border-color: color-mix(in srgb, var(--red) 50%, transparent); }
 .panel-body { flex: 1; overflow: auto; overscroll-behavior: contain; padding: 14px 16px; min-height: 0; }
 .panel-empty { color: var(--faint); font-size: 12px; line-height: 1.65; }
 .panel-empty b { color: var(--dim); font-weight: 600; }
@@ -900,9 +903,9 @@ button:disabled { opacity: 0.38; cursor: default; }
 #comments-body { padding-top: 0; }
 #comments-body > .cv-card:first-child { margin-top: 12px; }
 .cv-count {
-  font-family: var(--font-mono); font-size: 11px; color: var(--dim);
-  border: 1px solid var(--bd2); border-radius: 999px; padding: 1px 8px;
-  background: transparent; cursor: pointer;
+  font-family: var(--font-mono); font-size: 11px; color: var(--dim); cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent); border-radius: var(--r-sm);
+  padding: 2px 9px; background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 .cv-count:hover { color: var(--accent); border-color: var(--accent-d); }
 .cv-count.on { color: var(--accent); border-color: var(--accent); box-shadow: var(--glow); }
@@ -1112,8 +1115,12 @@ button:disabled { opacity: 0.38; cursor: default; }
   font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
   letter-spacing: 0.8px; color: var(--dim);
 }
-.dtl-close { background: transparent; border: none; color: var(--faint); font-size: 15px; line-height: 1; cursor: pointer; }
-.dtl-close:hover { color: var(--accent); }
+.dtl-close {
+  color: var(--dim); font-size: 13px; line-height: 1; cursor: pointer; padding: 1px 6px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent); border-radius: var(--r-sm);
+}
+.dtl-close:hover { color: var(--red); border-color: color-mix(in srgb, var(--red) 50%, transparent); }
 .dtl-item {
   display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left;
   padding: 7px 10px; background: transparent; border: none; border-bottom: 1px solid var(--bd);

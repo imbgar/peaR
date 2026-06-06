@@ -1469,7 +1469,9 @@ function renderConversation(tab: number) {
     commentsCountEl.textContent = "";
     return;
   }
-  commentsCountEl.textContent = `${c.conversation.length}`;
+  commentsCountEl.textContent = c.conversation.length
+    ? `💬 See (${c.conversation.length})`
+    : "";
   if (!c.conversation.length) {
     const div = document.createElement("div");
     div.className = "panel-empty";
