@@ -11,8 +11,10 @@ All notable changes to this project are documented here. The format is based on
   stats, a **collapse-all / expand-all** toggle, a **sort** (Default · Most changes ·
   Most additions · Most removals), **show +/− line toggles**, and a × close. The
   redundant "Diff — <pr>" panel title is gone in diff mode.
-- **Thread navigator.** The toolbar's comment count opens a pinned list of every inline
-  thread (file:line · author · snippet); clicking one jumps to and expands it.
+- **Thread / comment navigators.** The diff toolbar's comment count opens a pinned list
+  of every inline thread (file:line · author · snippet) — clicking one jumps to and
+  expands it. The **Conversation** pane's count does the same for PR conversation
+  comments (a pop-out drawer; click to jump + flash).
 - **GitHub avatars** beside each commenter's name (in the floating header).
 - **Per-comment "ask Claude" insights.** Each comment header carries three buttons —
   **explain**, **adversarial review**, **supporting points & strengths** — that ask the
