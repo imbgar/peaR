@@ -11,7 +11,15 @@ All notable changes to this project are documented here. The format is based on
   ships **VS Code**, **Dark**, **macOS Dark**, and **Light**. The status-bar theme
   control is now a picker (swatch + name, ✓ on the active one) instead of a 2-way
   toggle; each theme restyles the whole app and the terminal palette live, and the
-  choice persists.
+  choice persists. (#47)
+- **Resolve / unresolve inline review threads.** Each inline thread's state row has a
+  Resolve/Unresolve button (GraphQL `resolveReviewThread`/`unresolveReviewThread`). (#46)
+- **Update notifications.** On launch (and every 6h) peaR checks the latest GitHub
+  release against the running version; if a newer one exists it shows a card with the
+  changelog and a **View release ↗** link (opens the download page), plus snooze
+  buttons — **Tomorrow · In a week · Never** ("Never" skips just that version; a newer
+  one still notifies). It only *notifies* — no in-place install — so it needs no signing
+  key or notarization. (#49)
 
 ## [0.1.8] — 2026-06-06
 
