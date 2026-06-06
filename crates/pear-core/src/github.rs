@@ -118,6 +118,33 @@ impl GitHub {
         }
     }
 
+    /// POST a JSON body to a REST path, surfacing GitHub's error message on failure.
+    fn post_json(&self, path: &str, body: serde_json::Value) -> Result<()> {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .build()
+            .into();
+        let mut resp = agent
+            .post(format!("{API}{path}"))
+            .header("Authorization", &format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("User-Agent", UA)
+            .send_json(&body)
+            .map_err(|e| CoreError::GitHub(e.to_string()))?;
+        let status = resp.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            let body = resp.body_mut().read_to_string().unwrap_or_default();
+            Err(CoreError::GitHub(format!(
+                "HTTP {}: {}",
+                status.as_u16(),
+                body.chars().take(200).collect::<String>()
+            )))
+        }
+    }
+
     /// The PR's unified diff (via GitHub's `application/vnd.github.diff` media type).
     pub fn pr_diff(&self, pr: &PrRef) -> Result<String> {
         self.get_raw(
@@ -229,10 +256,103 @@ impl GitHub {
                 comments: nodes(&t["comments"]).iter().map(parse_comment).collect(),
             })
             .collect();
+        // The viewer's in-progress review (only ever one PENDING per viewer), for the
+        // "Finish review" UI and to batch further comments into it.
+        let pending = nodes(&p["reviews"]).iter().find(|r| {
+            r["state"].as_str() == Some("PENDING") && r["viewerDidAuthor"].as_bool() == Some(true)
+        });
         Ok(PrComments {
             conversation,
             threads,
+            pr_node_id: p["id"].as_str().unwrap_or("").to_string(),
+            head_sha: p["headRefOid"].as_str().unwrap_or("").to_string(),
+            pending_review_id: pending.map(|r| r["id"].as_str().unwrap_or("").to_string()),
+            pending_count: pending
+                .map(|r| r["comments"]["totalCount"].as_u64().unwrap_or(0))
+                .unwrap_or(0),
         })
+    }
+
+    /// Post a standalone inline review comment immediately (REST; needs the head SHA).
+    /// `start_line`/`start_side` are set only for a multi-line range.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_review_comment(
+        &self,
+        pr: &PrRef,
+        commit_id: &str,
+        body: &str,
+        path: &str,
+        line: u64,
+        side: &str,
+        start_line: Option<u64>,
+        start_side: Option<&str>,
+    ) -> Result<()> {
+        let mut payload = serde_json::json!({
+            "body": body, "commit_id": commit_id, "path": path, "line": line, "side": side,
+        });
+        if let Some(sl) = start_line {
+            payload["start_line"] = serde_json::json!(sl);
+            payload["start_side"] = serde_json::json!(start_side.unwrap_or(side));
+        }
+        self.post_json(
+            &format!(
+                "/repos/{}/{}/pulls/{}/comments",
+                pr.owner, pr.repo, pr.number
+            ),
+            payload,
+        )
+    }
+
+    /// Add an inline review thread to a review (GraphQL). With `review_id` it appends
+    /// to that pending review; otherwise it opens (or reuses) a pending review on the
+    /// PR. `start_line`/`start_side` are set only for a multi-line range.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_review_thread(
+        &self,
+        pr_node_id: &str,
+        review_id: Option<&str>,
+        body: &str,
+        path: &str,
+        line: u64,
+        side: &str,
+        start_line: Option<u64>,
+        start_side: Option<&str>,
+    ) -> Result<()> {
+        let mut input = serde_json::json!({
+            "body": body, "path": path, "line": line, "side": side, "subjectType": "LINE",
+        });
+        match review_id {
+            Some(id) => input["pullRequestReviewId"] = serde_json::json!(id),
+            None => input["pullRequestId"] = serde_json::json!(pr_node_id),
+        }
+        if let Some(sl) = start_line {
+            input["startLine"] = serde_json::json!(sl);
+            input["startSide"] = serde_json::json!(start_side.unwrap_or(side));
+        }
+        self.graphql(
+            "mutation($input:AddPullRequestReviewThreadInput!){addPullRequestReviewThread(input:$input){thread{id}}}",
+            serde_json::json!({ "input": input }),
+        )?;
+        Ok(())
+    }
+
+    /// Submit the viewer's pending review with a verdict. `event` is one of
+    /// `COMMENT` | `APPROVE` | `REQUEST_CHANGES`.
+    pub fn submit_review(&self, review_id: &str, event: &str, body: &str) -> Result<()> {
+        self.graphql(
+            "mutation($id:ID!,$event:PullRequestReviewEvent!,$body:String){submitPullRequestReview(input:{pullRequestReviewId:$id,event:$event,body:$body}){clientMutationId}}",
+            serde_json::json!({ "id": review_id, "event": event, "body": body }),
+        )?;
+        Ok(())
+    }
+
+    /// Reply to an existing inline review thread (GraphQL).
+    pub fn reply_review_thread(&self, thread_id: &str, body: &str) -> Result<()> {
+        self.graphql(
+            "mutation($id:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$id,body:$body}){comment{id}}}",
+            serde_json::json!({ "id": thread_id, "body": body }),
+        )?;
+        Ok(())
     }
 
     /// Add or remove a reaction on any reactable subject (comment node id).
@@ -304,12 +424,14 @@ const PR_COMMENTS_QUERY: &str = r#"
 query($owner:String!,$repo:String!,$number:Int!){
   repository(owner:$owner,name:$repo){
     pullRequest(number:$number){
+      id headRefOid
       comments(first:100){ nodes {
         id author{login} body createdAt viewerDidAuthor
         reactionGroups{ content viewerHasReacted reactors{ totalCount } }
       } }
       reviews(first:100){ nodes {
         id author{login} body createdAt state viewerDidAuthor
+        comments{ totalCount }
         reactionGroups{ content viewerHasReacted reactors{ totalCount } }
       } }
       reviewThreads(first:100){ nodes {

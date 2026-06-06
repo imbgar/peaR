@@ -17,8 +17,15 @@ All notable changes to this project are documented here. The format is based on
   Fetched in a single `gh`-token GraphQL round-trip. (#43)
 - **React to comments.** Click a reaction pill to add/remove it, or the **＋** for the
   full eight-emoji picker — on any conversation comment or inline-thread comment. Toggles
-  via GraphQL (`addReaction`/`removeReaction`); the panel re-syncs to authoritative state.
-  Other writes (reply/edit/resolve/post) land in later phases. (#43)
+  via GraphQL (`addReaction`/`removeReaction`); the panel re-syncs to authoritative state. (#43)
+- **Write inline review comments — single & multi-line.** Drag down the diff gutter (or
+  click a line, then shift-click another) to select a whole-line range; the lines highlight
+  and a 💬 bubble appears at the left of the first line. Click it to open a composer and
+  either **Add single comment** (posts immediately) or **Start a review / Add review
+  comment** (batches into a pending review). A **"Review in progress · Finish review ▾"**
+  bar above the diff submits the pending review as Comment / Approve / Request changes. You
+  can also **reply** to any open inline thread. Anchors map to the right side+line (RIGHT/
+  new for additions & context, LEFT/old for deletions). (#43)
 
 ## [0.1.7] — 2026-06-05
 

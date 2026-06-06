@@ -236,6 +236,12 @@ export function renderDiff(
       for (const line of hunk.lines) {
         const row = document.createElement("div");
         row.className = `diff-row r-${line.kind}`;
+        // Anchor data for commenting: a row maps to a side+line (RIGHT/newNo for
+        // add/ctx, LEFT/oldNo for del).
+        row.dataset.path = f.path;
+        row.dataset.kind = line.kind;
+        if (line.newNo != null) row.dataset.newno = String(line.newNo);
+        if (line.oldNo != null) row.dataset.oldno = String(line.oldNo);
         const go = document.createElement("span");
         go.className = "diff-gutter";
         go.textContent = line.oldNo?.toString() ?? "";
@@ -286,6 +292,7 @@ export function renderDiff(
     head.addEventListener("click", () => card.classList.toggle("collapsed"));
     container.appendChild(card);
   }
+  wireLineSelection(container);
 }
 
 /** A short relative time ("2h", "3d", "5mo") from an RFC3339 timestamp. */
@@ -434,7 +441,36 @@ function renderThread(t: ReviewThread): HTMLElement {
     block.appendChild(tag);
   }
   for (const c of t.comments) block.appendChild(commentEl(c));
+  if (!t.is_resolved && t.id) block.appendChild(replyBox(t.id));
   return block;
+}
+
+/** A compact reply composer for an existing inline thread. */
+function replyBox(threadId: string): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "dt-reply";
+  const ta = document.createElement("textarea");
+  ta.placeholder = "Reply…";
+  ta.rows = 1;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "dc-btn primary";
+  btn.textContent = "Reply";
+  const send = () => {
+    const body = ta.value.trim();
+    if (!body || !onReply) return;
+    ta.disabled = true;
+    btn.disabled = true;
+    btn.textContent = "Posting…";
+    onReply(threadId, body);
+  };
+  btn.addEventListener("click", send);
+  // ⌘/Ctrl+Enter sends; plain Enter keeps newlines for multi-line replies.
+  ta.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") send();
+  });
+  wrap.append(ta, btn);
+  return wrap;
 }
 
 /** Fallback inline render of a flat REST review comment (before threads arrive). */
@@ -450,3 +486,213 @@ function renderFlatComment(c: DiffComment): HTMLElement {
   wrap.append(who, body);
   return wrap;
 }
+
+// ── inline comment creation (line selection → bubble → composer) ──────────────
+export interface NewComment {
+  mode: "single" | "review";
+  body: string;
+  path: string;
+  line: number;
+  side: string;
+  start_line?: number;
+  start_side?: string;
+}
+type CreateFn = (c: NewComment) => void;
+type ReplyFn = (threadId: string, body: string) => void;
+let onCreate: CreateFn | null = null;
+let onReply: ReplyFn | null = null;
+let pendingReviewId: string | null = null;
+export function setCreateHandler(fn: CreateFn) {
+  onCreate = fn;
+}
+export function setReplyHandler(fn: ReplyFn) {
+  onReply = fn;
+}
+/** The viewer's pending review id (drives the composer's review button label). */
+export function setPendingReview(id: string | null) {
+  pendingReviewId = id;
+}
+
+/** A diff row's comment anchor: the side + line GitHub expects for that row. */
+function rowAnchor(row: HTMLElement): { side: string; line: number } | null {
+  const kind = row.dataset.kind;
+  if (kind === "del") {
+    const l = row.dataset.oldno;
+    return l ? { side: "LEFT", line: parseInt(l, 10) } : null;
+  }
+  const l = row.dataset.newno;
+  return l ? { side: "RIGHT", line: parseInt(l, 10) } : null;
+}
+
+// Active selection within a single file body.
+interface LineSelection {
+  body: HTMLElement;
+  rows: HTMLElement[]; // contiguous, in DOM order
+  anchor: number; // index into the body's row list where the drag began
+}
+let sel: LineSelection | null = null;
+
+function clearSelection() {
+  if (!sel) return;
+  for (const r of sel.body.querySelectorAll(".diff-row.sel")) r.classList.remove("sel");
+  sel.body.querySelector(".diff-bubble-new")?.remove();
+  sel.body.querySelector(".diff-composer")?.remove();
+  sel = null;
+}
+
+function bodyRows(body: HTMLElement): HTMLElement[] {
+  return Array.from(body.querySelectorAll<HTMLElement>(".diff-row"));
+}
+
+function applySelection(body: HTMLElement, a: number, b: number) {
+  const rows = bodyRows(body);
+  const lo = Math.min(a, b);
+  const hi = Math.max(a, b);
+  const chosen: HTMLElement[] = [];
+  rows.forEach((r, i) => {
+    const on = i >= lo && i <= hi;
+    r.classList.toggle("sel", on);
+    if (on) chosen.push(r);
+  });
+  sel = { body, rows: chosen, anchor: a };
+}
+
+/** Show the comment bubble at the left of the first selected row. */
+function showBubble() {
+  if (!sel || !sel.rows.length) return;
+  sel.body.querySelector(".diff-bubble-new")?.remove();
+  const first = sel.rows[0];
+  const bubble = document.createElement("button");
+  bubble.type = "button";
+  bubble.className = "diff-bubble-new";
+  bubble.textContent = "💬";
+  bubble.title = "Comment on the selected lines";
+  bubble.style.top = `${first.offsetTop}px`;
+  bubble.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openComposer();
+  });
+  sel.body.appendChild(bubble);
+}
+
+/** Insert the composer block right after the last selected row. */
+function openComposer() {
+  if (!sel || !sel.rows.length) return;
+  sel.body.querySelector(".diff-composer")?.remove();
+  const last = sel.rows[sel.rows.length - 1];
+  const first = sel.rows[0];
+  const startA = rowAnchor(first);
+  const endA = rowAnchor(last);
+  if (!endA) return;
+
+  const box = document.createElement("div");
+  box.className = "diff-composer";
+  const head = document.createElement("div");
+  head.className = "dc-head";
+  head.textContent =
+    sel.rows.length > 1 && startA
+      ? `Commenting on lines ${startA.line}–${endA.line}`
+      : `Commenting on line ${endA.line}`;
+  const ta = document.createElement("textarea");
+  ta.placeholder = "Leave a comment (markdown supported)…";
+  ta.rows = 3;
+  const actions = document.createElement("div");
+  actions.className = "dc-actions";
+
+  const submit = (mode: "single" | "review") => {
+    const body = ta.value.trim();
+    if (!body || !onCreate) return;
+    const nc: NewComment = { mode, body, path: first.dataset.path!, line: endA.line, side: endA.side };
+    if (sel!.rows.length > 1 && startA) {
+      nc.start_line = startA.line;
+      nc.start_side = startA.side;
+    }
+    box.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    ta.disabled = true;
+    head.textContent = "Posting…";
+    onCreate(nc);
+  };
+
+  const single = document.createElement("button");
+  single.type = "button";
+  single.className = "dc-btn primary";
+  single.textContent = "Add single comment";
+  single.addEventListener("click", () => submit("single"));
+  const review = document.createElement("button");
+  review.type = "button";
+  review.className = "dc-btn";
+  review.textContent = pendingReviewId ? "Add review comment" : "Start a review";
+  review.addEventListener("click", () => submit("review"));
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "dc-btn ghost";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => clearSelection());
+
+  actions.append(single, review, cancel);
+  box.append(head, ta, actions);
+  last.after(box);
+  ta.focus();
+}
+
+/** Wire gutter-drag + shift-click line selection on a freshly rendered diff. */
+function wireLineSelection(container: HTMLElement) {
+  sel = null; // DOM was rebuilt; drop any stale selection
+  let dragging: HTMLElement | null = null; // the body being dragged within
+
+  const rowFromPoint = (x: number, y: number, body: HTMLElement): number => {
+    const el = document.elementFromPoint(x, y)?.closest<HTMLElement>(".diff-row");
+    if (!el || el.parentElement !== body) return -1;
+    return bodyRows(body).indexOf(el);
+  };
+
+  container.addEventListener("pointerdown", (e) => {
+    const gutter = (e.target as HTMLElement).closest<HTMLElement>(".diff-gutter");
+    if (!gutter) return; // only the line-number gutter is the selection handle
+    const row = gutter.closest<HTMLElement>(".diff-row");
+    const body = row?.parentElement as HTMLElement | undefined;
+    if (!row || !body || !rowAnchor(row)) return;
+    e.preventDefault();
+    const idx = bodyRows(body).indexOf(row);
+
+    // Shift-click extends the current selection (if it's in this body) instead of dragging.
+    if (e.shiftKey && sel && sel.body === body) {
+      applySelection(body, sel.anchor, idx);
+      showBubble();
+      return;
+    }
+    clearSelection();
+    applySelection(body, idx, idx);
+    dragging = body;
+    body.classList.add("selecting");
+  });
+
+  window.addEventListener("pointermove", (e) => {
+    if (!dragging || !sel) return;
+    const idx = rowFromPoint(e.clientX, e.clientY, dragging);
+    if (idx >= 0) applySelection(dragging, sel.anchor, idx);
+  });
+
+  window.addEventListener("pointerup", () => {
+    if (!dragging) return;
+    dragging.classList.remove("selecting");
+    dragging = null;
+    showBubble();
+  });
+}
+
+// Clear a selection on Escape, or on a click that isn't part of the diff comment UI.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") clearSelection();
+});
+document.addEventListener("pointerdown", (e) => {
+  const t = e.target as HTMLElement;
+  if (
+    sel &&
+    !t.closest(".diff-composer") &&
+    !t.closest(".diff-bubble-new") &&
+    !t.closest(".diff-gutter")
+  ) {
+    clearSelection();
+  }
+});

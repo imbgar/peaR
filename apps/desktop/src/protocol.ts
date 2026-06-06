@@ -60,6 +60,10 @@ export interface ReviewThread {
 export interface PrComments {
   conversation: Comment[];
   threads: ReviewThread[];
+  pr_node_id: string;
+  head_sha: string;
+  pending_review_id: string | null;
+  pending_count: number;
 }
 
 export interface PrRef {
@@ -121,6 +125,22 @@ export type Command =
   | { type: "load_diff"; tab: number }
   | { type: "load_comments"; tab: number }
   | { type: "toggle_reaction"; tab: number; subject_id: string; content: string; add: boolean }
+  | {
+      type: "create_review_comment";
+      tab: number;
+      mode: "single" | "review";
+      body: string;
+      commit_id: string;
+      pr_node_id: string;
+      review_id?: string | null;
+      path: string;
+      line: number;
+      side: string;
+      start_line?: number | null;
+      start_side?: string | null;
+    }
+  | { type: "submit_review"; tab: number; review_id: string; event: string; body: string }
+  | { type: "reply_review_thread"; tab: number; thread_id: string; body: string }
   | { type: "watch_brain"; tab: number }
   | { type: "stop_brain"; tab: number }
   | { type: "save_layout"; active?: number | null }

@@ -193,11 +193,25 @@ pub struct ReviewThread {
 }
 
 /// All comments on a PR: the conversation (issue-level) comments plus the inline
-/// review threads. Reply to [`Command::LoadComments`].
+/// review threads. Reply to [`Command::LoadComments`]. Also carries the ids the UI
+/// needs to *write* comments (anchor a new comment, batch into / submit a review).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PrComments {
     pub conversation: Vec<Comment>,
     pub threads: Vec<ReviewThread>,
+    /// PR GraphQL node id (to start a review / add review threads).
+    #[serde(default)]
+    pub pr_node_id: String,
+    /// Head commit SHA (required to anchor a standalone review comment via REST).
+    #[serde(default)]
+    pub head_sha: String,
+    /// The viewer's in-progress (PENDING) review id, if any — present once a review
+    /// has been started, drives the "Finish review" UI.
+    #[serde(default)]
+    pub pending_review_id: Option<String>,
+    /// Number of comments queued in that pending review.
+    #[serde(default)]
+    pub pending_count: u64,
 }
 
 /// Lightweight metadata about a PR for the UI (subset of the GitHub payload).
@@ -340,6 +354,43 @@ pub enum Command {
         subject_id: String,
         content: String,
         add: bool,
+    },
+    /// Create a new inline review comment anchored to a diff line (or line range).
+    /// `mode` = `"single"` posts it immediately as a standalone comment; `"review"`
+    /// adds it to the viewer's pending review (starting one if needed). `side` /
+    /// `start_side` are `"RIGHT"` | `"LEFT"`. `start_line` is set only for a multi-line
+    /// range. The engine re-fetches and replies with a fresh `Event::Comments`.
+    CreateReviewComment {
+        tab: TabId,
+        mode: String,
+        body: String,
+        commit_id: String,
+        pr_node_id: String,
+        #[serde(default)]
+        review_id: Option<String>,
+        path: String,
+        line: u64,
+        side: String,
+        #[serde(default)]
+        start_line: Option<u64>,
+        #[serde(default)]
+        start_side: Option<String>,
+    },
+    /// Submit the viewer's pending review. `event` = `"COMMENT"` | `"APPROVE"` |
+    /// `"REQUEST_CHANGES"`. The engine re-fetches and replies with `Event::Comments`.
+    SubmitReview {
+        tab: TabId,
+        review_id: String,
+        event: String,
+        #[serde(default)]
+        body: String,
+    },
+    /// Reply to an existing inline review thread (its GraphQL node id). The engine
+    /// re-fetches and replies with a fresh `Event::Comments`.
+    ReplyReviewThread {
+        tab: TabId,
+        thread_id: String,
+        body: String,
     },
     /// Start streaming the tab's Claude session *thinking* to the brain panel
     /// (replied via `Event::Thought`s). No-op for non-Claude / session-less tabs.

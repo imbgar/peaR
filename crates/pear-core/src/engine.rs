@@ -162,7 +162,61 @@ impl Engine {
                 subject_id,
                 content,
                 add,
-            } => self.toggle_reaction(tab, subject_id, content, add),
+            } => self.comment_mutation(tab, move |gh, _pr| {
+                gh.set_reaction(&subject_id, &content, add)
+            }),
+            Command::CreateReviewComment {
+                tab,
+                mode,
+                body,
+                commit_id,
+                pr_node_id,
+                review_id,
+                path,
+                line,
+                side,
+                start_line,
+                start_side,
+            } => self.comment_mutation(tab, move |gh, pr| {
+                if mode == "single" {
+                    gh.create_review_comment(
+                        pr,
+                        &commit_id,
+                        &body,
+                        &path,
+                        line,
+                        &side,
+                        start_line,
+                        start_side.as_deref(),
+                    )
+                } else {
+                    gh.add_review_thread(
+                        &pr_node_id,
+                        review_id.as_deref(),
+                        &body,
+                        &path,
+                        line,
+                        &side,
+                        start_line,
+                        start_side.as_deref(),
+                    )
+                }
+            }),
+            Command::SubmitReview {
+                tab,
+                review_id,
+                event,
+                body,
+            } => self.comment_mutation(tab, move |gh, _pr| {
+                gh.submit_review(&review_id, &event, &body)
+            }),
+            Command::ReplyReviewThread {
+                tab,
+                thread_id,
+                body,
+            } => self.comment_mutation(tab, move |gh, _pr| {
+                gh.reply_review_thread(&thread_id, &body)
+            }),
             Command::WatchBrain { tab } => self.watch_brain(tab),
             Command::StopBrain { tab } => self.stop_brain(tab),
             Command::SaveLayout { active } => self.persist_layout(active),
@@ -755,15 +809,19 @@ impl Engine {
         });
     }
 
-    /// Add/remove a reaction on a comment, then re-fetch the PR's comments so the UI
-    /// reflects authoritative state (count + viewer flag) via `Event::Comments`.
-    fn toggle_reaction(&mut self, tab: TabId, subject_id: String, content: String, add: bool) {
+    /// Run a comment-write mutation (`op`) on a worker thread, then re-fetch the PR's
+    /// comments and emit a fresh `Event::Comments` so the UI reflects authoritative
+    /// state. Shared by reactions, new comments, replies, and review submission.
+    fn comment_mutation<F>(&mut self, tab: TabId, op: F)
+    where
+        F: FnOnce(&GitHub, &PrRef) -> crate::error::Result<()> + Send + 'static,
+    {
         let pr = match self.tabs.get(&tab).and_then(|t| t.pr.clone()) {
             Some(pr) => pr,
             None => {
                 self.emit(Event::Notice {
                     tab: Some(tab),
-                    message: "reaction: this tab is not a PR".into(),
+                    message: "comment: this tab is not a PR".into(),
                 });
                 return;
             }
@@ -771,16 +829,16 @@ impl Engine {
         let Some(gh) = self.github() else {
             self.emit(Event::Notice {
                 tab: Some(tab),
-                message: "no GitHub token — can't react (run `gh auth login`)".into(),
+                message: "no GitHub token — can't write (run `gh auth login`)".into(),
             });
             return;
         };
         let sink = self.sink.clone();
         std::thread::spawn(move || {
-            if let Err(e) = gh.set_reaction(&subject_id, &content, add) {
+            if let Err(e) = op(&gh, &pr) {
                 sink(Event::Notice {
                     tab: Some(tab),
-                    message: format!("reaction: {e}"),
+                    message: format!("comment: {e}"),
                 });
                 return;
             }

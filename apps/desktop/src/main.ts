@@ -12,7 +12,14 @@ import "@fontsource/ibm-plex-mono/700.css";
 import "@fontsource-variable/hanken-grotesk";
 import "@fontsource-variable/jetbrains-mono";
 import { marked } from "marked";
-import { renderDiff, commentEl, setReactionHandler } from "./diff";
+import {
+  renderDiff,
+  commentEl,
+  setReactionHandler,
+  setCreateHandler,
+  setReplyHandler,
+  setPendingReview,
+} from "./diff";
 import {
   Command,
   Event as CoreEvent,
@@ -117,6 +124,7 @@ let panelTitleEl: HTMLElement;
 let panelToggleBtn: HTMLButtonElement;
 let commentsBodyEl: HTMLElement;
 let commentsCountEl: HTMLElement;
+let reviewBarEl: HTMLElement;
 let skillsModalEl: HTMLElement;
 let skillsStatusEl: HTMLElement;
 // True once dismissed/installed this session, so we don't re-nag on the next
@@ -493,8 +501,10 @@ function setActive(id: number) {
   if (stageEl.classList.contains("panel-open") && panelBodyEl.classList.contains("diff-mode")) {
     syncDiffToActive();
   }
-  // The conversation panel also follows the active tab.
+  // The conversation panel + pending-review bar follow the active tab.
   if (stageEl.classList.contains("comments-open")) syncCommentsToActive();
+  setPendingReview(commentsCache.get(id)?.pending_review_id ?? null);
+  updateReviewBar(id);
   // The brain drawer also follows the active tab.
   if (brainOpen() && brainTab !== id) watchBrainFor(id);
 }
@@ -587,6 +597,8 @@ function handle(ev: CoreEvent) {
     case "comments": {
       commentsCache.set(ev.tab, ev.comments);
       if (ev.tab !== active) break;
+      setPendingReview(ev.comments.pending_review_id);
+      updateReviewBar(ev.tab);
       // Refresh the conversation panel if it's showing this tab.
       if (stageEl.classList.contains("comments-open")) renderConversation(ev.tab);
       // Upgrade the diff's inline threads now that we have them.
@@ -800,6 +812,8 @@ function syncDiffToActive() {
   }
   // The diff shows inline threads, so make sure comments are loaded too.
   if (v?.pr) ensureComments(active);
+  setPendingReview(commentsCache.get(active)?.pending_review_id ?? null);
+  updateReviewBar(active);
 }
 
 /** Diff toolbar button: toggle the diff panel for the active tab. */
@@ -874,6 +888,64 @@ function loadComments() {
   }
   syncCommentsToActive();
   setComments(true);
+}
+
+/** The "review in progress · Finish review" bar above the diff, shown when the viewer
+ *  has a pending review on this tab's PR. */
+function updateReviewBar(tab: number) {
+  const meta = commentsCache.get(tab);
+  reviewBarEl.innerHTML = "";
+  if (!meta?.pending_review_id || tab !== active) {
+    reviewBarEl.hidden = true;
+    return;
+  }
+  const reviewId = meta.pending_review_id;
+  reviewBarEl.hidden = false;
+
+  const row = document.createElement("div");
+  row.className = "rb-row";
+  const dot = document.createElement("span");
+  dot.className = "rb-dot";
+  const label = document.createElement("span");
+  label.className = "rb-label";
+  const n = meta.pending_count;
+  label.textContent = `Review in progress · ${n} comment${n === 1 ? "" : "s"}`;
+  const spacer = document.createElement("span");
+  spacer.className = "rb-spacer";
+  const finish = document.createElement("button");
+  finish.type = "button";
+  finish.className = "rb-finish";
+  finish.textContent = "Finish review ▾";
+  row.append(dot, label, spacer, finish);
+
+  const menu = document.createElement("div");
+  menu.className = "rb-menu hidden";
+  const ta = document.createElement("textarea");
+  ta.placeholder = "Review summary (optional)…";
+  ta.rows = 2;
+  const actions = document.createElement("div");
+  actions.className = "rb-actions";
+  const mk = (text: string, event: string, cls: string) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "dc-btn " + cls;
+    b.textContent = text;
+    b.addEventListener("click", () => {
+      if (active === null) return;
+      actions.querySelectorAll("button").forEach((x) => (x.disabled = true));
+      finish.textContent = "Submitting…";
+      send({ type: "submit_review", tab: active, review_id: reviewId, event, body: ta.value.trim() });
+    });
+    return b;
+  };
+  actions.append(
+    mk("Comment", "COMMENT", "primary"),
+    mk("Approve", "APPROVE", "ok"),
+    mk("Request changes", "REQUEST_CHANGES", "warn"),
+  );
+  menu.append(ta, actions);
+  finish.addEventListener("click", () => menu.classList.toggle("hidden"));
+  reviewBarEl.append(row, menu);
 }
 
 // ── brain drawer (tail Claude's thinking) ─────────────────────────────────────
@@ -1085,6 +1157,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   panelToggleBtn = $("#panel-toggle");
   commentsBodyEl = $("#comments-body");
   commentsCountEl = $("#comments-count");
+  reviewBarEl = $("#review-bar");
 
   initLauncher();
 
@@ -1132,6 +1205,31 @@ window.addEventListener("DOMContentLoaded", async () => {
   setReactionHandler((subject_id, content, add) => {
     if (active === null) return;
     send({ type: "toggle_reaction", tab: active, subject_id, content, add });
+  });
+  // Create a new inline comment (single, or batched into the pending review).
+  setCreateHandler((c) => {
+    if (active === null) return;
+    const meta = commentsCache.get(active);
+    if (!meta) return;
+    send({
+      type: "create_review_comment",
+      tab: active,
+      mode: c.mode,
+      body: c.body,
+      commit_id: meta.head_sha,
+      pr_node_id: meta.pr_node_id,
+      review_id: meta.pending_review_id,
+      path: c.path,
+      line: c.line,
+      side: c.side,
+      start_line: c.start_line ?? null,
+      start_side: c.start_side ?? null,
+    });
+  });
+  // Reply to an existing inline thread.
+  setReplyHandler((thread_id, body) => {
+    if (active === null) return;
+    send({ type: "reply_review_thread", tab: active, thread_id, body });
   });
   // Insight is hard-coded off for now — hide its controls (the panel itself is reused
   // by the diff view, so it stays). Flip INSIGHT_ENABLED to bring these back.

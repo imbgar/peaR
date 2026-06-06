@@ -936,3 +936,83 @@ button:disabled { opacity: 0.38; cursor: default; }
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background: var(--bd2); border-radius: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ── inline comment creation (line select → bubble → composer) ──────────────── */
+.diff-body { position: relative; }
+.diff-body.selecting { user-select: none; cursor: row-resize; }
+.diff-gutter { cursor: pointer; }
+.diff-row.sel { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.diff-row.sel .diff-gutter { color: var(--accent); }
+
+/* the 💬 bubble that appears at the left of the first selected line */
+.diff-bubble-new {
+  position: absolute; left: 2px; z-index: 5;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 20px; padding: 0; font-size: 11px; line-height: 1;
+  background: var(--accent); color: var(--on-accent); border: none;
+  border-radius: 5px; cursor: pointer; box-shadow: var(--glow);
+}
+.diff-bubble-new:hover { filter: brightness(1.1); }
+
+/* the composer inserted under the selected range */
+.diff-composer {
+  background: var(--panel); border-top: 1px solid var(--accent-d);
+  border-bottom: 1px solid var(--accent-d); padding: 9px 12px 10px 42px;
+  font-family: var(--font-ui);
+}
+.diff-composer .dc-head, .dt-reply + * .dc-head {
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.8px; color: var(--dim); margin-bottom: 6px;
+}
+.diff-composer textarea, .dt-reply textarea {
+  width: 100%; box-sizing: border-box; resize: vertical;
+  background: var(--inp); border: 1px solid var(--bd2); color: var(--tx);
+  border-radius: var(--r-sm); padding: 7px 9px;
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.5;
+}
+.diff-composer textarea:focus, .dt-reply textarea:focus {
+  outline: none; border-color: var(--accent-d);
+}
+.dc-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+.dc-btn {
+  font-family: var(--font-ui); font-size: 11px; cursor: pointer;
+  border: 1px solid var(--bd2); background: var(--inp); color: var(--tx);
+  border-radius: var(--r-sm); padding: 5px 11px;
+}
+.dc-btn:hover:not(:disabled) { border-color: var(--accent-d); }
+.dc-btn:disabled { opacity: 0.5; cursor: default; }
+.dc-btn.primary {
+  background: var(--accent); color: var(--on-accent); border-color: transparent;
+  font-weight: 600; box-shadow: var(--glow);
+}
+.dc-btn.ok { color: var(--green); border-color: color-mix(in srgb, var(--green) 55%, transparent); }
+.dc-btn.warn { color: #e8b84b; border-color: #7a5f1e; }
+.dc-btn.ghost { background: transparent; color: var(--dim); }
+
+/* reply box inside an existing inline thread */
+.dt-reply { display: flex; gap: 7px; align-items: flex-start; margin-top: 8px; }
+.dt-reply textarea { flex: 1; min-height: 30px; }
+.dt-reply .dc-btn { flex: none; }
+
+/* ── pending-review bar (above the diff) ───────────────────────────────────── */
+#review-bar { border-bottom: 1px solid var(--bd); background: var(--elev); }
+#review-bar[hidden] { display: none; }
+.rb-row { display: flex; align-items: center; gap: 8px; padding: 7px 12px; }
+.rb-dot { width: 8px; height: 8px; border-radius: 50%; background: #e8b84b; box-shadow: 0 0 8px #e8b84b88; flex: none; }
+.rb-label { font-family: var(--font-mono); font-size: 11px; color: var(--dim); }
+.rb-spacer { flex: 1; }
+.rb-finish {
+  font-family: var(--font-ui); font-size: 11px; cursor: pointer;
+  background: var(--inp); border: 1px solid var(--accent-d); color: var(--accent);
+  border-radius: var(--r-sm); padding: 4px 10px;
+}
+.rb-finish:hover { box-shadow: var(--glow); }
+.rb-menu { padding: 0 12px 10px; }
+.rb-menu.hidden { display: none; }
+.rb-menu textarea {
+  width: 100%; box-sizing: border-box; resize: vertical;
+  background: var(--inp); border: 1px solid var(--bd2); color: var(--tx);
+  border-radius: var(--r-sm); padding: 6px 9px;
+  font-family: var(--font-mono); font-size: 11.5px;
+}
+.rb-actions { display: flex; gap: 7px; margin-top: 7px; }
