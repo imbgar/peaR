@@ -88,6 +88,7 @@ export interface SessionRec {
   id: string;
   started: string;
   last_opened: string;
+  messages: number;
 }
 
 export interface PrRecord {
@@ -96,6 +97,22 @@ export interface PrRecord {
   last_opened: string;
   cli: CliKind;
   sessions: SessionRec[];
+}
+
+export interface Favorites {
+  repos: string[]; // "owner/repo" keys
+  prs: PrRef[];
+}
+
+export interface QueueItem {
+  pr: PrRef;
+  title: string;
+  status: string; // "queued" | "active" | "done"
+  added: string;
+}
+
+export interface Queue {
+  items: QueueItem[];
 }
 
 export type Command =
@@ -120,6 +137,12 @@ export type Command =
   | { type: "clear_history" }
   | { type: "delete_history"; pr: PrRef }
   | { type: "restore_history" }
+  | { type: "favorite_repo"; owner: string; repo: string; on: boolean }
+  | { type: "favorite_pr"; pr: PrRef; on: boolean }
+  | { type: "queue_add"; pr: PrRef; title: string }
+  | { type: "queue_set_status"; pr: PrRef; status: string }
+  | { type: "queue_remove"; pr: PrRef }
+  | { type: "queue_move"; pr: PrRef; dir: number }
   | { type: "check_skills" }
   | { type: "install_skills" }
   | { type: "load_diff"; tab: number }
@@ -140,6 +163,7 @@ export type Command =
       start_side?: string | null;
     }
   | { type: "submit_review"; tab: number; review_id: string; event: string; body: string }
+  | { type: "create_review"; tab: number; event: string; body: string }
   | { type: "reply_review_thread"; tab: number; thread_id: string; body: string }
   | { type: "resolve_thread"; tab: number; thread_id: string; resolved: boolean }
   | { type: "ask_insight"; tab: number; id: string; prompt: string }
@@ -162,7 +186,7 @@ export type Event =
   | { type: "repo_tree"; tab: number; files: string[] }
   | { type: "thought"; tab: number; kind: string; text: string; detail: string }
   | { type: "insight"; tab: number; id: string; kind: string; text: string }
-  | { type: "history"; entries: PrRecord[] }
+  | { type: "history"; entries: PrRecord[]; favorites: Favorites; queue: Queue }
   | { type: "skills_status"; installed: boolean }
   | { type: "notice"; tab: number | null; message: string }
   | { type: "error"; tab: number | null; message: string };

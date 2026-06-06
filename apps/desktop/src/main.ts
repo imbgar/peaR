@@ -12,6 +12,7 @@ import "@fontsource/ibm-plex-mono/700.css";
 import "@fontsource-variable/hanken-grotesk";
 import "@fontsource-variable/jetbrains-mono";
 import { marked } from "marked";
+import { parse as parseSearchQuery, type SearchParserResult } from "search-query-parser";
 import { renderMarkdown } from "./markdown";
 import { initUpdater } from "./update";
 import {
@@ -25,6 +26,7 @@ import {
   setResolveHandler,
   setPendingReview,
   setDiffCloseHandler,
+  setApproveHandler,
   type TreeLevel,
 } from "./diff";
 import {
@@ -33,11 +35,14 @@ import {
   CliKind,
   Comment,
   DiffComment,
+  Favorites,
   PanelPayload,
   PrComments,
   PrMeta,
   PrRecord,
   PrRef,
+  Queue,
+  QueueItem,
   ReviewButton,
   ReviewTier,
   parsePrRef,
@@ -107,7 +112,7 @@ const TERM_FONT: Record<string, string> = {
 };
 
 function currentTheme(): string {
-  return document.documentElement.dataset.theme || "phosphor";
+  return document.documentElement.dataset.theme || "instrument";
 }
 
 // ── per-tab view state ──────────────────────────────────────────────────────
@@ -147,6 +152,7 @@ const TOOLBAR_ICONS: Record<string, string> = {
   comments: `<path d="M2.8 4.2a1.2 1.2 0 011.2-1.2h8a1.2 1.2 0 011.2 1.2v5a1.2 1.2 0 01-1.2 1.2H6l-2.6 2.3V10.4H4a1.2 1.2 0 01-1.2-1.2z"/>`,
   tree: `<path d="M4 3v8.5"/><path d="M4 5.4h3.4M4 9.6h3.4"/><rect x="8" y="4.1" width="4.3" height="2.6" rx="0.6"/><rect x="8" y="8.3" width="4.3" height="2.6" rx="0.6"/>`,
   diff: `<path d="M4 6.2h6.5l-2-2M12 9.8H5.5l2 2"/>`,
+  approve: `<circle cx="8" cy="8" r="5.3"/><path d="M5.6 8.1l1.7 1.7 3.1-3.6"/>`,
   save: `<path d="M8 3v6.3M5.3 6.8 8 9.5l2.7-2.7"/><path d="M3.5 12.5h9"/>`,
 };
 function actionSvg(paths: string): string {
@@ -380,6 +386,8 @@ function toggleSessionPop(rec: PrRecord, anchor: HTMLElement) {
     empty.textContent = "no Claude sessions yet";
     pop.appendChild(empty);
   } else {
+    // Star the busiest session (most messages) — the one most worth resuming.
+    const maxMsgs = Math.max(0, ...rec.sessions.map((s) => s.messages || 0));
     rec.sessions.forEach((s, i) => {
       const row = document.createElement("div");
       row.className = "session-row";
@@ -393,7 +401,9 @@ function toggleSessionPop(rec: PrRecord, anchor: HTMLElement) {
       when.textContent = (i === 0 ? "latest · " : "") + relTime(s.last_opened);
       const id = document.createElement("div");
       id.className = "session-id";
-      id.textContent = s.id.slice(0, 8);
+      const busiest = maxMsgs > 0 && (s.messages || 0) === maxMsgs;
+      id.textContent = `${s.id.slice(0, 8)} · ${s.messages || 0} msg${busiest ? " ★" : ""}`;
+      if (busiest) id.classList.add("session-busiest");
       meta.append(when, id);
       row.append(tick, meta);
       row.onclick = (e) => {
@@ -421,71 +431,586 @@ function toggleSessionPop(rec: PrRecord, anchor: HTMLElement) {
   sessionPopEl = pop;
 }
 
-function renderHistory(entries: PrRecord[]) {
+// ── history panel: flat list ⇄ org→repo→PR tree · structured search · favorites ──
+let historyEntries: PrRecord[] = [];
+let favorites: Favorites = { repos: [], prs: [] };
+let queue: Queue = { items: [] };
+type HistView = "list" | "tree" | "queue";
+const savedView = localStorage.getItem("pear.histView");
+let historyView: HistView =
+  savedView === "tree" || savedView === "queue" ? savedView : "list";
+let favOnly = localStorage.getItem("pear.favOnly") === "1";
+let histQuery = "";
+
+const samePr = (a: PrRef, b: PrRef) =>
+  a.owner === b.owner && a.repo === b.repo && a.number === b.number;
+const isQueued = (pr: PrRef) => queue.items.some((i) => samePr(i.pr, pr));
+const queueAdd = (pr: PrRef, title: string) => send({ type: "queue_add", pr, title });
+
+const isRepoFav = (owner: string, repo: string) => favorites.repos.includes(`${owner}/${repo}`);
+const isPrFav = (pr: PrRef) =>
+  favorites.prs.some((p) => p.owner === pr.owner && p.repo === pr.repo && p.number === pr.number);
+const favRepo = (owner: string, repo: string, on: boolean) =>
+  send({ type: "favorite_repo", owner, repo, on });
+const favPr = (pr: PrRef, on: boolean) => send({ type: "favorite_pr", pr, on });
+const isFavRec = (r: PrRecord) => isPrFav(r.pr) || isRepoFav(r.pr.owner, r.pr.repo);
+const totalMessages = (r: PrRecord) => r.sessions.reduce((s, x) => s + (x.messages || 0), 0);
+/** The session with the most messages (the ★ busiest), or null if none have any. */
+const busiestSession = (r: PrRecord) =>
+  r.sessions.reduce<PrRecord["sessions"][number] | null>(
+    (best, s) => ((s.messages || 0) > (best?.messages || 0) ? s : best),
+    null,
+  );
+
+/** Test one PR against one query string. `exact` keyword matching for committed chips
+ *  (`repo:roboflow` is the roboflow repo, not roboflow-infra); `prefix` for the still-being-
+ *  typed text so it NARROWS live instead of emptying the list before you finish the value. */
+function matchOne(
+  fields: { owner: string; repo: string; num: string; title: string; cli: string },
+  raw: string,
+  exact: boolean,
+): boolean {
+  if (!raw.trim()) return true;
+  const q = parseSearchQuery(raw, {
+    keywords: ["repo", "org", "pr", "cli"],
+    tokenize: true,
+    alwaysArray: true,
+  }) as SearchParserResult;
+  const cmp = (field: unknown, val: string) => {
+    if (!field) return true;
+    const arr = (Array.isArray(field) ? field : [field])
+      .map(String)
+      .filter((f) => f.trim() !== ""); // ignore an incomplete `repo:` (no value yet)
+    if (!arr.length) return true;
+    return arr.some((f) =>
+      exact ? val.toLowerCase() === f.toLowerCase() : val.toLowerCase().startsWith(f.toLowerCase()),
+    );
+  };
+  if (!cmp(q.org, fields.owner) || !cmp(q.repo, fields.repo) || !cmp(q.pr, fields.num) || !cmp(q.cli, fields.cli))
+    return false;
+  const text = Array.isArray(q.text) ? q.text : q.text ? [q.text] : [];
+  if (text.length) {
+    const hay = `${fields.owner}/${fields.repo}#${fields.num} ${fields.title}`.toLowerCase();
+    if (!text.every((t) => hay.includes(String(t).toLowerCase()))) return false;
+  }
+  return true;
+}
+
+/** Structured search: committed chips (`histQuery`, exact) AND the in-progress input
+ *  (`#hist-search-input`, prefix — live narrowing). Both must pass. */
+function matchFields(owner: string, repo: string, num: string, title: string, cli: string): boolean {
+  const f = { owner, repo, num, title, cli };
+  const pending = (document.getElementById("hist-search-input") as HTMLInputElement | null)?.value ?? "";
+  return matchOne(f, histQuery, true) && matchOne(f, pending, false);
+}
+const matchesRec = (r: PrRecord) =>
+  matchFields(r.pr.owner, r.pr.repo, String(r.pr.number), r.title, r.cli);
+
+function visibleEntries(): PrRecord[] {
+  return historyEntries.filter((r) => (!favOnly || isFavRec(r)) && matchesRec(r));
+}
+
+// Parse the query into display chips (GitHub-style feedback that each filter was
+// recognized). `token` is the raw text used to rebuild the query when a chip is removed.
+interface HistChip {
+  label: string;
+  token: string;
+  key: boolean;
+}
+function parsedFilters(raw: string): HistChip[] {
+  if (!raw.trim()) return [];
+  const q = parseSearchQuery(raw, {
+    keywords: ["repo", "org", "pr", "cli"],
+    tokenize: true,
+    alwaysArray: true,
+  }) as SearchParserResult;
+  const out: HistChip[] = [];
+  for (const key of ["org", "repo", "pr", "cli"]) {
+    const v = q[key];
+    if (!v) continue;
+    for (const val of Array.isArray(v) ? v : [v]) {
+      if (String(val).trim() === "") continue; // skip an incomplete `repo:` (no value yet)
+      out.push({ label: `${key}: ${val}`, token: `${key}:${val}`, key: true });
+    }
+  }
+  const text = Array.isArray(q.text) ? q.text : q.text ? [q.text] : [];
+  for (const t of text) out.push({ label: `"${t}"`, token: String(t), key: false });
+  return out;
+}
+
+function renderHistChips() {
+  const chips = $("#hist-chips");
+  const filters = parsedFilters(histQuery);
+  chips.innerHTML = "";
+  chips.classList.toggle("hidden", filters.length === 0);
+  filters.forEach((f, i) => {
+    const chip = document.createElement("span");
+    chip.className = "hist-chip " + (f.key ? "key" : "text");
+    const lbl = document.createElement("span");
+    lbl.textContent = f.label;
+    const x = document.createElement("button");
+    x.type = "button";
+    x.className = "hist-chip-x";
+    x.textContent = "×";
+    x.title = "Remove filter";
+    x.onclick = () => {
+      histQuery = filters
+        .filter((_, j) => j !== i)
+        .map((g) => g.token)
+        .join(" ");
+      renderHistChips();
+      renderHistory();
+    };
+    chip.append(lbl, x);
+    chips.appendChild(chip);
+  });
+  // Hide the placeholder once there are committed chips (the box reads cleanly).
+  $<HTMLInputElement>("#hist-search-input").placeholder = histQuery.trim()
+    ? "filter…"
+    : "search · repo:x org:y pr:123";
+}
+
+/** Commit the in-progress input as a chip (on space / Enter). */
+function commitPending(): boolean {
+  const inp = $<HTMLInputElement>("#hist-search-input");
+  const v = inp.value.trim();
+  if (!v) return false;
+  histQuery = (histQuery ? `${histQuery} ${v}` : v).trim();
+  inp.value = "";
+  renderHistChips();
+  renderHistory();
+  return true;
+}
+
+/** Backspace on an empty input removes the last committed chip. */
+function removeLastChip(): boolean {
+  const toks = parsedFilters(histQuery);
+  if (!toks.length) return false;
+  histQuery = toks
+    .slice(0, -1)
+    .map((t) => t.token)
+    .join(" ");
+  renderHistChips();
+  renderHistory();
+  return true;
+}
+
+function renderHistory() {
   closeSessionPop();
+  closeHistCtx();
+  $("#view-list").classList.toggle("on", historyView === "list");
+  $("#view-tree").classList.toggle("on", historyView === "tree");
+  $("#view-queue").classList.toggle("on", historyView === "queue");
+  $("#fav-only").classList.toggle("on", favOnly);
+  // Queue tab badge: number of items not yet done.
+  const pending = queue.items.filter((i) => i.status !== "done").length;
+  const qc = $("#queue-count");
+  qc.textContent = pending ? String(pending) : "";
+  qc.classList.toggle("hidden", pending === 0);
+  // Search + favorites filters apply to history/tree only, not the queue.
+  $("#hist-search").classList.toggle("hidden", historyView === "queue");
+  $("#fav-only").classList.toggle("hidden", historyView === "queue");
+  historyEl.classList.toggle("tree-mode", historyView === "tree");
+  historyEl.classList.toggle("queue-mode", historyView === "queue");
   historyEl.innerHTML = "";
-  if (entries.length === 0) {
-    const li = document.createElement("li");
-    li.className = "history-empty";
-    li.textContent = "no reviews yet";
-    historyEl.appendChild(li);
+  if (historyView === "queue") {
+    renderQueue();
     return;
   }
-  for (const rec of entries) {
-    const li = document.createElement("li");
-    li.className = "history-item";
-    li.title = `${rec.pr.owner}/${shortLabel(rec.pr)} — ${rec.title}`;
+  const entries = visibleEntries();
+  if (historyView === "tree") renderHistTree(entries);
+  else renderHistList(entries);
+}
 
-    const main = document.createElement("div");
-    main.className = "history-main";
+function emptyRow(text: string) {
+  const li = document.createElement("li");
+  li.className = "history-empty";
+  li.textContent = text;
+  historyEl.appendChild(li);
+}
 
-    const ref = document.createElement("span");
-    ref.className = "history-ref";
-    ref.textContent = shortLabel(rec.pr);
-    if (rec.sessions.length > 0) {
-      const badge = document.createElement("span");
-      badge.className = "history-badge";
-      badge.textContent = String(rec.sessions.length);
-      badge.title = `${rec.sessions.length} session(s) — click to expand`;
-      ref.appendChild(badge);
-    }
-    main.appendChild(ref);
-
-    const title = document.createElement("span");
-    title.className = "history-title";
-    title.textContent = rec.title;
-    main.appendChild(title);
-
-    main.onclick = (e) => {
-      e.stopPropagation();
-      toggleSessionPop(rec, li);
-    };
-    li.appendChild(main);
-
-    const actions = document.createElement("div");
-    actions.className = "history-actions";
-    actions.appendChild(
-      iconBtn("⟲", "Resume latest session", (e) => {
-        e.stopPropagation();
-        openPr(rec.pr, rec.cli);
-      }),
-    );
-    actions.appendChild(
-      iconBtn("+", "New session for this PR", (e) => {
-        e.stopPropagation();
-        openPr(rec.pr, rec.cli, { fresh: true });
-      }),
-    );
-    const del = iconBtn("×", "Delete this history entry", (e) => {
-      e.stopPropagation();
-      send({ type: "delete_history", pr: rec.pr });
-    });
-    del.classList.add("hicon-danger");
-    actions.appendChild(del);
-    li.appendChild(actions);
-
-    historyEl.appendChild(li);
+function renderHistList(entries: PrRecord[]) {
+  if (entries.length === 0) {
+    emptyRow(historyEntries.length ? "no matches" : "no reviews yet");
+    return;
   }
+  // Favorited entries float to the top (stable within each group → keeps recency order).
+  const ordered = [...entries].sort((a, b) => Number(isFavRec(b)) - Number(isFavRec(a)));
+  for (const rec of ordered) historyEl.appendChild(historyItem(rec));
+}
+
+function favIconBtn(pr: PrRef): HTMLButtonElement {
+  const on = isPrFav(pr);
+  const b = iconBtn(on ? "★" : "☆", on ? "Unfavorite PR" : "Favorite PR", (e) => {
+    e.stopPropagation();
+    favPr(pr, !on);
+  });
+  b.classList.add("hicon-fav");
+  if (on) b.classList.add("on");
+  return b;
+}
+
+function historyItem(rec: PrRecord): HTMLElement {
+  const li = document.createElement("li");
+  li.className = "history-item";
+  li.title = `${rec.pr.owner}/${shortLabel(rec.pr)} — ${rec.title}`;
+
+  const main = document.createElement("div");
+  main.className = "history-main";
+  const ref = document.createElement("span");
+  ref.className = "history-ref";
+  if (isFavRec(rec)) {
+    const star = document.createElement("span");
+    star.className = "history-fav-mark";
+    star.textContent = "★";
+    ref.appendChild(star);
+  }
+  ref.appendChild(document.createTextNode(shortLabel(rec.pr)));
+  if (rec.sessions.length > 0) {
+    const msgs = totalMessages(rec);
+    const badge = document.createElement("span");
+    badge.className = "history-badge";
+    badge.textContent = msgs > 0 ? `${rec.sessions.length}·${msgs}✦` : String(rec.sessions.length);
+    badge.title = `${rec.sessions.length} session(s), ${msgs} messages — click to expand`;
+    ref.appendChild(badge);
+  }
+  main.appendChild(ref);
+  const title = document.createElement("span");
+  title.className = "history-title";
+  title.textContent = rec.title;
+  main.appendChild(title);
+  main.onclick = (e) => {
+    e.stopPropagation();
+    toggleSessionPop(rec, li);
+  };
+  li.appendChild(main);
+  li.oncontextmenu = (e) => prContextMenu(e, rec.pr, rec);
+
+  const actions = document.createElement("div");
+  actions.className = "history-actions";
+  actions.appendChild(favIconBtn(rec.pr));
+  actions.appendChild(
+    iconBtn("⟲", "Resume latest session", (e) => {
+      e.stopPropagation();
+      openPr(rec.pr, rec.cli);
+    }),
+  );
+  actions.appendChild(
+    iconBtn("+", "New session for this PR", (e) => {
+      e.stopPropagation();
+      openPr(rec.pr, rec.cli, { fresh: true });
+    }),
+  );
+  const del = iconBtn("×", "Delete this history entry", (e) => {
+    e.stopPropagation();
+    send({ type: "delete_history", pr: rec.pr });
+  });
+  del.classList.add("hicon-danger");
+  actions.appendChild(del);
+  li.appendChild(actions);
+  return li;
+}
+
+// ── review queue ──────────────────────────────────────────────────────────────
+// A curated to-review list (persisted in pear-core). Items carry a workflow status
+// (queued → active → done) and a priority order (top = next up). Right-click a history/
+// tree PR to enqueue it; right-click a queue item for the full status/reorder flow.
+const QUEUE_STATUS: Record<string, { icon: string; label: string; cls: string }> = {
+  queued: { icon: "📋", label: "queued", cls: "q-queued" },
+  active: { icon: "👀", label: "in progress", cls: "q-active" },
+  done: { icon: "✓", label: "done", cls: "q-done" },
+};
+
+function renderQueue() {
+  if (queue.items.length === 0) {
+    emptyRow("queue is empty — right-click a PR → “Add to queue”");
+    return;
+  }
+  for (const item of queue.items) historyEl.appendChild(queueItemEl(item));
+}
+
+function cycleQueueStatus(item: QueueItem) {
+  const next = item.status === "queued" ? "active" : item.status === "active" ? "done" : "queued";
+  send({ type: "queue_set_status", pr: item.pr, status: next });
+}
+
+function queueItemEl(item: QueueItem): HTMLElement {
+  const st = QUEUE_STATUS[item.status] ?? QUEUE_STATUS.queued;
+  const li = document.createElement("li");
+  li.className = `queue-item ${st.cls}`;
+  li.title = `${item.pr.owner}/${shortLabel(item.pr)} — ${st.label}`;
+
+  const dot = document.createElement("button");
+  dot.type = "button";
+  dot.className = "queue-status";
+  dot.textContent = st.icon;
+  dot.title = `${st.label} — click to advance`;
+  dot.onclick = (e) => {
+    e.stopPropagation();
+    cycleQueueStatus(item);
+  };
+
+  const main = document.createElement("div");
+  main.className = "queue-main";
+  const ref = document.createElement("span");
+  ref.className = "queue-ref";
+  ref.textContent = shortLabel(item.pr);
+  const title = document.createElement("span");
+  title.className = "queue-title";
+  title.textContent = item.title || `${item.pr.owner}/${item.pr.repo}`;
+  main.append(ref, title);
+  main.onclick = (e) => {
+    e.stopPropagation();
+    openPr(item.pr, "claude");
+  };
+
+  const actions = document.createElement("div");
+  actions.className = "history-actions";
+  actions.appendChild(iconBtn("↑", "Move up", (e) => { e.stopPropagation(); send({ type: "queue_move", pr: item.pr, dir: -1 }); }));
+  actions.appendChild(iconBtn("↓", "Move down", (e) => { e.stopPropagation(); send({ type: "queue_move", pr: item.pr, dir: 1 }); }));
+  actions.appendChild(iconBtn("⟲", "Open / resume", (e) => { e.stopPropagation(); openPr(item.pr, "claude"); }));
+  const rm = iconBtn("×", "Remove from queue", (e) => { e.stopPropagation(); send({ type: "queue_remove", pr: item.pr }); });
+  rm.classList.add("hicon-danger");
+  actions.appendChild(rm);
+
+  li.append(dot, main, actions);
+  li.oncontextmenu = (e) => queueContextMenu(e, item);
+  return li;
+}
+
+function queueContextMenu(e: MouseEvent, item: QueueItem) {
+  e.preventDefault();
+  e.stopPropagation();
+  const fav = isPrFav(item.pr);
+  const set = (status: string): CtxItem["on"] => () => send({ type: "queue_set_status", pr: item.pr, status });
+  openHistCtx(e.clientX, e.clientY, [
+    { label: "👀 Mark in progress", on: set("active") },
+    { label: "✓ Mark done", on: set("done") },
+    { label: "📋 Mark queued", on: set("queued") },
+    { label: "↑ Move up", on: () => send({ type: "queue_move", pr: item.pr, dir: -1 }) },
+    { label: "↓ Move down", on: () => send({ type: "queue_move", pr: item.pr, dir: 1 }) },
+    { label: "⟲ Open / resume", on: () => openPr(item.pr, "claude") },
+    { label: fav ? "★ Unfavorite" : "☆ Favorite", on: () => favPr(item.pr, !fav) },
+    { label: "× Remove from queue", danger: true, on: () => send({ type: "queue_remove", pr: item.pr }) },
+  ]);
+}
+
+// ── org → repo → PR tree ──────────────────────────────────────────────────────
+type PrCell = { pr: PrRef; rec: PrRecord | null };
+
+function renderHistTree(entries: PrRecord[]) {
+  const orgs = new Map<string, Map<string, Map<number, PrCell>>>();
+  const repoOf = (owner: string, repo: string) => {
+    const o = orgs.get(owner) ?? orgs.set(owner, new Map()).get(owner)!;
+    return o.get(repo) ?? o.set(repo, new Map()).get(repo)!;
+  };
+  for (const r of entries) repoOf(r.pr.owner, r.pr.repo).set(r.pr.number, { pr: r.pr, rec: r });
+  // Merge favorited repos / PRs so added-but-empty favorites still appear (search-filtered).
+  for (const key of favorites.repos) {
+    const [owner, repo] = key.split("/");
+    if (owner && repo && matchFields(owner, repo, "", "", "")) repoOf(owner, repo);
+  }
+  for (const pr of favorites.prs) {
+    if (!matchFields(pr.owner, pr.repo, String(pr.number), "", "")) continue;
+    const m = repoOf(pr.owner, pr.repo);
+    if (!m.has(pr.number)) m.set(pr.number, { pr, rec: null });
+  }
+
+  if (orgs.size === 0) {
+    emptyRow(historyEntries.length || favorites.repos.length || favorites.prs.length ? "no matches" : "no reviews yet");
+    return;
+  }
+
+  for (const owner of [...orgs.keys()].sort((a, b) => a.localeCompare(b))) {
+    const org = treeNode("org", owner, "");
+    const repos = orgs.get(owner)!;
+    for (const repo of [...repos.keys()].sort((a, b) => a.localeCompare(b))) {
+      const fav = isRepoFav(owner, repo);
+      const repoNode = treeNode("repo", repo, fav ? "★" : "");
+      repoNode.rowBtn.oncontextmenu = (e) => repoContextMenu(e, owner, repo);
+      const cells = repos.get(repo)!;
+      const nums = [...cells.keys()].sort((a, b) => b - a);
+      for (const num of nums) repoNode.children.appendChild(treePrNode(cells.get(num)!));
+      if (nums.length === 0) {
+        const none = document.createElement("div");
+        none.className = "tree-none";
+        none.textContent = "no PRs yet";
+        repoNode.children.appendChild(none);
+      }
+      org.children.appendChild(repoNode.el);
+    }
+    historyEl.appendChild(org.el);
+  }
+}
+
+function treeNode(
+  kind: "org" | "repo",
+  label: string,
+  mark: string,
+): { el: HTMLElement; rowBtn: HTMLElement; children: HTMLElement } {
+  const el = document.createElement("li");
+  el.className = `tree-node tn-${kind}`;
+  const rowBtn = document.createElement("button");
+  rowBtn.type = "button";
+  rowBtn.className = "tree-row";
+  const chev = document.createElement("span");
+  chev.className = "tree-chev";
+  chev.textContent = "▾";
+  const name = document.createElement("span");
+  name.className = "tree-name";
+  name.textContent = label;
+  rowBtn.append(chev, name);
+  if (mark) {
+    const m = document.createElement("span");
+    m.className = "tree-mark on";
+    m.textContent = mark;
+    rowBtn.appendChild(m);
+  }
+  const children = document.createElement("ul");
+  children.className = "tree-children";
+  rowBtn.addEventListener("click", () => {
+    const c = children.classList.toggle("collapsed");
+    rowBtn.classList.toggle("collapsed", c);
+  });
+  el.append(rowBtn, children);
+  return { el, rowBtn, children };
+}
+
+function treePrNode({ pr, rec }: PrCell): HTMLElement {
+  const li = document.createElement("li");
+  li.className = "tree-pr";
+  const row = document.createElement("div");
+  row.className = "tree-row tree-leaf";
+  const fav = isPrFav(pr);
+  const mark = document.createElement("span");
+  mark.className = "tree-mark" + (fav ? " on" : "");
+  mark.textContent = fav ? "★" : "•";
+  const name = document.createElement("span");
+  name.className = "tree-name";
+  name.textContent = `#${pr.number}${rec ? ` · ${rec.title}` : ""}`;
+  row.append(mark, name);
+  if (rec && rec.sessions.length > 0) {
+    const msgs = totalMessages(rec);
+    const badge = document.createElement("span");
+    badge.className = "tree-badge";
+    badge.textContent = `${rec.sessions.length}·${msgs}✦`;
+    badge.title = `${rec.sessions.length} session(s), ${msgs} messages`;
+    row.appendChild(badge);
+  }
+  row.onclick = (e) => {
+    e.stopPropagation();
+    if (rec) toggleSessionPop(rec, li);
+    else openPr(pr, "claude");
+  };
+  row.oncontextmenu = (e) => prContextMenu(e, pr, rec);
+  li.appendChild(row);
+  return li;
+}
+
+// ── right-click context menu + add-favorite prompt ────────────────────────────
+interface CtxItem {
+  label: string;
+  danger?: boolean;
+  on: () => void;
+}
+function openHistCtx(x: number, y: number, items: CtxItem[]) {
+  const ctx = $("#hist-ctx");
+  ctx.innerHTML = "";
+  for (const it of items) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "hist-ctx-item" + (it.danger ? " danger" : "");
+    b.textContent = it.label;
+    b.onclick = () => {
+      closeHistCtx();
+      it.on();
+    };
+    ctx.appendChild(b);
+  }
+  ctx.classList.remove("hidden");
+  ctx.style.left = `${Math.min(x, window.innerWidth - 190)}px`;
+  ctx.style.top = `${Math.min(y, window.innerHeight - ctx.offsetHeight - 8)}px`;
+}
+function closeHistCtx() {
+  $("#hist-ctx").classList.add("hidden");
+}
+function repoContextMenu(e: MouseEvent, owner: string, repo: string) {
+  e.preventDefault();
+  e.stopPropagation();
+  const fav = isRepoFav(owner, repo);
+  openHistCtx(e.clientX, e.clientY, [
+    { label: fav ? "★ Unfavorite repo" : "☆ Favorite repo", on: () => favRepo(owner, repo, !fav) },
+  ]);
+}
+function prContextMenu(e: MouseEvent, pr: PrRef, rec: PrRecord | null) {
+  e.preventDefault();
+  e.stopPropagation();
+  const fav = isPrFav(pr);
+  const cli = rec?.cli ?? "claude";
+  const queued = isQueued(pr);
+  const items: CtxItem[] = [
+    { label: fav ? "★ Unfavorite PR" : "☆ Favorite PR", on: () => favPr(pr, !fav) },
+    queued
+      ? { label: "📋 Remove from queue", on: () => send({ type: "queue_remove", pr }) }
+      : { label: "📋 Add to queue", on: () => queueAdd(pr, rec?.title ?? "") },
+    { label: "⟲ Resume latest", on: () => openPr(pr, cli) },
+  ];
+  // Resume the busiest session (most messages) — only worth a separate item when it's
+  // not already the latest one.
+  const busiest = rec ? busiestSession(rec) : null;
+  if (busiest && rec && rec.sessions[0]?.id !== busiest.id) {
+    items.push({
+      label: `★ Resume most active (${busiest.messages} msg)`,
+      on: () => openPr(pr, cli, { session_id: busiest.id }),
+    });
+  }
+  items.push({ label: "+ New session", on: () => openPr(pr, cli, { fresh: true }) });
+  if (rec) items.push({ label: "× Delete history", danger: true, on: () => send({ type: "delete_history", pr }) });
+  openHistCtx(e.clientX, e.clientY, items);
+}
+
+/** The "+" add button: a small popover to favorite a repo (`owner/repo`) or PR (`owner/repo#123`). */
+function promptHistAdd() {
+  const ctx = $("#hist-ctx");
+  ctx.innerHTML = "";
+  const form = document.createElement("form");
+  form.className = "hist-add-form";
+  const inp = document.createElement("input");
+  inp.className = "hist-add-input";
+  inp.placeholder = "owner/repo  or  owner/repo#123";
+  inp.autocomplete = "off";
+  const ok = document.createElement("button");
+  ok.type = "submit";
+  ok.className = "hist-add-ok";
+  ok.textContent = "Add";
+  form.append(inp, ok);
+  form.onsubmit = (e) => {
+    e.preventDefault();
+    addFavRef(inp.value.trim());
+    closeHistCtx();
+  };
+  ctx.appendChild(form);
+  ctx.classList.remove("hidden");
+  const r = $("#hist-add").getBoundingClientRect();
+  ctx.style.left = `${Math.max(8, r.right - 210)}px`;
+  ctx.style.top = `${r.bottom + 4}px`;
+  inp.focus();
+}
+function addFavRef(v: string) {
+  if (!v) return;
+  const pr = parsePrRef(v);
+  if (pr) {
+    favPr(pr, true);
+    setStatus(`favorited ${shortLabel(pr)}`);
+    return;
+  }
+  const m = v.match(/^([^/\s]+)\/([^/\s#]+)$/);
+  if (m) {
+    favRepo(m[1], m[2], true);
+    setStatus(`favorited ${m[1]}/${m[2]}`);
+    return;
+  }
+  setStatus("couldn't parse — use owner/repo or owner/repo#123");
 }
 
 // ── terminal lifecycle ──────────────────────────────────────────────────────
@@ -670,7 +1195,10 @@ function handle(ev: CoreEvent) {
       break;
     }
     case "history": {
-      renderHistory(ev.entries);
+      historyEntries = ev.entries;
+      favorites = ev.favorites ?? { repos: [], prs: [] };
+      queue = ev.queue ?? { items: [] };
+      renderHistory();
       break;
     }
     case "skills_status": {
@@ -847,8 +1375,8 @@ function installSkills() {
 // ── theming ─────────────────────────────────────────────────────────────────
 // Display name + a representative accent swatch for the picker.
 const THEMES: ReadonlyArray<{ id: string; label: string; swatch: string }> = [
-  { id: "phosphor", label: "Phosphor", swatch: "#ffb000" },
   { id: "instrument", label: "Instrument", swatch: "#c6f24e" },
+  { id: "phosphor", label: "Phosphor", swatch: "#ffb000" },
   { id: "vscode", label: "VS Code", swatch: "#0a84ff" },
   { id: "dark", label: "Dark", swatch: "#2f81f7" },
   { id: "macos-dark", label: "macOS Dark", swatch: "#0a84ff" },
@@ -856,7 +1384,7 @@ const THEMES: ReadonlyArray<{ id: string; label: string; swatch: string }> = [
 ];
 
 function applyTheme(name: string) {
-  if (!XTERM_THEMES[name]) name = "phosphor";
+  if (!XTERM_THEMES[name]) name = "instrument";
   document.documentElement.dataset.theme = name;
   localStorage.setItem("pear.theme", name);
   const meta = THEMES.find((t) => t.id === name);
@@ -1269,6 +1797,108 @@ function ensureComments(tab: number) {
   send({ type: "load_comments", tab });
 }
 
+// ── review-changes popup (GitHub-style: Approve / Request changes / Comment) ───
+type ReviewEvent = "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
+const REVIEW_EVENTS: { id: ReviewEvent; label: string; hint: string }[] = [
+  { id: "APPROVE", label: "Approve", hint: "Submit feedback and approve merging." },
+  { id: "REQUEST_CHANGES", label: "Request changes", hint: "Submit feedback that must be addressed." },
+  { id: "COMMENT", label: "Comment", hint: "Submit general feedback without approval." },
+];
+
+/** Open the GitHub-style "Review changes" popup for the active PR tab. If the viewer has
+ *  a pending review (queued inline comments) it's submitted with the chosen verdict;
+ *  otherwise a fresh review is created + submitted in one shot. */
+function openReviewModal(defaultEvent: ReviewEvent = "APPROVE") {
+  if (active === null) return;
+  const v = tabs.get(active);
+  if (!v?.pr) {
+    setStatus("review: this tab isn't a pull request");
+    return;
+  }
+  const tab = active;
+  ensureComments(tab); // make sure we learn any pending-review id
+  let chosen: ReviewEvent = defaultEvent;
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal";
+  overlay.innerHTML = `
+    <div class="modal-card review-card">
+      <div class="modal-head">
+        <span class="modal-title"></span>
+        <button class="modal-x close-x" title="Close (Esc)">×</button>
+      </div>
+      <div class="rv-fields">
+        <textarea class="rv-body" rows="4" placeholder="Leave a comment (optional for approve)"></textarea>
+        <div class="rv-events"></div>
+      </div>
+      <div class="modal-foot">
+        <span class="modal-status rv-hint"></span>
+        <span class="toolbar-spacer"></span>
+        <button class="primary rv-submit"></button>
+      </div>
+    </div>`;
+  overlay.querySelector(".modal-title")!.textContent = `Review ${shortLabel(v.pr)}`;
+  const body = overlay.querySelector<HTMLTextAreaElement>(".rv-body")!;
+  const events = overlay.querySelector<HTMLElement>(".rv-events")!;
+  const hint = overlay.querySelector<HTMLElement>(".rv-hint")!;
+  const submit = overlay.querySelector<HTMLButtonElement>(".rv-submit")!;
+
+  const refresh = () => {
+    events.querySelectorAll<HTMLButtonElement>(".rv-event").forEach((b) =>
+      b.classList.toggle("on", b.dataset.ev === chosen),
+    );
+    const meta = REVIEW_EVENTS.find((e) => e.id === chosen)!;
+    hint.textContent = meta.hint;
+    submit.textContent = meta.label;
+    submit.classList.toggle("danger", chosen === "REQUEST_CHANGES");
+  };
+  for (const e of REVIEW_EVENTS) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "rv-event";
+    b.dataset.ev = e.id;
+    b.textContent = e.label;
+    b.addEventListener("click", () => {
+      chosen = e.id;
+      refresh();
+    });
+    events.appendChild(b);
+  }
+  refresh();
+
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  const onKey = (ev: KeyboardEvent) => {
+    if (ev.key === "Escape") close();
+  };
+  document.addEventListener("keydown", onKey);
+  overlay.querySelector(".modal-x")!.addEventListener("click", close);
+  overlay.addEventListener("click", (ev) => {
+    if (ev.target === overlay) close();
+  });
+  submit.addEventListener("click", () => {
+    const text = body.value.trim();
+    if ((chosen === "REQUEST_CHANGES" || chosen === "COMMENT") && !text) {
+      hint.textContent = "a comment is required for this verdict";
+      hint.classList.add("warn");
+      body.focus();
+      return;
+    }
+    const pendingId = commentsCache.get(tab)?.pending_review_id ?? null;
+    if (pendingId) {
+      send({ type: "submit_review", tab, review_id: pendingId, event: chosen, body: text });
+    } else {
+      send({ type: "create_review", tab, event: chosen, body: text });
+    }
+    setStatus(`submitting review (${chosen.toLowerCase().replace(/_/g, " ")})…`);
+    close();
+  });
+  document.body.appendChild(overlay);
+  body.focus();
+}
+
 function renderConversation(tab: number) {
   const c = commentsCache.get(tab);
   commentsBodyEl.innerHTML = "";
@@ -1282,7 +1912,9 @@ function renderConversation(tab: number) {
     commentsCountEl.textContent = "";
     return;
   }
-  commentsCountEl.textContent = `${c.conversation.length}`;
+  commentsCountEl.textContent = c.conversation.length
+    ? `💬 See Threads (${c.conversation.length})`
+    : "";
   if (!c.conversation.length) {
     const div = document.createElement("div");
     div.className = "panel-empty";
@@ -1302,6 +1934,7 @@ function renderConversation(tab: number) {
 
 /** Populate the conversation navigator (pop-out list; jump to each comment). */
 function buildConversationNav(comments: Comment[]) {
+  hideThreadPreview();
   commentsNavEl.innerHTML = "";
   const head = document.createElement("div");
   head.className = "dtl-head";
@@ -1309,7 +1942,7 @@ function buildConversationNav(comments: Comment[]) {
   title.textContent = `${comments.length} comment${comments.length > 1 ? "s" : ""}`;
   const close = document.createElement("button");
   close.type = "button";
-  close.className = "dtl-close";
+  close.className = "dtl-close close-x";
   close.textContent = "×";
   close.title = "Hide list";
   close.addEventListener("click", () => {
@@ -1322,15 +1955,29 @@ function buildConversationNav(comments: Comment[]) {
   for (const cm of comments) {
     const item = document.createElement("button");
     item.type = "button";
-    item.className = "dtl-item";
+    item.className = "dtl-item with-av";
+    // Author avatar (GitHub profile image), like the comment cards' floating header.
+    const av = document.createElement("img");
+    av.className = "dtl-av";
+    av.loading = "lazy";
+    av.alt = "";
+    av.src = `https://github.com/${encodeURIComponent(cm.author)}.png?size=40`;
+    av.addEventListener("error", () => (av.style.display = "none"));
+    const text = document.createElement("span");
+    text.className = "dtl-text";
     const loc = document.createElement("span");
     loc.className = "dtl-loc";
     loc.textContent = `${cm.author}${cm.review_state ? ` · ${cm.review_state.toLowerCase().replace(/_/g, " ")}` : ""} · ${relTime(cm.created_at)}`;
     const meta = document.createElement("span");
     meta.className = "dtl-meta";
     meta.textContent = (cm.body || "").replace(/\s+/g, " ").trim().slice(0, 80) || "(no text)";
-    item.append(loc, meta);
+    text.append(loc, meta);
+    item.append(av, text);
+    // Hover → a floating preview bubble with the full comment.
+    item.addEventListener("mouseenter", () => showThreadPreview(item, cm));
+    item.addEventListener("mouseleave", hideThreadPreview);
     item.addEventListener("click", () => {
+      hideThreadPreview();
       const card = [...commentsBodyEl.querySelectorAll<HTMLElement>(".cv-card")].find(
         (e) => e.dataset.commentId === cm.id,
       );
@@ -1341,6 +1988,44 @@ function buildConversationNav(comments: Comment[]) {
     });
     commentsNavEl.appendChild(item);
   }
+}
+
+// Floating preview bubble for the thread navigator: hover an item → see the full comment.
+let dtlPreviewEl: HTMLElement | null = null;
+function showThreadPreview(anchor: HTMLElement, cm: Comment) {
+  if (!dtlPreviewEl) {
+    dtlPreviewEl = document.createElement("div");
+    dtlPreviewEl.className = "dtl-preview";
+    document.body.appendChild(dtlPreviewEl);
+  }
+  const el = dtlPreviewEl;
+  el.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "dtl-prev-head";
+  const av = document.createElement("img");
+  av.className = "dtl-prev-av";
+  av.alt = "";
+  av.src = `https://github.com/${encodeURIComponent(cm.author)}.png?size=48`;
+  av.addEventListener("error", () => (av.style.display = "none"));
+  const who = document.createElement("span");
+  who.className = "dtl-prev-who";
+  who.textContent = cm.author + (cm.review_state ? ` · ${cm.review_state.toLowerCase().replace(/_/g, " ")}` : "");
+  head.append(av, who);
+  const body = document.createElement("div");
+  body.className = "dtl-prev-body markdown";
+  renderMarkdown(body, cm.body || "_(no text)_");
+  el.append(head, body);
+  el.classList.add("show");
+  // Place it to the LEFT of the comments panel (the panel hugs the right edge), vertically
+  // aligned to the hovered item, clamped to the viewport.
+  const panel = document.getElementById("comments-panel")?.getBoundingClientRect();
+  const a = anchor.getBoundingClientRect();
+  const left = panel ? panel.left - el.offsetWidth - 8 : a.left - el.offsetWidth - 8;
+  el.style.left = `${Math.max(8, left)}px`;
+  el.style.top = `${Math.max(8, Math.min(a.top, window.innerHeight - el.offsetHeight - 12))}px`;
+}
+function hideThreadPreview() {
+  dtlPreviewEl?.classList.remove("show");
 }
 
 /** Point the (open) comments panel at the active tab: cached → render, PR-without-
@@ -1784,6 +2469,52 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#history-clear").addEventListener("click", () => send({ type: "clear_history" }));
   $("#history-restore").addEventListener("click", () => send({ type: "restore_history" }));
 
+  // History view: list ⇄ org→repo→PR tree, favorites-only filter, add-favorite, search.
+  const setHistView = (v: HistView) => {
+    historyView = v;
+    localStorage.setItem("pear.histView", v);
+    renderHistory();
+  };
+  $("#view-list").addEventListener("click", () => setHistView("list"));
+  $("#view-tree").addEventListener("click", () => setHistView("tree"));
+  $("#view-queue").addEventListener("click", () => setHistView("queue"));
+  $("#fav-only").addEventListener("click", () => {
+    favOnly = !favOnly;
+    localStorage.setItem("pear.favOnly", favOnly ? "1" : "0");
+    renderHistory();
+  });
+  $("#hist-add").addEventListener("click", (e) => {
+    e.stopPropagation();
+    promptHistAdd();
+  });
+  // Token-field search: committed qualifiers are chips inside the box; the input holds the
+  // in-progress term. Typing live-filters using committed chips + the pending text. Space or
+  // Enter commits the term to a chip (tag values never contain spaces) — EXCEPT a space right
+  // after `repo:` (an incomplete qualifier, no value yet) is swallowed so it can't make a junk
+  // chip. Backspace on an empty input removes the last chip.
+  const searchEl = $<HTMLInputElement>("#hist-search-input");
+  searchEl.addEventListener("input", () => renderHistory());
+  searchEl.addEventListener("keydown", (e) => {
+    const trimmed = searchEl.value.trim();
+    if (e.key === "Enter" || e.key === " ") {
+      if (!trimmed) return; // let a bare space through
+      e.preventDefault();
+      if (trimmed.endsWith(":")) return; // incomplete `repo:` — swallow the stray space
+      commitPending();
+    } else if (e.key === "Backspace" && searchEl.value === "" && searchEl.selectionStart === 0) {
+      if (removeLastChip()) e.preventDefault();
+    }
+  });
+  // Click anywhere in the box focuses the input.
+  $("#hist-search").addEventListener("click", () => searchEl.focus());
+  // Dismiss the history context menu / add popover on any outside click or Escape.
+  document.addEventListener("click", (e) => {
+    if (!(e.target as HTMLElement)?.closest("#hist-ctx")) closeHistCtx();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeHistCtx();
+  });
+
   // Action buttons. copy_content is frontend-handled (clipboard); the rest — including
   // save_review (now an agent "write the review to markdown" command) — are core macros.
   toolbarEl.querySelectorAll<HTMLButtonElement>("button[data-btn]").forEach((b) => {
@@ -1800,6 +2531,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#panel-load").addEventListener("click", loadPanel);
   $("#diff-btn").addEventListener("click", loadDiff);
   $("#comments-btn").addEventListener("click", loadComments);
+  $("#approve-btn").addEventListener("click", () => openReviewModal("APPROVE"));
   $("#comments-close").addEventListener("click", () => setComments(false));
   // The comment count toggles a pop-out navigator (jump to each conversation comment).
   commentsCountEl.addEventListener("click", () => {
@@ -1860,6 +2592,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#dtree-wider").addEventListener("click", () => setTreeLevel(WIDER[treeLevel]));
   $("#dtree-narrower").addEventListener("click", () => setTreeLevel(NARROWER[treeLevel]));
   $("#dtree-close").addEventListener("click", () => closeTree());
+  setApproveHandler(() => openReviewModal("APPROVE"));
   // Insight is hard-coded off for now — hide its controls (the panel itself is reused
   // by the diff view, so it stays). Flip INSIGHT_ENABLED to bring these back.
   if (!INSIGHT_ENABLED) {
@@ -1988,7 +2721,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   const hashTheme = location.hash.slice(1);
   const initialTheme = XTERM_THEMES[hashTheme]
     ? hashTheme
-    : localStorage.getItem("pear.theme") || "phosphor";
+    : localStorage.getItem("pear.theme") || "instrument";
   initThemePicker();
   applyTheme(initialTheme);
 

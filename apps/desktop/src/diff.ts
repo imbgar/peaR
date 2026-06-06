@@ -138,6 +138,11 @@ let onDiffClose: (() => void) | null = null;
 export function setDiffCloseHandler(fn: () => void) {
   onDiffClose = fn;
 }
+let onApprove: (() => void) | null = null;
+/** Wire the diff toolbar's "Review" (approve / request changes) button. */
+export function setApproveHandler(fn: () => void) {
+  onApprove = fn;
+}
 
 function sortFiles(files: DFile[]): DFile[] {
   const by = (f: DFile) =>
@@ -175,7 +180,7 @@ function buildThreadList(container: HTMLElement, threads: ReviewThread[]): HTMLE
   title.textContent = `${threads.length} thread${threads.length > 1 ? "s" : ""}`;
   const close = document.createElement("button");
   close.type = "button";
-  close.className = "dtl-close";
+  close.className = "dtl-close close-x";
   close.textContent = "×";
   close.title = "Hide thread list";
   close.addEventListener("click", () => list.classList.add("hidden"));
@@ -309,10 +314,20 @@ function buildDiffToolbar(
   bar.appendChild(mkToggle("+", "hide-add", "Show / hide added lines"));
   bar.appendChild(mkToggle("−", "hide-del", "Show / hide removed lines"));
 
+  if (onApprove) {
+    const review = document.createElement("button");
+    review.type = "button";
+    review.className = "dt-review";
+    review.textContent = "✓ Review";
+    review.title = "Review changes — Approve / Request changes / Comment";
+    review.addEventListener("click", () => onApprove?.());
+    bar.appendChild(review);
+  }
+
   if (onDiffClose) {
     const close = document.createElement("button");
     close.type = "button";
-    close.className = "dt-close";
+    close.className = "dt-close close-x";
     close.textContent = "×";
     close.title = "Close diff";
     close.addEventListener("click", () => onDiffClose?.());
