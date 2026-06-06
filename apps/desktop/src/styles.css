@@ -449,6 +449,8 @@ button:disabled { opacity: 0.38; cursor: default; }
 
 #history {
   list-style: none;
+  margin: 0;
+  padding: 0; /* kill the browser's default ~40px <ul> inline-start padding */
   overflow-y: auto;
   flex: 1;
   min-height: 0;
@@ -517,7 +519,7 @@ button:disabled { opacity: 0.38; cursor: default; }
 /* org → repo → PR tree view */
 #history.tree-mode { gap: 0; }
 .tree-node, .tree-pr { list-style: none; }
-.tree-children { list-style: none; margin: 0 0 0 9px; padding-left: 10px; border-left: 1px solid var(--bd); }
+.tree-children { list-style: none; margin: 0 0 0 6px; padding-left: 7px; border-left: 1px solid var(--bd); }
 .tree-children.collapsed { display: none; }
 .tree-row {
   display: flex; align-items: center; gap: 5px; width: 100%; text-align: left;
