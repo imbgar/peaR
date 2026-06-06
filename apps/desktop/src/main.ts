@@ -13,6 +13,7 @@ import "@fontsource-variable/hanken-grotesk";
 import "@fontsource-variable/jetbrains-mono";
 import { marked } from "marked";
 import { parse as parseSearchQuery, type SearchParserResult } from "search-query-parser";
+import { renderMarkdown } from "./markdown";
 import { initUpdater } from "./update";
 import {
   renderDiff,
@@ -1470,7 +1471,7 @@ function renderConversation(tab: number) {
     return;
   }
   commentsCountEl.textContent = c.conversation.length
-    ? `💬 See (${c.conversation.length})`
+    ? `💬 See Threads (${c.conversation.length})`
     : "";
   if (!c.conversation.length) {
     const div = document.createElement("div");
@@ -1491,6 +1492,7 @@ function renderConversation(tab: number) {
 
 /** Populate the conversation navigator (pop-out list; jump to each comment). */
 function buildConversationNav(comments: Comment[]) {
+  hideThreadPreview();
   commentsNavEl.innerHTML = "";
   const head = document.createElement("div");
   head.className = "dtl-head";
@@ -1511,15 +1513,29 @@ function buildConversationNav(comments: Comment[]) {
   for (const cm of comments) {
     const item = document.createElement("button");
     item.type = "button";
-    item.className = "dtl-item";
+    item.className = "dtl-item with-av";
+    // Author avatar (GitHub profile image), like the comment cards' floating header.
+    const av = document.createElement("img");
+    av.className = "dtl-av";
+    av.loading = "lazy";
+    av.alt = "";
+    av.src = `https://github.com/${encodeURIComponent(cm.author)}.png?size=40`;
+    av.addEventListener("error", () => (av.style.display = "none"));
+    const text = document.createElement("span");
+    text.className = "dtl-text";
     const loc = document.createElement("span");
     loc.className = "dtl-loc";
     loc.textContent = `${cm.author}${cm.review_state ? ` · ${cm.review_state.toLowerCase().replace(/_/g, " ")}` : ""} · ${relTime(cm.created_at)}`;
     const meta = document.createElement("span");
     meta.className = "dtl-meta";
     meta.textContent = (cm.body || "").replace(/\s+/g, " ").trim().slice(0, 80) || "(no text)";
-    item.append(loc, meta);
+    text.append(loc, meta);
+    item.append(av, text);
+    // Hover → a floating preview bubble with the full comment.
+    item.addEventListener("mouseenter", () => showThreadPreview(item, cm));
+    item.addEventListener("mouseleave", hideThreadPreview);
     item.addEventListener("click", () => {
+      hideThreadPreview();
       const card = [...commentsBodyEl.querySelectorAll<HTMLElement>(".cv-card")].find(
         (e) => e.dataset.commentId === cm.id,
       );
@@ -1530,6 +1546,44 @@ function buildConversationNav(comments: Comment[]) {
     });
     commentsNavEl.appendChild(item);
   }
+}
+
+// Floating preview bubble for the thread navigator: hover an item → see the full comment.
+let dtlPreviewEl: HTMLElement | null = null;
+function showThreadPreview(anchor: HTMLElement, cm: Comment) {
+  if (!dtlPreviewEl) {
+    dtlPreviewEl = document.createElement("div");
+    dtlPreviewEl.className = "dtl-preview";
+    document.body.appendChild(dtlPreviewEl);
+  }
+  const el = dtlPreviewEl;
+  el.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "dtl-prev-head";
+  const av = document.createElement("img");
+  av.className = "dtl-prev-av";
+  av.alt = "";
+  av.src = `https://github.com/${encodeURIComponent(cm.author)}.png?size=48`;
+  av.addEventListener("error", () => (av.style.display = "none"));
+  const who = document.createElement("span");
+  who.className = "dtl-prev-who";
+  who.textContent = cm.author + (cm.review_state ? ` · ${cm.review_state.toLowerCase().replace(/_/g, " ")}` : "");
+  head.append(av, who);
+  const body = document.createElement("div");
+  body.className = "dtl-prev-body markdown";
+  renderMarkdown(body, cm.body || "_(no text)_");
+  el.append(head, body);
+  el.classList.add("show");
+  // Place it to the LEFT of the comments panel (the panel hugs the right edge), vertically
+  // aligned to the hovered item, clamped to the viewport.
+  const panel = document.getElementById("comments-panel")?.getBoundingClientRect();
+  const a = anchor.getBoundingClientRect();
+  const left = panel ? panel.left - el.offsetWidth - 8 : a.left - el.offsetWidth - 8;
+  el.style.left = `${Math.max(8, left)}px`;
+  el.style.top = `${Math.max(8, Math.min(a.top, window.innerHeight - el.offsetHeight - 12))}px`;
+}
+function hideThreadPreview() {
+  dtlPreviewEl?.classList.remove("show");
 }
 
 /** Point the (open) comments panel at the active tab: cached → render, PR-without-
