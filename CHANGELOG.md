@@ -6,6 +6,36 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.10] — 2026-06-06
+
+Off-thread "Ask Claude", a diff file-tree, a reworked History (tree · favorites ·
+search · queue), a GitHub-style Review popup, and a default-theme change.
+
+### Added
+- **Ask Claude in a forked side-conversation.** The per-comment ✦/⚔/✚ buttons and
+  the diff's "ask about this section" now run *off the main thread*: a headless,
+  session-forked `claude -p` whose answer streams into a dismissable floating card
+  (copy + ↗ "open as tab" to promote the fork into a live, resumable session). The
+  live review conversation is never disturbed. (#54)
+- **Diff file-tree companion.** A "Files" toolbar button opens a GitHub-style tree
+  beside the diff with three drilldown scopes (◂ widen / ▸ narrow): the diff's files,
+  the changed directory, or the whole repo. Changed files show +adds/−dels/💬 and
+  jump to their card. (#55)
+- **History overhaul.** A `[History | Tree | Queue]` view switch: an org→repo→PR tree,
+  **favorites** (right-click or `+` to favorite a repo/PR, persisted; ★ floats to top,
+  favorites-only filter), a **token-field structured search** (`repo: org: pr: cli:`
+  chips + free text), per-session **message counts** with the busiest session starred,
+  and a **review Queue** (queued→active→done with reorder + right-click flows). (#56)
+- **Review changes popup.** A "Review" button on the main and diff toolbars opens a
+  GitHub-style Approve / Request changes / Comment popup; submits the pending review or
+  creates one in a single shot. (#56)
+
+### Changed
+- **Instrument is now the default theme** (Phosphor is second in the picker). Existing
+  installs keep their saved choice. (#56)
+- Unified every `×` close button into one aligned, dull-yellow-outlined control, and
+  applied the outline treatment to the small action buttons across the comment panels.
+
 ## [0.1.9] — 2026-06-06
 
 Themes, finished comments, and update notifications.
