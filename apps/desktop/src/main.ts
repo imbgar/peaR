@@ -19,6 +19,7 @@ import {
   setCreateHandler,
   setReplyHandler,
   setAskHandler,
+  setResolveHandler,
   setPendingReview,
   setDiffCloseHandler,
 } from "./diff";
@@ -1296,6 +1297,11 @@ window.addEventListener("DOMContentLoaded", async () => {
     send({ type: "input", tab: active, bytes });
     tabs.get(active)?.term.focus();
     setStatus("asked Claude about the selected section");
+  });
+  // Resolve / unresolve an inline thread.
+  setResolveHandler((thread_id, resolved) => {
+    if (active === null) return;
+    send({ type: "resolve_thread", tab: active, thread_id, resolved });
   });
   // The diff toolbar's × closes the panel.
   setDiffCloseHandler(() => setPanel(false));

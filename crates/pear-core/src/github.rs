@@ -355,6 +355,17 @@ impl GitHub {
         Ok(())
     }
 
+    /// Resolve or unresolve an inline review thread (GraphQL, by node id).
+    pub fn set_thread_resolved(&self, thread_id: &str, resolved: bool) -> Result<()> {
+        let mutation = if resolved {
+            "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}"
+        } else {
+            "mutation($id:ID!){unresolveReviewThread(input:{threadId:$id}){thread{id}}}"
+        };
+        self.graphql(mutation, serde_json::json!({ "id": thread_id }))?;
+        Ok(())
+    }
+
     /// Add or remove a reaction on any reactable subject (comment node id).
     /// `content` is a `ReactionContent` enum value (e.g. `THUMBS_UP`).
     pub fn set_reaction(&self, subject_id: &str, content: &str, add: bool) -> Result<()> {
