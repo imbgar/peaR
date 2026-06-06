@@ -37,6 +37,8 @@ import {
   PrMeta,
   PrRecord,
   PrRef,
+  Queue,
+  QueueItem,
   ReviewButton,
   ReviewTier,
   parsePrRef,
@@ -426,9 +428,18 @@ function toggleSessionPop(rec: PrRecord, anchor: HTMLElement) {
 // ── history panel: flat list ⇄ org→repo→PR tree · structured search · favorites ──
 let historyEntries: PrRecord[] = [];
 let favorites: Favorites = { repos: [], prs: [] };
-let historyView: "list" | "tree" = localStorage.getItem("pear.histView") === "tree" ? "tree" : "list";
+let queue: Queue = { items: [] };
+type HistView = "list" | "tree" | "queue";
+const savedView = localStorage.getItem("pear.histView");
+let historyView: HistView =
+  savedView === "tree" || savedView === "queue" ? savedView : "list";
 let favOnly = localStorage.getItem("pear.favOnly") === "1";
 let histQuery = "";
+
+const samePr = (a: PrRef, b: PrRef) =>
+  a.owner === b.owner && a.repo === b.repo && a.number === b.number;
+const isQueued = (pr: PrRef) => queue.items.some((i) => samePr(i.pr, pr));
+const queueAdd = (pr: PrRef, title: string) => send({ type: "queue_add", pr, title });
 
 const isRepoFav = (owner: string, repo: string) => favorites.repos.includes(`${owner}/${repo}`);
 const isPrFav = (pr: PrRef) =>
@@ -531,9 +542,24 @@ function renderHistory() {
   closeHistCtx();
   $("#view-list").classList.toggle("on", historyView === "list");
   $("#view-tree").classList.toggle("on", historyView === "tree");
+  $("#view-queue").classList.toggle("on", historyView === "queue");
   $("#fav-only").classList.toggle("on", favOnly);
+  // Queue tab badge: number of items not yet done.
+  const pending = queue.items.filter((i) => i.status !== "done").length;
+  const qc = $("#queue-count");
+  qc.textContent = pending ? String(pending) : "";
+  qc.classList.toggle("hidden", pending === 0);
+  // Search + favorites filters apply to history/tree only, not the queue.
+  $("#hist-search").classList.toggle("hidden", historyView === "queue");
+  $("#hist-chips").classList.toggle("hidden", historyView === "queue" || !histQuery.trim());
+  $("#fav-only").classList.toggle("hidden", historyView === "queue");
   historyEl.classList.toggle("tree-mode", historyView === "tree");
+  historyEl.classList.toggle("queue-mode", historyView === "queue");
   historyEl.innerHTML = "";
+  if (historyView === "queue") {
+    renderQueue();
+    return;
+  }
   const entries = visibleEntries();
   if (historyView === "tree") renderHistTree(entries);
   else renderHistList(entries);
@@ -551,7 +577,9 @@ function renderHistList(entries: PrRecord[]) {
     emptyRow(historyEntries.length ? "no matches" : "no reviews yet");
     return;
   }
-  for (const rec of entries) historyEl.appendChild(historyItem(rec));
+  // Favorited entries float to the top (stable within each group → keeps recency order).
+  const ordered = [...entries].sort((a, b) => Number(isFavRec(b)) - Number(isFavRec(a)));
+  for (const rec of ordered) historyEl.appendChild(historyItem(rec));
 }
 
 function favIconBtn(pr: PrRef): HTMLButtonElement {
@@ -624,6 +652,90 @@ function historyItem(rec: PrRecord): HTMLElement {
   actions.appendChild(del);
   li.appendChild(actions);
   return li;
+}
+
+// ── review queue ──────────────────────────────────────────────────────────────
+// A curated to-review list (persisted in pear-core). Items carry a workflow status
+// (queued → active → done) and a priority order (top = next up). Right-click a history/
+// tree PR to enqueue it; right-click a queue item for the full status/reorder flow.
+const QUEUE_STATUS: Record<string, { icon: string; label: string; cls: string }> = {
+  queued: { icon: "📋", label: "queued", cls: "q-queued" },
+  active: { icon: "👀", label: "in progress", cls: "q-active" },
+  done: { icon: "✓", label: "done", cls: "q-done" },
+};
+
+function renderQueue() {
+  if (queue.items.length === 0) {
+    emptyRow("queue is empty — right-click a PR → “Add to queue”");
+    return;
+  }
+  for (const item of queue.items) historyEl.appendChild(queueItemEl(item));
+}
+
+function cycleQueueStatus(item: QueueItem) {
+  const next = item.status === "queued" ? "active" : item.status === "active" ? "done" : "queued";
+  send({ type: "queue_set_status", pr: item.pr, status: next });
+}
+
+function queueItemEl(item: QueueItem): HTMLElement {
+  const st = QUEUE_STATUS[item.status] ?? QUEUE_STATUS.queued;
+  const li = document.createElement("li");
+  li.className = `queue-item ${st.cls}`;
+  li.title = `${item.pr.owner}/${shortLabel(item.pr)} — ${st.label}`;
+
+  const dot = document.createElement("button");
+  dot.type = "button";
+  dot.className = "queue-status";
+  dot.textContent = st.icon;
+  dot.title = `${st.label} — click to advance`;
+  dot.onclick = (e) => {
+    e.stopPropagation();
+    cycleQueueStatus(item);
+  };
+
+  const main = document.createElement("div");
+  main.className = "queue-main";
+  const ref = document.createElement("span");
+  ref.className = "queue-ref";
+  ref.textContent = shortLabel(item.pr);
+  const title = document.createElement("span");
+  title.className = "queue-title";
+  title.textContent = item.title || `${item.pr.owner}/${item.pr.repo}`;
+  main.append(ref, title);
+  main.onclick = (e) => {
+    e.stopPropagation();
+    openPr(item.pr, "claude");
+  };
+
+  const actions = document.createElement("div");
+  actions.className = "history-actions";
+  actions.appendChild(iconBtn("↑", "Move up", (e) => { e.stopPropagation(); send({ type: "queue_move", pr: item.pr, dir: -1 }); }));
+  actions.appendChild(iconBtn("↓", "Move down", (e) => { e.stopPropagation(); send({ type: "queue_move", pr: item.pr, dir: 1 }); }));
+  actions.appendChild(iconBtn("⟲", "Open / resume", (e) => { e.stopPropagation(); openPr(item.pr, "claude"); }));
+  const rm = iconBtn("×", "Remove from queue", (e) => { e.stopPropagation(); send({ type: "queue_remove", pr: item.pr }); });
+  rm.classList.add("hicon-danger");
+  actions.appendChild(rm);
+
+  li.append(dot, main, actions);
+  li.oncontextmenu = (e) => queueContextMenu(e, item);
+  return li;
+}
+
+function queueContextMenu(e: MouseEvent, item: QueueItem) {
+  e.preventDefault();
+  e.stopPropagation();
+  const fav = isPrFav(item.pr);
+  const set = (status: string): CtxItem["on"] => () => send({ type: "queue_set_status", pr: item.pr, status });
+  openHistCtx(e.clientX, e.clientY, [
+    { label: "👀 Mark in progress", on: set("active") },
+    { label: "✓ Mark done", on: set("done") },
+    { label: "📋 Mark queued", on: set("queued") },
+    { label: "↑ Move up", on: () => send({ type: "queue_move", pr: item.pr, dir: -1 }) },
+    { label: "↓ Move down", on: () => send({ type: "queue_move", pr: item.pr, dir: 1 }) },
+    { label: "⟲ Open / resume", on: () => openPr(item.pr, "claude") },
+    { label: fav ? "★ Unfavorite" : "☆ Favorite", on: () => favPr(item.pr, !fav) },
+    { label: "× Remove from queue", danger: true, on: () => send({ type: "queue_remove", pr: item.pr }) },
+  ]);
 }
 
 // ── org → repo → PR tree ──────────────────────────────────────────────────────
@@ -778,8 +890,12 @@ function prContextMenu(e: MouseEvent, pr: PrRef, rec: PrRecord | null) {
   e.stopPropagation();
   const fav = isPrFav(pr);
   const cli = rec?.cli ?? "claude";
+  const queued = isQueued(pr);
   const items: CtxItem[] = [
     { label: fav ? "★ Unfavorite PR" : "☆ Favorite PR", on: () => favPr(pr, !fav) },
+    queued
+      ? { label: "📋 Remove from queue", on: () => send({ type: "queue_remove", pr }) }
+      : { label: "📋 Add to queue", on: () => queueAdd(pr, rec?.title ?? "") },
     { label: "⟲ Resume latest", on: () => openPr(pr, cli) },
     { label: "+ New session", on: () => openPr(pr, cli, { fresh: true }) },
   ];
@@ -1005,6 +1121,7 @@ function handle(ev: CoreEvent) {
     case "history": {
       historyEntries = ev.entries;
       favorites = ev.favorites ?? { repos: [], prs: [] };
+      queue = ev.queue ?? { items: [] };
       renderHistory();
       break;
     }
@@ -1667,13 +1784,14 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#history-restore").addEventListener("click", () => send({ type: "restore_history" }));
 
   // History view: list ⇄ org→repo→PR tree, favorites-only filter, add-favorite, search.
-  const setHistView = (v: "list" | "tree") => {
+  const setHistView = (v: HistView) => {
     historyView = v;
     localStorage.setItem("pear.histView", v);
     renderHistory();
   };
   $("#view-list").addEventListener("click", () => setHistView("list"));
   $("#view-tree").addEventListener("click", () => setHistView("tree"));
+  $("#view-queue").addEventListener("click", () => setHistView("queue"));
   $("#fav-only").addEventListener("click", () => {
     favOnly = !favOnly;
     localStorage.setItem("pear.favOnly", favOnly ? "1" : "0");

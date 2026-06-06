@@ -106,8 +106,12 @@ impl Engine {
         let store = self.store.clone();
         let sink = self.sink.clone();
         std::thread::spawn(move || {
-            let (entries, favorites) = history_payload(&store);
-            sink(Event::History { entries, favorites });
+            let (entries, favorites, queue) = history_payload(&store);
+            sink(Event::History {
+                entries,
+                favorites,
+                queue,
+            });
         });
     }
 
@@ -307,6 +311,39 @@ impl Engine {
                 Err(e) => self.emit(Event::Error {
                     tab: None,
                     message: format!("favorite PR: {e}"),
+                }),
+            },
+            Command::QueueAdd { pr, title } => {
+                let now = now_rfc3339();
+                match self.store.queue_add(&pr, &title, &now) {
+                    Ok(()) => self.emit_history(),
+                    Err(e) => self.emit(Event::Error {
+                        tab: None,
+                        message: format!("queue add: {e}"),
+                    }),
+                }
+            }
+            Command::QueueSetStatus { pr, status } => {
+                match self.store.queue_set_status(&pr, &status) {
+                    Ok(()) => self.emit_history(),
+                    Err(e) => self.emit(Event::Error {
+                        tab: None,
+                        message: format!("queue status: {e}"),
+                    }),
+                }
+            }
+            Command::QueueRemove { pr } => match self.store.queue_remove(&pr) {
+                Ok(()) => self.emit_history(),
+                Err(e) => self.emit(Event::Error {
+                    tab: None,
+                    message: format!("queue remove: {e}"),
+                }),
+            },
+            Command::QueueMove { pr, dir } => match self.store.queue_move(&pr, dir) {
+                Ok(()) => self.emit_history(),
+                Err(e) => self.emit(Event::Error {
+                    tab: None,
+                    message: format!("queue move: {e}"),
                 }),
             },
         }
@@ -513,8 +550,12 @@ impl Engine {
                             // Update the title only (no session change), then re-emit
                             // history so the sidebar entry shows the real PR title.
                             let _ = store.record_open(&pr, &meta.title, cli, None, &now);
-                            let (entries, favorites) = history_payload(&store);
-                            sink(Event::History { entries, favorites });
+                            let (entries, favorites, queue) = history_payload(&store);
+                            sink(Event::History {
+                                entries,
+                                favorites,
+                                queue,
+                            });
                             sink(Event::PrMeta { tab, meta });
                         }
                         Err(e) => sink(Event::Notice {
@@ -942,16 +983,22 @@ fn first_line(bytes: &[u8]) -> String {
 }
 
 /// Build the `Event::History` payload: history records with each session's message count
-/// filled in (read from its transcript), plus the persisted favorites. Reads files, so
-/// run it off the engine lock (see `emit_history`).
-fn history_payload(store: &Store) -> (Vec<crate::protocol::PrRecord>, crate::protocol::Favorites) {
+/// filled in (read from its transcript), the persisted favorites, and the review queue.
+/// Reads files, so run it off the engine lock (see `emit_history`).
+fn history_payload(
+    store: &Store,
+) -> (
+    Vec<crate::protocol::PrRecord>,
+    crate::protocol::Favorites,
+    crate::protocol::Queue,
+) {
     let mut entries = store.history();
     for r in &mut entries {
         for s in &mut r.sessions {
             s.messages = crate::brain::count_messages(&s.id);
         }
     }
-    (entries, store.favorites())
+    (entries, store.favorites(), store.queue())
 }
 
 fn now_rfc3339() -> String {

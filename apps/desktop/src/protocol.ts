@@ -104,6 +104,17 @@ export interface Favorites {
   prs: PrRef[];
 }
 
+export interface QueueItem {
+  pr: PrRef;
+  title: string;
+  status: string; // "queued" | "active" | "done"
+  added: string;
+}
+
+export interface Queue {
+  items: QueueItem[];
+}
+
 export type Command =
   | {
       type: "open_pr";
@@ -128,6 +139,10 @@ export type Command =
   | { type: "restore_history" }
   | { type: "favorite_repo"; owner: string; repo: string; on: boolean }
   | { type: "favorite_pr"; pr: PrRef; on: boolean }
+  | { type: "queue_add"; pr: PrRef; title: string }
+  | { type: "queue_set_status"; pr: PrRef; status: string }
+  | { type: "queue_remove"; pr: PrRef }
+  | { type: "queue_move"; pr: PrRef; dir: number }
   | { type: "check_skills" }
   | { type: "install_skills" }
   | { type: "load_diff"; tab: number }
@@ -166,7 +181,7 @@ export type Event =
   | { type: "diff"; tab: number; diff: string; comments: DiffComment[] }
   | { type: "comments"; tab: number; comments: PrComments }
   | { type: "thought"; tab: number; kind: string; text: string; detail: string }
-  | { type: "history"; entries: PrRecord[]; favorites: Favorites }
+  | { type: "history"; entries: PrRecord[]; favorites: Favorites; queue: Queue }
   | { type: "skills_status"; installed: boolean }
   | { type: "notice"; tab: number | null; message: string }
   | { type: "error"; tab: number | null; message: string };

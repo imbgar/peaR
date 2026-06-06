@@ -252,6 +252,26 @@ pub struct Favorites {
     pub prs: Vec<PrRef>,
 }
 
+/// One PR queued for review, with a simple workflow status. Ordered (the list order is
+/// the review priority). `status` is `"queued"` | `"active"` | `"done"`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueueItem {
+    pub pr: PrRef,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub added: String, // RFC3339
+}
+
+/// The review queue, persisted in the data dir. Order = priority (top = next up).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Queue {
+    #[serde(default)]
+    pub items: Vec<QueueItem>,
+}
+
 /// A reviewed PR and its session history (newest session first).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrRecord {
@@ -363,6 +383,18 @@ pub enum Command {
     /// still shows in the tree. Doubles as the "add a PR to the list" action. Replied via
     /// `Event::History`.
     FavoritePr { pr: PrRef, on: bool },
+    /// Add a PR to the review queue (no-op if already queued). Replied via `Event::History`.
+    QueueAdd {
+        pr: PrRef,
+        #[serde(default)]
+        title: String,
+    },
+    /// Set a queued PR's status: `"queued"` | `"active"` | `"done"`.
+    QueueSetStatus { pr: PrRef, status: String },
+    /// Remove a PR from the review queue.
+    QueueRemove { pr: PrRef },
+    /// Reorder a queued PR by `dir` (-1 = up/higher priority, +1 = down).
+    QueueMove { pr: PrRef, dir: i64 },
     /// Report whether the bundled `/pr-*` review skills are installed in
     /// `~/.claude/skills` (replied via `Event::SkillsStatus`).
     CheckSkills,
@@ -495,6 +527,8 @@ pub enum Event {
         entries: Vec<PrRecord>,
         #[serde(default)]
         favorites: Favorites,
+        #[serde(default)]
+        queue: Queue,
     },
     /// Whether the bundled `/pr-*` skills are installed (reply to `CheckSkills`,
     /// also emitted after `InstallSkills`).

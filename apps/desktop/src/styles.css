@@ -465,6 +465,24 @@ button:disabled { opacity: 0.38; cursor: default; }
 }
 .hist-chip-x:hover { opacity: 1; color: var(--red); }
 
+/* review queue */
+.queue-count { margin-left: 5px; font-size: 9px; background: var(--accent); color: var(--on-accent); border-radius: 999px; padding: 0 4px; }
+.queue-count.hidden { display: none; }
+#history.queue-mode { gap: 3px; }
+.queue-item {
+  position: relative; display: flex; align-items: center; gap: 7px;
+  border: 1px solid transparent; border-radius: var(--r-sm); padding: 6px 8px;
+  transition: background 0.12s, border-color 0.12s;
+}
+.queue-item:hover { background: var(--elev); border-color: var(--bd); }
+.queue-status { background: transparent; border: none; cursor: pointer; font-size: 13px; line-height: 1; flex: none; padding: 0; }
+.queue-main { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; cursor: pointer; }
+.queue-ref { font-family: var(--font-mono); font-size: 12px; color: var(--accent); text-shadow: var(--glow); }
+.queue-title { color: var(--dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.queue-item.q-active { border-left: 2px solid var(--accent); padding-left: 6px; }
+.queue-item.q-done { opacity: 0.5; }
+.queue-item.q-done .queue-ref, .queue-item.q-done .queue-title { text-decoration: line-through; }
+
 #history {
   list-style: none;
   margin: 0;
