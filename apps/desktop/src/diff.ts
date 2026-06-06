@@ -139,18 +139,29 @@ export function setDiffCloseHandler(fn: () => void) {
   onDiffClose = fn;
 }
 
-// The inputs of the last render, so a toolbar control can re-render in place.
-let lastDiff: { container: HTMLElement; diff: string; comments: DiffComment[]; threads: ReviewThread[] } | null =
-  null;
-function rerenderDiff() {
-  if (lastDiff) renderDiff(lastDiff.container, lastDiff.diff, lastDiff.comments, lastDiff.threads);
-}
-
 function sortFiles(files: DFile[]): DFile[] {
   const by = (f: DFile) =>
     diffSort === "changes" ? f.adds + f.dels : diffSort === "additions" ? f.adds : f.dels;
   if (diffSort === "default") return files;
   return [...files].sort((a, b) => by(b) - by(a));
+}
+
+/** Re-order the rendered `.diff-file` cards in place (no teardown) to the current sort.
+ *  Reordering DOM nodes preserves scroll, expanded threads, and — crucially — never
+ *  removes the <select> that fired the change event. */
+function reorderFiles(container: HTMLElement) {
+  const cards = [...container.querySelectorAll<HTMLElement>(":scope > .diff-file")];
+  const metric = (c: HTMLElement) => {
+    const a = +(c.dataset.adds ?? 0);
+    const d = +(c.dataset.dels ?? 0);
+    return diffSort === "changes" ? a + d : diffSort === "additions" ? a : d;
+  };
+  cards.sort(
+    diffSort === "default"
+      ? (x, y) => +(x.dataset.order ?? 0) - +(y.dataset.order ?? 0)
+      : (x, y) => metric(y) - metric(x),
+  );
+  for (const c of cards) container.appendChild(c);
 }
 
 /** A pinned navigator listing every inline thread; clicking one jumps to it. Stays
@@ -275,7 +286,7 @@ function buildDiffToolbar(
   });
   sort.addEventListener("change", () => {
     diffSort = sort.value as SortMode;
-    rerenderDiff();
+    reorderFiles(container); // in-place reorder — no teardown of the toolbar/select
   });
   bar.appendChild(sort);
 
@@ -358,11 +369,15 @@ export function renderDiff(
   const totAdd = files.reduce((s, f) => s + f.adds, 0);
   const totDel = files.reduce((s, f) => s + f.dels, 0);
   container.appendChild(buildDiffToolbar(container, files, totAdd, totDel, cmtCount, threads));
-  lastDiff = { container, diff, comments, threads };
 
+  // Parse-order index so the toolbar's in-place reorder can restore "Default order".
+  const parseOrder = new Map(files.map((f, i) => [f, i]));
   for (const f of sortFiles(files)) {
     const card = document.createElement("div");
     card.className = "diff-file";
+    card.dataset.order = String(parseOrder.get(f));
+    card.dataset.adds = String(f.adds);
+    card.dataset.dels = String(f.dels);
 
     const head = document.createElement("button");
     head.type = "button";
@@ -493,15 +508,23 @@ export function commentEl(c: Comment): HTMLElement {
   wrap.className = "cv-cmt";
   const top = document.createElement("div");
   top.className = "cv-top";
+  // A small GitHub avatar (roughly font-size) — lives in the sticky header so it floats.
+  const av = document.createElement("img");
+  av.className = "cv-avatar";
+  av.loading = "lazy";
+  av.alt = "";
+  av.src = `https://github.com/${encodeURIComponent(c.author)}.png?size=40`;
+  av.addEventListener("error", () => (av.style.display = "none"));
   const who = document.createElement("span");
   who.className = "cv-who" + (c.mine ? " me" : "");
   who.textContent = c.author;
   const when = document.createElement("span");
   when.className = "cv-when";
   when.textContent = relTime(c.created_at);
-  top.append(who);
+  top.append(av, who);
   if (c.review_state) top.appendChild(reviewBadge(c.review_state));
   top.appendChild(when);
+  if (onAsk && c.body.trim()) top.appendChild(askInsightGroup(c));
   wrap.append(top);
   if (c.body.trim()) {
     const body = document.createElement("div");
@@ -511,6 +534,48 @@ export function commentEl(c: Comment): HTMLElement {
   }
   wrap.appendChild(reactionRow(c));
   return wrap;
+}
+
+// Per-comment "ask Claude for insight" buttons — review/PR comments can be dense, so
+// these ask the running session to unpack a specific comment from a chosen angle.
+const ONE_LINE = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 600);
+const INSIGHT: ReadonlyArray<{ glyph: string; label: string; prompt: (c: Comment) => string }> = [
+  {
+    glyph: "✦",
+    label: "Explain this comment",
+    prompt: (c) =>
+      `Explain this PR review comment from ${c.author} — what they mean and what it implies for the change: "${ONE_LINE(c.body)}"`,
+  },
+  {
+    glyph: "⚔",
+    label: "Adversarial review",
+    prompt: (c) =>
+      `Adversarially review this PR comment from ${c.author}. Push back: where might it be wrong, overcautious, or missing context? Comment: "${ONE_LINE(c.body)}"`,
+  },
+  {
+    glyph: "✚",
+    label: "Supporting points & strengths",
+    prompt: (c) =>
+      `What are the supporting points and strengths of this PR review comment from ${c.author}? Steelman it. Comment: "${ONE_LINE(c.body)}"`,
+  },
+];
+
+function askInsightGroup(c: Comment): HTMLElement {
+  const g = document.createElement("span");
+  g.className = "cv-ask";
+  for (const ins of INSIGHT) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "cv-ask-btn";
+    b.textContent = ins.glyph;
+    b.title = `Ask Claude: ${ins.label}`;
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onAsk?.(ins.prompt(c));
+    });
+    g.appendChild(b);
+  }
+  return g;
 }
 
 const REVIEW_STATE: Record<string, { label: string; cls: string }> = {

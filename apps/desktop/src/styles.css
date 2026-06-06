@@ -687,7 +687,21 @@ button:disabled { opacity: 0.38; cursor: default; }
 }
 /* one comment (shared: conversation cards + inline diff threads) */
 .cv-cmt { padding: 0; }
-.cv-top { display: flex; align-items: baseline; gap: 7px; margin-bottom: 3px; }
+.cv-top { display: flex; align-items: center; gap: 7px; margin-bottom: 3px; }
+/* small GitHub avatar (~font size), round; lives in the floating header */
+.cv-avatar {
+  width: 16px; height: 16px; border-radius: 50%; flex: none;
+  object-fit: cover; background: var(--inp); border: 1px solid var(--bd2);
+}
+/* per-comment ask-Claude insight buttons (subtle until you hover the comment) */
+.cv-ask { margin-left: auto; display: inline-flex; gap: 3px; opacity: 0.32; transition: opacity 0.12s var(--ease); }
+.cv-cmt:hover .cv-ask, .cv-ask:hover { opacity: 1; }
+.cv-ask-btn {
+  font-size: 11px; line-height: 1; cursor: pointer; padding: 2px 5px;
+  background: transparent; border: 1px solid var(--bd2); border-radius: var(--r-sm);
+  color: var(--faint);
+}
+.cv-ask-btn:hover { color: var(--accent); border-color: var(--accent-d); box-shadow: var(--glow); }
 /* Floating author header: each conversation comment's header sticks to the top of
    the panel while its comment is on screen, until the next comment pushes it up. The
    negative margins let the opaque bar span the full card width. */
