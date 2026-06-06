@@ -142,6 +142,7 @@ export type Command =
   | { type: "submit_review"; tab: number; review_id: string; event: string; body: string }
   | { type: "reply_review_thread"; tab: number; thread_id: string; body: string }
   | { type: "resolve_thread"; tab: number; thread_id: string; resolved: boolean }
+  | { type: "ask_insight"; tab: number; id: string; prompt: string }
   | { type: "watch_brain"; tab: number }
   | { type: "stop_brain"; tab: number }
   | { type: "save_layout"; active?: number | null }
@@ -158,6 +159,7 @@ export type Event =
   | { type: "diff"; tab: number; diff: string; comments: DiffComment[] }
   | { type: "comments"; tab: number; comments: PrComments }
   | { type: "thought"; tab: number; kind: string; text: string; detail: string }
+  | { type: "insight"; tab: number; id: string; kind: string; text: string }
   | { type: "history"; entries: PrRecord[] }
   | { type: "skills_status"; installed: boolean }
   | { type: "notice"; tab: number | null; message: string }

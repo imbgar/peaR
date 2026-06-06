@@ -399,6 +399,16 @@ pub enum Command {
         thread_id: String,
         resolved: bool,
     },
+    /// Ask Claude a bite-size question *off the main thread* — the engine spawns a
+    /// headless `claude -p` one-shot (forking the tab's session when it has one, so the
+    /// answer carries the review's full context) and streams the reply back as
+    /// `Event::Insight`s, leaving the tab's live conversation untouched. `id` is a
+    /// frontend-chosen request id so concurrent asks each render their own card.
+    AskInsight {
+        tab: TabId,
+        id: String,
+        prompt: String,
+    },
     /// Start streaming the tab's Claude session *thinking* to the brain panel
     /// (replied via `Event::Thought`s). No-op for non-Claude / session-less tabs.
     WatchBrain { tab: TabId },
@@ -459,6 +469,15 @@ pub enum Event {
         kind: String,
         text: String,
         detail: String,
+    },
+    /// One streamed piece of an `AskInsight` reply, keyed by the request `id`. `kind` is
+    /// `chunk` (append `text` to the answer), `done` (the one-shot finished; `text` is an
+    /// optional closing note), or `error` (`text` is the failure message).
+    Insight {
+        tab: TabId,
+        id: String,
+        kind: String,
+        text: String,
     },
     /// Reply to `LoadHistory`.
     History { entries: Vec<PrRecord> },

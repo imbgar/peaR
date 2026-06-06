@@ -571,7 +571,7 @@ function askInsightGroup(c: Comment): HTMLElement {
     b.title = `Ask Claude: ${ins.label}`;
     b.addEventListener("click", (e) => {
       e.stopPropagation();
-      onAsk?.(ins.prompt(c));
+      onAsk?.(ins.prompt(c), `${ins.glyph} ${ins.label} — @${c.author}`);
     });
     g.appendChild(b);
   }
@@ -749,7 +749,7 @@ export interface NewComment {
 }
 type CreateFn = (c: NewComment) => void;
 type ReplyFn = (threadId: string, body: string) => void;
-type AskFn = (message: string) => void;
+type AskFn = (message: string, label: string) => void;
 type ResolveFn = (threadId: string, resolved: boolean) => void;
 let onCreate: CreateFn | null = null;
 let onReply: ReplyFn | null = null;
@@ -951,7 +951,7 @@ function openAskComposer() {
     const q = ta.value.trim() || "explain this section and flag anything risky";
     // Reference the file + lines (Claude reads them itself) rather than pasting code
     // into the interactive TUI.
-    onAsk!(`In \`${path}\` ${lineLabel}: ${q}`);
+    onAsk!(`In \`${path}\` ${lineLabel}: ${q}`, `✦ ${path} ${lineLabel}`);
     clearSelection();
   });
   actions.append(askBtn, cancel);

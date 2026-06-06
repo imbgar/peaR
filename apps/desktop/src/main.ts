@@ -12,6 +12,7 @@ import "@fontsource/ibm-plex-mono/700.css";
 import "@fontsource-variable/hanken-grotesk";
 import "@fontsource-variable/jetbrains-mono";
 import { marked } from "marked";
+import { renderMarkdown } from "./markdown";
 import { initUpdater } from "./update";
 import {
   renderDiff,
@@ -655,6 +656,10 @@ function handle(ev: CoreEvent) {
       if (ev.tab === brainTab) appendThought(ev.kind, ev.text, ev.detail);
       break;
     }
+    case "insight": {
+      updateInsight(ev.id, ev.kind, ev.text);
+      break;
+    }
     case "history": {
       renderHistory(ev.entries);
       break;
@@ -1151,6 +1156,88 @@ function setBrain(open: boolean) {
   requestAnimationFrame(refitActive);
 }
 
+// ── Ask Claude — floating insight cards ──────────────────────────────────────
+// Each ask spawns a forked `claude -p` one-shot whose reply streams into its own
+// dismissable card, stacked over the workspace — the live review conversation in the
+// terminal is never touched. Cards are keyed by the request id the engine echoes back.
+interface InsightCard {
+  el: HTMLElement;
+  body: HTMLElement;
+  raw: string;
+}
+const insightCards = new Map<string, InsightCard>();
+
+/** Create a streaming insight card and return its request id (sent with `ask_insight`). */
+function openInsight(label: string, prompt: string): string {
+  const id = crypto.randomUUID();
+  const card = document.createElement("div");
+  card.className = "insight working";
+
+  const head = document.createElement("div");
+  head.className = "insight-head";
+  const spinner = document.createElement("span");
+  spinner.className = "insight-spin";
+  spinner.textContent = "✦";
+  const title = document.createElement("span");
+  title.className = "insight-title";
+  title.textContent = label;
+  title.title = prompt;
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "insight-btn";
+  copy.textContent = "⧉";
+  copy.title = "Copy answer";
+  copy.addEventListener("click", () => {
+    const c = insightCards.get(id);
+    if (c && c.raw.trim()) {
+      void writeText(c.raw);
+      setStatus("copied insight");
+    }
+  });
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "insight-btn close";
+  close.textContent = "×";
+  close.title = "Dismiss";
+  close.addEventListener("click", () => {
+    card.remove();
+    insightCards.delete(id);
+  });
+  head.append(spinner, title, copy, close);
+
+  const body = document.createElement("div");
+  body.className = "insight-body markdown";
+  body.innerHTML = `<div class="insight-wait">thinking…</div>`;
+
+  card.append(head, body);
+  $("#insight-stack").appendChild(card);
+  insightCards.set(id, { el: card, body, raw: "" });
+  return id;
+}
+
+/** Apply one streamed insight piece (`chunk` | `done` | `error`) to its card. */
+function updateInsight(id: string, kind: string, text: string) {
+  const c = insightCards.get(id);
+  if (!c) return;
+  const atBottom = c.body.scrollTop + c.body.clientHeight >= c.body.scrollHeight - 24;
+  if (kind === "chunk") {
+    c.raw += text;
+    renderMarkdown(c.body, c.raw);
+    if (atBottom) c.body.scrollTop = c.body.scrollHeight;
+  } else if (kind === "done") {
+    c.el.classList.remove("working");
+    if (!c.raw.trim()) c.body.innerHTML = `<div class="insight-wait">no answer.</div>`;
+  } else if (kind === "error") {
+    c.el.classList.remove("working");
+    c.el.classList.add("errored");
+    const err = document.createElement("div");
+    err.className = "insight-err";
+    err.textContent = text || "couldn't get an answer";
+    if (!c.raw.trim()) c.body.innerHTML = "";
+    c.body.appendChild(err);
+  }
+}
+
 function renderPanel(p: PanelPayload) {
   panelTitleEl.textContent = p.title || "Insight";
   panelBodyEl.classList.remove("diff-mode");
@@ -1371,14 +1458,14 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (active === null) return;
     send({ type: "reply_review_thread", tab: active, thread_id, body });
   });
-  // "Ask Claude about this section" — type the prompt into the active tab's session
-  // (a single line referencing the file + lines) and submit it, then focus the terminal.
-  setAskHandler((message) => {
+  // "Ask Claude" — answer the question off the main thread. The engine forks the tab's
+  // session into a throwaway one-shot and streams the reply into a floating insight card,
+  // so the live review conversation is never disturbed.
+  setAskHandler((message, label) => {
     if (active === null) return;
-    const bytes = Array.from(new TextEncoder().encode(message + "\r"));
-    send({ type: "input", tab: active, bytes });
-    tabs.get(active)?.term.focus();
-    setStatus("asked Claude about the selected section");
+    const id = openInsight(label, message);
+    send({ type: "ask_insight", tab: active, id, prompt: message });
+    setStatus("asked Claude — streaming a side answer…");
   });
   // Resolve / unresolve an inline thread.
   setResolveHandler((thread_id, resolved) => {

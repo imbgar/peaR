@@ -587,6 +587,55 @@ button:disabled { opacity: 0.38; cursor: default; }
 .thought-detail.hidden { display: none; }
 .brain-empty { color: var(--faint); padding: 16px 2px; font-style: italic; }
 
+/* ── Ask Claude — floating insight cards ──────────────────────────────────── */
+/* A bottom-right stack of streaming answers that float over the workspace; the
+   stack itself is click-through (pointer-events: none) so only the cards catch input. */
+#insight-stack {
+  position: fixed; right: 16px; bottom: 44px; z-index: 60;
+  display: flex; flex-direction: column; gap: 10px;
+  width: min(400px, 38vw); max-height: calc(100vh - 110px);
+  overflow-y: auto; pointer-events: none;
+}
+.insight {
+  pointer-events: auto;
+  background: var(--elev); border: 1px solid var(--bd); border-left: 2px solid var(--accent);
+  border-radius: var(--r); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  display: flex; flex-direction: column; max-height: 46vh; overflow: hidden;
+  animation: insight-in 160ms var(--ease);
+}
+@keyframes insight-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+.insight.errored { border-left-color: var(--red); }
+.insight-head {
+  display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+  background: var(--panel); border-bottom: 1px solid var(--bd);
+}
+.insight-spin { color: var(--accent); font-size: 0.85em; }
+.insight.working .insight-spin { animation: insight-pulse 1.1s ease-in-out infinite; }
+@keyframes insight-pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+.insight.errored .insight-spin { color: var(--red); animation: none; }
+.insight-title {
+  flex: 1; min-width: 0; color: var(--dim); font-size: 0.82em;
+  letter-spacing: var(--letter); font-family: var(--font-mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.insight-btn {
+  background: transparent; border: none; color: var(--faint); cursor: pointer;
+  font-size: 0.95em; padding: 0 3px; line-height: 1;
+}
+.insight-btn:hover { color: var(--accent); }
+.insight-btn.close:hover { color: var(--red); }
+.insight-body {
+  padding: 9px 12px; overflow-y: auto; overscroll-behavior: contain;
+  font-size: 0.86em; line-height: 1.55; color: var(--tx);
+}
+.insight-body > :first-child { margin-top: 0; }
+.insight-body > :last-child { margin-bottom: 0; }
+.insight-wait { color: var(--faint); font-style: italic; }
+.insight-err { color: var(--red); white-space: pre-wrap; font-size: 0.95em; }
+
 .statusbtn {
   background: transparent; border: 1px solid var(--bd2); color: var(--dim);
   border-radius: var(--r-sm); padding: 2px 9px; font-size: 11px; font-family: var(--font-mono);

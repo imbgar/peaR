@@ -19,6 +19,7 @@ pub mod dispatch;
 pub mod engine;
 pub mod error;
 pub mod github;
+pub mod insight;
 pub mod macproc;
 pub mod protocol;
 pub mod session;

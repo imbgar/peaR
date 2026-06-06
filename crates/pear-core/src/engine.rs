@@ -224,6 +224,7 @@ impl Engine {
             } => self.comment_mutation(tab, move |gh, _pr| {
                 gh.set_thread_resolved(&thread_id, resolved)
             }),
+            Command::AskInsight { tab, id, prompt } => self.ask_insight(tab, id, prompt),
             Command::WatchBrain { tab } => self.watch_brain(tab),
             Command::StopBrain { tab } => self.stop_brain(tab),
             Command::SaveLayout { active } => self.persist_layout(active),
@@ -857,6 +858,27 @@ impl Engine {
                 }),
             }
         });
+    }
+
+    /// Ask Claude a bite-size question off the main thread — spawn a forked headless
+    /// `claude -p` one-shot and stream its reply back as `Event::Insight`s (see `insight`).
+    /// Forks the tab's Claude session when it has one (so the answer carries the review's
+    /// context); otherwise runs a fresh one-shot in the tab's live cwd.
+    fn ask_insight(&mut self, tab: TabId, id: String, prompt: String) {
+        let (session_id, cwd) = match self.tabs.get(&tab) {
+            Some(t) => {
+                // Only fork an actual Claude session; other engines get a fresh one-shot.
+                let sid = if t.cli == CliKind::Claude {
+                    t.session_id.clone()
+                } else {
+                    None
+                };
+                (sid, self.live_cwd(t))
+            }
+            None => (None, None),
+        };
+        let sink = self.sink.clone();
+        std::thread::spawn(move || crate::insight::run(tab, id, prompt, session_id, cwd, sink));
     }
 
     /// Start streaming the tab's Claude session thinking to the brain panel. No-op if
