@@ -32,3 +32,6 @@ apps/desktop/src-tauri/gen
 
 # maintainer working notes — not for the public repo
 docs/memory/
+
+# Local-only signing keys — never commit
+.secrets-local/
