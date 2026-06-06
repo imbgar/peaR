@@ -7,6 +7,12 @@ All notable changes to this project are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+- **Diff viewer toolbar.** A sticky toolbar replaces the old diff header: file/+/−
+  stats, a **collapse-all / expand-all** toggle, a **sort** (Default · Most changes ·
+  Most additions · Most removals), **show +/− line toggles**, and a × close. The
+  redundant "Diff — <pr>" panel title is gone in diff mode.
+
+### Added
 - **PR comments — phase 1 (read).** A new **💬 Comments** toolbar button opens a
   conversation panel that splits in to the **left of the diff** (terminal │ conversation │
   diff), showing the PR's issue-level comments with author, relative time, and reaction

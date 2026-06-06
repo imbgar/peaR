@@ -799,6 +799,41 @@ button:disabled { opacity: 0.38; cursor: default; }
 
 /* ── PR diff panel ─────────────────────────────────────────────────────────── */
 .panel-body.diff-mode { padding: 0; }
+
+/* The diff view is its own surface — drop the redundant "Diff — <pr>" panel header. */
+#panel:has(> .panel-body.diff-mode) .panel-head { display: none; }
+
+/* diff toolbar (replaces the old summary header): stats · collapse · sort · ± · × */
+.diff-toolbar {
+  position: sticky; top: 0; z-index: 4;
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  padding: 6px 10px; font-family: var(--font-mono); font-size: 11px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border-bottom: 1px solid var(--bd); backdrop-filter: blur(8px);
+}
+.dt-stat { display: inline-flex; align-items: center; gap: 9px; }
+.dt-stat .diff-fcount { color: var(--dim); text-transform: uppercase; letter-spacing: 0.6px; }
+.dt-spacer { flex: 1; min-width: 6px; }
+.dt-ctl, .dt-toggle, .dt-close {
+  font-family: var(--font-mono); font-size: 12px; line-height: 1; cursor: pointer;
+  background: var(--inp); border: 1px solid var(--bd2); color: var(--dim);
+  border-radius: var(--r-sm); padding: 4px 7px;
+}
+.dt-ctl:hover, .dt-close:hover { color: var(--accent); border-color: var(--accent-d); }
+.dt-sort {
+  font-family: var(--font-mono); font-size: 11px; padding: 3px 6px;
+  background: var(--inp); border: 1px solid var(--bd2); color: var(--tx); border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.dt-toggle { min-width: 24px; text-align: center; font-weight: 700; }
+.dt-toggle.add.on { color: var(--green); border-color: color-mix(in srgb, var(--green) 55%, transparent); }
+.dt-toggle.del.on { color: var(--red); border-color: color-mix(in srgb, var(--red) 55%, transparent); }
+.dt-toggle:not(.on) { opacity: 0.5; text-decoration: line-through; }
+.dt-close { font-size: 15px; padding: 1px 7px; }
+
+/* show/hide added or removed lines (container = #panel-body) */
+#panel-body.hide-add .diff-row.r-add { display: none; }
+#panel-body.hide-del .diff-row.r-del { display: none; }
 .diff-summary {
   position: sticky; top: 0; z-index: 3;
   display: flex; align-items: center; gap: 11px;

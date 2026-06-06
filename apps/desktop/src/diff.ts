@@ -124,6 +124,135 @@ const STATUS_LETTER: Record<string, string> = {
   modified: "M",
 };
 
+// ── diff view controls (toolbar state — persists across re-renders) ───────────
+type SortMode = "default" | "changes" | "additions" | "removals";
+const SORT_LABELS: Record<SortMode, string> = {
+  default: "Default order",
+  changes: "Most changes",
+  additions: "Most additions",
+  removals: "Most removals",
+};
+let diffSort: SortMode = "default";
+let onDiffClose: (() => void) | null = null;
+/** Wire the diff toolbar's × (close) button. */
+export function setDiffCloseHandler(fn: () => void) {
+  onDiffClose = fn;
+}
+
+// The inputs of the last render, so a toolbar control can re-render in place.
+let lastDiff: { container: HTMLElement; diff: string; comments: DiffComment[]; threads: ReviewThread[] } | null =
+  null;
+function rerenderDiff() {
+  if (lastDiff) renderDiff(lastDiff.container, lastDiff.diff, lastDiff.comments, lastDiff.threads);
+}
+
+function sortFiles(files: DFile[]): DFile[] {
+  const by = (f: DFile) =>
+    diffSort === "changes" ? f.adds + f.dels : diffSort === "additions" ? f.adds : f.dels;
+  if (diffSort === "default") return files;
+  return [...files].sort((a, b) => by(b) - by(a));
+}
+
+/** The sticky diff toolbar: stats · collapse-all · sort · show +/− · close. */
+function buildDiffToolbar(
+  container: HTMLElement,
+  files: DFile[],
+  totAdd: number,
+  totDel: number,
+  cmtCount: number,
+): HTMLElement {
+  const bar = document.createElement("div");
+  bar.className = "diff-toolbar";
+
+  const stat = document.createElement("span");
+  stat.className = "dt-stat";
+  stat.innerHTML = "";
+  const fc = document.createElement("span");
+  fc.className = "diff-fcount";
+  fc.textContent = `${files.length} file${files.length > 1 ? "s" : ""}`;
+  const a = document.createElement("span");
+  a.className = "diff-adds";
+  a.textContent = `+${totAdd}`;
+  const d = document.createElement("span");
+  d.className = "diff-dels";
+  d.textContent = `−${totDel}`;
+  stat.append(fc, a, d);
+  if (cmtCount) {
+    const cc = document.createElement("span");
+    cc.className = "diff-ccount";
+    cc.textContent = `${cmtCount} 💬`;
+    stat.append(cc);
+  }
+  bar.appendChild(stat);
+
+  const spacer = document.createElement("span");
+  spacer.className = "dt-spacer";
+  bar.appendChild(spacer);
+
+  // Collapse / expand all files.
+  const collapse = document.createElement("button");
+  collapse.type = "button";
+  collapse.className = "dt-ctl";
+  const setCollapseLabel = () => {
+    const anyOpen = !!container.querySelector(".diff-file:not(.collapsed)");
+    collapse.textContent = anyOpen ? "⊟" : "⊞";
+    collapse.title = anyOpen ? "Collapse all files" : "Expand all files";
+  };
+  collapse.addEventListener("click", () => {
+    const anyOpen = !!container.querySelector(".diff-file:not(.collapsed)");
+    container.querySelectorAll(".diff-file").forEach((f) => f.classList.toggle("collapsed", anyOpen));
+    setCollapseLabel();
+  });
+  bar.appendChild(collapse);
+
+  // Sort.
+  const sort = document.createElement("select");
+  sort.className = "dt-sort";
+  (Object.keys(SORT_LABELS) as SortMode[]).forEach((m) => {
+    const opt = document.createElement("option");
+    opt.value = m;
+    opt.textContent = SORT_LABELS[m];
+    if (m === diffSort) opt.selected = true;
+    sort.appendChild(opt);
+  });
+  sort.addEventListener("change", () => {
+    diffSort = sort.value as SortMode;
+    rerenderDiff();
+  });
+  bar.appendChild(sort);
+
+  // Show additions / deletions toggles (pure CSS hide on the container).
+  const mkToggle = (sign: string, cls: string, title: string) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "dt-toggle " + (sign === "+" ? "add" : "del");
+    b.textContent = sign;
+    b.title = title;
+    const sync = () => b.classList.toggle("on", !container.classList.contains(cls));
+    sync();
+    b.addEventListener("click", () => {
+      container.classList.toggle(cls);
+      sync();
+    });
+    return b;
+  };
+  bar.appendChild(mkToggle("+", "hide-add", "Show / hide added lines"));
+  bar.appendChild(mkToggle("−", "hide-del", "Show / hide removed lines"));
+
+  if (onDiffClose) {
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "dt-close";
+    close.textContent = "×";
+    close.title = "Close diff";
+    close.addEventListener("click", () => onDiffClose?.());
+    bar.appendChild(close);
+  }
+
+  setCollapseLabel();
+  return bar;
+}
+
 /**
  * Render the parsed diff into `container`. When `threads` is provided (full review
  * threads with resolved state + reactions) it drives the inline UI — each anchored
@@ -170,28 +299,10 @@ export function renderDiff(
     : comments.length;
   const totAdd = files.reduce((s, f) => s + f.adds, 0);
   const totDel = files.reduce((s, f) => s + f.dels, 0);
-  const summary = document.createElement("div");
-  summary.className = "diff-summary";
-  const fc = document.createElement("span");
-  fc.className = "diff-fcount";
-  fc.textContent = `${files.length} file${files.length > 1 ? "s" : ""} changed`;
-  const a = document.createElement("span");
-  a.className = "diff-adds";
-  a.textContent = `+${totAdd}`;
-  const d = document.createElement("span");
-  d.className = "diff-dels";
-  d.textContent = `−${totDel}`;
-  if (cmtCount) {
-    const cc = document.createElement("span");
-    cc.className = "diff-ccount";
-    cc.textContent = `${cmtCount} comment${cmtCount > 1 ? "s" : ""}`;
-    summary.append(fc, a, d, cc);
-  } else {
-    summary.append(fc, a, d);
-  }
-  container.appendChild(summary);
+  container.appendChild(buildDiffToolbar(container, files, totAdd, totDel, cmtCount));
+  lastDiff = { container, diff, comments, threads };
 
-  for (const f of files) {
+  for (const f of sortFiles(files)) {
     const card = document.createElement("div");
     card.className = "diff-file";
 

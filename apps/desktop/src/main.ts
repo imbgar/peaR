@@ -20,6 +20,7 @@ import {
   setReplyHandler,
   setAskHandler,
   setPendingReview,
+  setDiffCloseHandler,
 } from "./diff";
 import {
   Command,
@@ -1241,6 +1242,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     tabs.get(active)?.term.focus();
     setStatus("asked Claude about the selected section");
   });
+  // The diff toolbar's × closes the panel.
+  setDiffCloseHandler(() => setPanel(false));
   // Insight is hard-coded off for now — hide its controls (the panel itself is reused
   // by the diff view, so it stays). Flip INSIGHT_ENABLED to bring these back.
   if (!INSIGHT_ENABLED) {
