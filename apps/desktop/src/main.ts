@@ -456,9 +456,15 @@ const busiestSession = (r: PrRecord) =>
     null,
   );
 
+/** The effective search = committed chips (`histQuery`) + whatever's being typed now. */
+function activeQuery(): string {
+  const inp = document.getElementById("hist-search-input") as HTMLInputElement | null;
+  return `${histQuery} ${inp?.value ?? ""}`.trim();
+}
+
 /** Structured search: `repo:x org:y pr:123 cli:claude` tag filters + free text (all AND). */
 function matchFields(owner: string, repo: string, num: string, title: string, cli: string): boolean {
-  const raw = histQuery.trim();
+  const raw = activeQuery();
   if (!raw) return true;
   const q = parseSearchQuery(raw, {
     keywords: ["repo", "org", "pr", "cli"],
@@ -534,13 +540,41 @@ function renderHistChips() {
         .filter((_, j) => j !== i)
         .map((g) => g.token)
         .join(" ");
-      $<HTMLInputElement>("#hist-search").value = histQuery;
       renderHistChips();
       renderHistory();
     };
     chip.append(lbl, x);
     chips.appendChild(chip);
   });
+  // Hide the placeholder once there are committed chips (the box reads cleanly).
+  $<HTMLInputElement>("#hist-search-input").placeholder = histQuery.trim()
+    ? "filter…"
+    : "search · repo:x org:y pr:123";
+}
+
+/** Commit the in-progress input as a chip (on space / Enter). */
+function commitPending(): boolean {
+  const inp = $<HTMLInputElement>("#hist-search-input");
+  const v = inp.value.trim();
+  if (!v) return false;
+  histQuery = (histQuery ? `${histQuery} ${v}` : v).trim();
+  inp.value = "";
+  renderHistChips();
+  renderHistory();
+  return true;
+}
+
+/** Backspace on an empty input removes the last committed chip. */
+function removeLastChip(): boolean {
+  const toks = parsedFilters(histQuery);
+  if (!toks.length) return false;
+  histQuery = toks
+    .slice(0, -1)
+    .map((t) => t.token)
+    .join(" ");
+  renderHistChips();
+  renderHistory();
+  return true;
 }
 
 function renderHistory() {
@@ -557,7 +591,6 @@ function renderHistory() {
   qc.classList.toggle("hidden", pending === 0);
   // Search + favorites filters apply to history/tree only, not the queue.
   $("#hist-search").classList.toggle("hidden", historyView === "queue");
-  $("#hist-chips").classList.toggle("hidden", historyView === "queue" || !histQuery.trim());
   $("#fav-only").classList.toggle("hidden", historyView === "queue");
   historyEl.classList.toggle("tree-mode", historyView === "tree");
   historyEl.classList.toggle("queue-mode", historyView === "queue");
@@ -1816,12 +1849,21 @@ window.addEventListener("DOMContentLoaded", async () => {
     e.stopPropagation();
     promptHistAdd();
   });
-  const searchEl = $<HTMLInputElement>("#hist-search");
-  searchEl.addEventListener("input", () => {
-    histQuery = searchEl.value;
-    renderHistChips();
-    renderHistory();
+  // Token-field search: committed qualifiers are chips inside the box; the input holds
+  // the in-progress term. Space/Enter commits it to a chip; Backspace on empty removes the
+  // last chip; typing live-filters using committed chips + the pending text.
+  const searchEl = $<HTMLInputElement>("#hist-search-input");
+  searchEl.addEventListener("input", () => renderHistory());
+  searchEl.addEventListener("keydown", (e) => {
+    if ((e.key === " " || e.key === "Enter") && searchEl.value.trim()) {
+      e.preventDefault();
+      commitPending();
+    } else if (e.key === "Backspace" && searchEl.value === "" && searchEl.selectionStart === 0) {
+      if (removeLastChip()) e.preventDefault();
+    }
   });
+  // Click anywhere in the box focuses the input.
+  $("#hist-search").addEventListener("click", () => searchEl.focus());
   // Dismiss the history context menu / add popover on any outside click or Escape.
   document.addEventListener("click", (e) => {
     if (!(e.target as HTMLElement)?.closest("#hist-ctx")) closeHistCtx();

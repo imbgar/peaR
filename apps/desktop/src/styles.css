@@ -439,16 +439,23 @@ button:disabled { opacity: 0.38; cursor: default; }
 .hist-tab:last-child { border-radius: 0 5px 5px 0; }
 .hist-tab:hover { color: var(--dim); }
 .hist-tab.on { color: var(--accent); border-color: var(--accent-d); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+/* Token-field search box: committed qualifier chips + an inline input, all in one box. */
 .hist-search {
-  margin: 6px 3px 4px; padding: 5px 8px; width: calc(100% - 6px); box-sizing: border-box;
-  font-family: var(--font-mono); font-size: 11px;
-  background: var(--inp); border: 1px solid var(--bd2); color: var(--tx); border-radius: var(--r-sm);
+  margin: 6px 3px 4px; padding: 4px 5px; width: calc(100% - 6px); box-sizing: border-box;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px; cursor: text;
+  background: var(--inp); border: 1px solid var(--bd2); border-radius: var(--r-sm);
 }
-.hist-search:focus { outline: none; border-color: var(--accent-d); }
-.hist-search::placeholder { color: var(--faint); }
-/* Parsed-filter chips — GitHub-style confirmation that each qualifier was recognized. */
-.hist-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 3px 2px; }
-.hist-chips.hidden { display: none; }
+.hist-search.hidden { display: none; }
+.hist-search:focus-within { border-color: var(--accent-d); }
+.hist-search-input {
+  flex: 1; min-width: 70px; padding: 2px 3px; background: transparent; border: none;
+  font-family: var(--font-mono); font-size: 11px; color: var(--tx);
+}
+.hist-search-input:focus { outline: none; }
+.hist-search-input::placeholder { color: var(--faint); }
+/* Parsed-filter chips — GitHub-style confirmation that each qualifier was recognized.
+   display:contents lets the chips be direct flex children of the search box. */
+.hist-chips { display: contents; }
 .hist-chip {
   display: inline-flex; align-items: center; gap: 2px;
   font-family: var(--font-mono); font-size: 10px; padding: 1px 3px 1px 7px;

@@ -62,8 +62,10 @@
             <button type="button" id="history-restore" class="mini" title="Restore last cleared history">restore</button>
           </span>
         </div>
-        <input type="text" id="hist-search" class="hist-search" placeholder="search · repo:x org:y pr:123" autocomplete="off" spellcheck="false" />
-        <div id="hist-chips" class="hist-chips hidden"></div>
+        <div id="hist-search" class="hist-search">
+          <span id="hist-chips" class="hist-chips"></span>
+          <input type="text" id="hist-search-input" class="hist-search-input" placeholder="search · repo:x org:y pr:123" autocomplete="off" spellcheck="false" />
+        </div>
         <ul id="history"></ul>
       </aside>
 
