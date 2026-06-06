@@ -124,6 +124,204 @@ const STATUS_LETTER: Record<string, string> = {
   modified: "M",
 };
 
+// ── diff view controls (toolbar state — persists across re-renders) ───────────
+type SortMode = "default" | "changes" | "additions" | "removals";
+const SORT_LABELS: Record<SortMode, string> = {
+  default: "Default order",
+  changes: "Most changes",
+  additions: "Most additions",
+  removals: "Most removals",
+};
+let diffSort: SortMode = "default";
+let onDiffClose: (() => void) | null = null;
+/** Wire the diff toolbar's × (close) button. */
+export function setDiffCloseHandler(fn: () => void) {
+  onDiffClose = fn;
+}
+
+function sortFiles(files: DFile[]): DFile[] {
+  const by = (f: DFile) =>
+    diffSort === "changes" ? f.adds + f.dels : diffSort === "additions" ? f.adds : f.dels;
+  if (diffSort === "default") return files;
+  return [...files].sort((a, b) => by(b) - by(a));
+}
+
+/** Re-order the rendered `.diff-file` cards in place (no teardown) to the current sort.
+ *  Reordering DOM nodes preserves scroll, expanded threads, and — crucially — never
+ *  removes the <select> that fired the change event. */
+function reorderFiles(container: HTMLElement) {
+  const cards = [...container.querySelectorAll<HTMLElement>(":scope > .diff-file")];
+  const metric = (c: HTMLElement) => {
+    const a = +(c.dataset.adds ?? 0);
+    const d = +(c.dataset.dels ?? 0);
+    return diffSort === "changes" ? a + d : diffSort === "additions" ? a : d;
+  };
+  cards.sort(
+    diffSort === "default"
+      ? (x, y) => +(x.dataset.order ?? 0) - +(y.dataset.order ?? 0)
+      : (x, y) => metric(y) - metric(x),
+  );
+  for (const c of cards) container.appendChild(c);
+}
+
+/** A pinned navigator listing every inline thread; clicking one jumps to it. Stays
+ *  open until toggled off (via the count button) or its own × — not on item click. */
+function buildThreadList(container: HTMLElement, threads: ReviewThread[]): HTMLElement {
+  const list = document.createElement("div");
+  list.className = "diff-thread-list hidden";
+  const head = document.createElement("div");
+  head.className = "dtl-head";
+  const title = document.createElement("span");
+  title.textContent = `${threads.length} thread${threads.length > 1 ? "s" : ""}`;
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "dtl-close";
+  close.textContent = "×";
+  close.title = "Hide thread list";
+  close.addEventListener("click", () => list.classList.add("hidden"));
+  head.append(title, close);
+  list.appendChild(head);
+
+  const findByThread = (sel: string, id: string) =>
+    [...container.querySelectorAll<HTMLElement>(sel)].find((e) => e.dataset.threadId === id);
+
+  for (const t of threads) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "dtl-item" + (t.is_resolved ? " resolved" : "");
+    const loc = document.createElement("span");
+    loc.className = "dtl-loc";
+    const base = t.path.split("/").pop() ?? t.path;
+    loc.textContent = `${base}:${t.line ?? t.original_line ?? "?"}`;
+    const meta = document.createElement("span");
+    meta.className = "dtl-meta";
+    const first = t.comments[0];
+    const snippet = (first?.body ?? "").replace(/\s+/g, " ").trim().slice(0, 70);
+    meta.textContent = first ? `${first.author}: ${snippet}` : "";
+    item.append(loc, meta);
+    item.addEventListener("click", () => {
+      const block = findByThread(".diff-thread", t.id);
+      if (!block) return;
+      block.closest(".diff-file")?.classList.remove("collapsed");
+      if (block.classList.contains("hidden")) findByThread(".diff-bubble", t.id)?.click();
+      block.scrollIntoView({ behavior: "smooth", block: "center" });
+      block.classList.add("flash");
+      setTimeout(() => block.classList.remove("flash"), 1100);
+    });
+    list.appendChild(item);
+  }
+  return list;
+}
+
+/** The sticky diff toolbar: stats · collapse-all · sort · show +/− · close. */
+function buildDiffToolbar(
+  container: HTMLElement,
+  files: DFile[],
+  totAdd: number,
+  totDel: number,
+  cmtCount: number,
+  threads: ReviewThread[],
+): HTMLElement {
+  const bar = document.createElement("div");
+  bar.className = "diff-toolbar";
+
+  const stat = document.createElement("span");
+  stat.className = "dt-stat";
+  const fc = document.createElement("span");
+  fc.className = "diff-fcount";
+  fc.textContent = `${files.length} file${files.length > 1 ? "s" : ""}`;
+  const a = document.createElement("span");
+  a.className = "diff-adds";
+  a.textContent = `+${totAdd}`;
+  const d = document.createElement("span");
+  d.className = "diff-dels";
+  d.textContent = `−${totDel}`;
+  stat.append(fc, a, d);
+  bar.appendChild(stat);
+
+  // Comment count → a toggle that pins a thread navigator (jump to each inline thread).
+  if (cmtCount && threads.length) {
+    const cc = document.createElement("button");
+    cc.type = "button";
+    cc.className = "dt-threads";
+    cc.textContent = `${cmtCount} 💬`;
+    cc.title = "Show comment threads";
+    const list = buildThreadList(container, threads);
+    cc.addEventListener("click", () => {
+      const open = list.classList.toggle("hidden");
+      cc.classList.toggle("on", !open);
+    });
+    bar.append(cc, list);
+  }
+
+  const spacer = document.createElement("span");
+  spacer.className = "dt-spacer";
+  bar.appendChild(spacer);
+
+  // Collapse / expand all files.
+  const collapse = document.createElement("button");
+  collapse.type = "button";
+  collapse.className = "dt-ctl";
+  const setCollapseLabel = () => {
+    const anyOpen = !!container.querySelector(".diff-file:not(.collapsed)");
+    collapse.textContent = anyOpen ? "⊟" : "⊞";
+    collapse.title = anyOpen ? "Collapse all files" : "Expand all files";
+  };
+  collapse.addEventListener("click", () => {
+    const anyOpen = !!container.querySelector(".diff-file:not(.collapsed)");
+    container.querySelectorAll(".diff-file").forEach((f) => f.classList.toggle("collapsed", anyOpen));
+    setCollapseLabel();
+  });
+  bar.appendChild(collapse);
+
+  // Sort.
+  const sort = document.createElement("select");
+  sort.className = "dt-sort";
+  (Object.keys(SORT_LABELS) as SortMode[]).forEach((m) => {
+    const opt = document.createElement("option");
+    opt.value = m;
+    opt.textContent = SORT_LABELS[m];
+    if (m === diffSort) opt.selected = true;
+    sort.appendChild(opt);
+  });
+  sort.addEventListener("change", () => {
+    diffSort = sort.value as SortMode;
+    reorderFiles(container); // in-place reorder — no teardown of the toolbar/select
+  });
+  bar.appendChild(sort);
+
+  // Show additions / deletions toggles (pure CSS hide on the container).
+  const mkToggle = (sign: string, cls: string, title: string) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "dt-toggle " + (sign === "+" ? "add" : "del");
+    b.textContent = sign;
+    b.title = title;
+    const sync = () => b.classList.toggle("on", !container.classList.contains(cls));
+    sync();
+    b.addEventListener("click", () => {
+      container.classList.toggle(cls);
+      sync();
+    });
+    return b;
+  };
+  bar.appendChild(mkToggle("+", "hide-add", "Show / hide added lines"));
+  bar.appendChild(mkToggle("−", "hide-del", "Show / hide removed lines"));
+
+  if (onDiffClose) {
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "dt-close";
+    close.textContent = "×";
+    close.title = "Close diff";
+    close.addEventListener("click", () => onDiffClose?.());
+    bar.appendChild(close);
+  }
+
+  setCollapseLabel();
+  return bar;
+}
+
 /**
  * Render the parsed diff into `container`. When `threads` is provided (full review
  * threads with resolved state + reactions) it drives the inline UI — each anchored
@@ -170,30 +368,16 @@ export function renderDiff(
     : comments.length;
   const totAdd = files.reduce((s, f) => s + f.adds, 0);
   const totDel = files.reduce((s, f) => s + f.dels, 0);
-  const summary = document.createElement("div");
-  summary.className = "diff-summary";
-  const fc = document.createElement("span");
-  fc.className = "diff-fcount";
-  fc.textContent = `${files.length} file${files.length > 1 ? "s" : ""} changed`;
-  const a = document.createElement("span");
-  a.className = "diff-adds";
-  a.textContent = `+${totAdd}`;
-  const d = document.createElement("span");
-  d.className = "diff-dels";
-  d.textContent = `−${totDel}`;
-  if (cmtCount) {
-    const cc = document.createElement("span");
-    cc.className = "diff-ccount";
-    cc.textContent = `${cmtCount} comment${cmtCount > 1 ? "s" : ""}`;
-    summary.append(fc, a, d, cc);
-  } else {
-    summary.append(fc, a, d);
-  }
-  container.appendChild(summary);
+  container.appendChild(buildDiffToolbar(container, files, totAdd, totDel, cmtCount, threads));
 
-  for (const f of files) {
+  // Parse-order index so the toolbar's in-place reorder can restore "Default order".
+  const parseOrder = new Map(files.map((f, i) => [f, i]));
+  for (const f of sortFiles(files)) {
     const card = document.createElement("div");
     card.className = "diff-file";
+    card.dataset.order = String(parseOrder.get(f));
+    card.dataset.adds = String(f.adds);
+    card.dataset.dels = String(f.dels);
 
     const head = document.createElement("button");
     head.type = "button";
@@ -263,10 +447,12 @@ export function renderDiff(
           const blocks: HTMLElement[] = [];
           for (const t of lineThreads) {
             const block = renderThread(t);
+            block.dataset.threadId = t.id;
             const n = t.comments.length;
             const bubble = document.createElement("button");
             bubble.type = "button";
             bubble.className = "diff-bubble" + (t.is_resolved ? " resolved" : "");
+            bubble.dataset.threadId = t.id;
             const setLabel = () =>
               (bubble.textContent = `💬 ${n}${block.classList.contains("hidden") ? " ▸" : " ▾"}`);
             bubble.addEventListener("click", () => {
@@ -322,15 +508,23 @@ export function commentEl(c: Comment): HTMLElement {
   wrap.className = "cv-cmt";
   const top = document.createElement("div");
   top.className = "cv-top";
+  // A small GitHub avatar (roughly font-size) — lives in the sticky header so it floats.
+  const av = document.createElement("img");
+  av.className = "cv-avatar";
+  av.loading = "lazy";
+  av.alt = "";
+  av.src = `https://github.com/${encodeURIComponent(c.author)}.png?size=40`;
+  av.addEventListener("error", () => (av.style.display = "none"));
   const who = document.createElement("span");
   who.className = "cv-who" + (c.mine ? " me" : "");
   who.textContent = c.author;
   const when = document.createElement("span");
   when.className = "cv-when";
   when.textContent = relTime(c.created_at);
-  top.append(who);
+  top.append(av, who);
   if (c.review_state) top.appendChild(reviewBadge(c.review_state));
   top.appendChild(when);
+  if (onAsk && c.body.trim()) top.appendChild(askInsightGroup(c));
   wrap.append(top);
   if (c.body.trim()) {
     const body = document.createElement("div");
@@ -340,6 +534,48 @@ export function commentEl(c: Comment): HTMLElement {
   }
   wrap.appendChild(reactionRow(c));
   return wrap;
+}
+
+// Per-comment "ask Claude for insight" buttons — review/PR comments can be dense, so
+// these ask the running session to unpack a specific comment from a chosen angle.
+const ONE_LINE = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 600);
+const INSIGHT: ReadonlyArray<{ glyph: string; label: string; prompt: (c: Comment) => string }> = [
+  {
+    glyph: "✦",
+    label: "Explain this comment",
+    prompt: (c) =>
+      `Explain this PR review comment from ${c.author} — what they mean and what it implies for the change: "${ONE_LINE(c.body)}"`,
+  },
+  {
+    glyph: "⚔",
+    label: "Adversarial review",
+    prompt: (c) =>
+      `Adversarially review this PR comment from ${c.author}. Push back: where might it be wrong, overcautious, or missing context? Comment: "${ONE_LINE(c.body)}"`,
+  },
+  {
+    glyph: "✚",
+    label: "Supporting points & strengths",
+    prompt: (c) =>
+      `What are the supporting points and strengths of this PR review comment from ${c.author}? Steelman it. Comment: "${ONE_LINE(c.body)}"`,
+  },
+];
+
+function askInsightGroup(c: Comment): HTMLElement {
+  const g = document.createElement("span");
+  g.className = "cv-ask";
+  for (const ins of INSIGHT) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "cv-ask-btn";
+    b.textContent = ins.glyph;
+    b.title = `Ask Claude: ${ins.label}`;
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onAsk?.(ins.prompt(c));
+    });
+    g.appendChild(b);
+  }
+  return g;
 }
 
 const REVIEW_STATE: Record<string, { label: string; cls: string }> = {

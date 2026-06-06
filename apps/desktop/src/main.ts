@@ -20,6 +20,7 @@ import {
   setReplyHandler,
   setAskHandler,
   setPendingReview,
+  setDiffCloseHandler,
 } from "./diff";
 import {
   Command,
@@ -125,6 +126,7 @@ let panelTitleEl: HTMLElement;
 let panelToggleBtn: HTMLButtonElement;
 let commentsBodyEl: HTMLElement;
 let commentsCountEl: HTMLElement;
+let commentsNavEl: HTMLElement;
 let reviewBarEl: HTMLElement;
 let skillsModalEl: HTMLElement;
 let skillsStatusEl: HTMLElement;
@@ -848,6 +850,8 @@ function ensureComments(tab: number) {
 function renderConversation(tab: number) {
   const c = commentsCache.get(tab);
   commentsBodyEl.innerHTML = "";
+  commentsNavEl.classList.add("hidden");
+  commentsCountEl.classList.remove("on");
   if (!c) {
     const div = document.createElement("div");
     div.className = "panel-empty";
@@ -867,8 +871,53 @@ function renderConversation(tab: number) {
   for (const cm of c.conversation as Comment[]) {
     const card = document.createElement("div");
     card.className = "cv-card";
+    card.dataset.commentId = cm.id;
     card.appendChild(commentEl(cm));
     commentsBodyEl.appendChild(card);
+  }
+  buildConversationNav(c.conversation as Comment[]);
+}
+
+/** Populate the conversation navigator (pop-out list; jump to each comment). */
+function buildConversationNav(comments: Comment[]) {
+  commentsNavEl.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "dtl-head";
+  const title = document.createElement("span");
+  title.textContent = `${comments.length} comment${comments.length > 1 ? "s" : ""}`;
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "dtl-close";
+  close.textContent = "×";
+  close.title = "Hide list";
+  close.addEventListener("click", () => {
+    commentsNavEl.classList.add("hidden");
+    commentsCountEl.classList.remove("on");
+  });
+  head.append(title, close);
+  commentsNavEl.appendChild(head);
+
+  for (const cm of comments) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "dtl-item";
+    const loc = document.createElement("span");
+    loc.className = "dtl-loc";
+    loc.textContent = `${cm.author}${cm.review_state ? ` · ${cm.review_state.toLowerCase().replace(/_/g, " ")}` : ""} · ${relTime(cm.created_at)}`;
+    const meta = document.createElement("span");
+    meta.className = "dtl-meta";
+    meta.textContent = (cm.body || "").replace(/\s+/g, " ").trim().slice(0, 80) || "(no text)";
+    item.append(loc, meta);
+    item.addEventListener("click", () => {
+      const card = [...commentsBodyEl.querySelectorAll<HTMLElement>(".cv-card")].find(
+        (e) => e.dataset.commentId === cm.id,
+      );
+      if (!card) return;
+      card.scrollIntoView({ behavior: "smooth", block: "start" });
+      card.classList.add("flash");
+      setTimeout(() => card.classList.remove("flash"), 1100);
+    });
+    commentsNavEl.appendChild(item);
   }
 }
 
@@ -1158,6 +1207,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   panelToggleBtn = $("#panel-toggle");
   commentsBodyEl = $("#comments-body");
   commentsCountEl = $("#comments-count");
+  commentsNavEl = $("#comments-nav");
   reviewBarEl = $("#review-bar");
 
   initLauncher();
@@ -1201,6 +1251,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#diff-btn").addEventListener("click", loadDiff);
   $("#comments-btn").addEventListener("click", loadComments);
   $("#comments-close").addEventListener("click", () => setComments(false));
+  // The comment count toggles a pop-out navigator (jump to each conversation comment).
+  commentsCountEl.addEventListener("click", () => {
+    if (!commentsNavEl.children.length) return;
+    const open = commentsNavEl.classList.toggle("hidden");
+    commentsCountEl.classList.toggle("on", !open);
+  });
   // Reactions (shared by the conversation panel + inline diff threads): toggle on the
   // active tab; the engine re-fetches and re-emits comments with authoritative state.
   setReactionHandler((subject_id, content, add) => {
@@ -1241,6 +1297,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     tabs.get(active)?.term.focus();
     setStatus("asked Claude about the selected section");
   });
+  // The diff toolbar's × closes the panel.
+  setDiffCloseHandler(() => setPanel(false));
   // Insight is hard-coded off for now — hide its controls (the panel itself is reused
   // by the diff view, so it stays). Flip INSIGHT_ENABLED to bring these back.
   if (!INSIGHT_ENABLED) {
