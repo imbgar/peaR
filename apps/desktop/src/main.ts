@@ -449,6 +449,12 @@ const favRepo = (owner: string, repo: string, on: boolean) =>
 const favPr = (pr: PrRef, on: boolean) => send({ type: "favorite_pr", pr, on });
 const isFavRec = (r: PrRecord) => isPrFav(r.pr) || isRepoFav(r.pr.owner, r.pr.repo);
 const totalMessages = (r: PrRecord) => r.sessions.reduce((s, x) => s + (x.messages || 0), 0);
+/** The session with the most messages (the ★ busiest), or null if none have any. */
+const busiestSession = (r: PrRecord) =>
+  r.sessions.reduce<PrRecord["sessions"][number] | null>(
+    (best, s) => ((s.messages || 0) > (best?.messages || 0) ? s : best),
+    null,
+  );
 
 /** Structured search: `repo:x org:y pr:123 cli:claude` tag filters + free text (all AND). */
 function matchFields(owner: string, repo: string, num: string, title: string, cli: string): boolean {
@@ -897,8 +903,17 @@ function prContextMenu(e: MouseEvent, pr: PrRef, rec: PrRecord | null) {
       ? { label: "📋 Remove from queue", on: () => send({ type: "queue_remove", pr }) }
       : { label: "📋 Add to queue", on: () => queueAdd(pr, rec?.title ?? "") },
     { label: "⟲ Resume latest", on: () => openPr(pr, cli) },
-    { label: "+ New session", on: () => openPr(pr, cli, { fresh: true }) },
   ];
+  // Resume the busiest session (most messages) — only worth a separate item when it's
+  // not already the latest one.
+  const busiest = rec ? busiestSession(rec) : null;
+  if (busiest && rec && rec.sessions[0]?.id !== busiest.id) {
+    items.push({
+      label: `★ Resume most active (${busiest.messages} msg)`,
+      on: () => openPr(pr, cli, { session_id: busiest.id }),
+    });
+  }
+  items.push({ label: "+ New session", on: () => openPr(pr, cli, { fresh: true }) });
   if (rec) items.push({ label: "× Delete history", danger: true, on: () => send({ type: "delete_history", pr }) });
   openHistCtx(e.clientX, e.clientY, items);
 }
