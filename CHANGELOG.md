@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.9] — 2026-06-06
+
+Themes, finished comments, and update notifications.
+
 ### Added
 - **Four new themes + a theme picker.** Alongside Phosphor and Instrument, peaR now
   ships **VS Code**, **Dark**, **macOS Dark**, and **Light**. The status-bar theme
@@ -227,7 +231,8 @@ First public release. A functional, terminal-native PR review control center.
 - **Shipped review skills** — `pr-post-review`, `pr-copy`, `pr-distill`, `pr-walkthru`,
   `pr-explain`, `pr-video`.
 
-[Unreleased]: https://github.com/imbgar/peaR/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/imbgar/peaR/compare/v0.1.9...HEAD
+[0.1.9]: https://github.com/imbgar/peaR/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/imbgar/peaR/compare/v0.1.7...v0.1.8
 [0.1.2]: https://github.com/imbgar/peaR/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/imbgar/peaR/compare/v0.1.0...v0.1.1
