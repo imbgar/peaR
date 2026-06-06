@@ -1861,16 +1861,19 @@ window.addEventListener("DOMContentLoaded", async () => {
     e.stopPropagation();
     promptHistAdd();
   });
-  // Token-field search: committed qualifiers are chips inside the box; the input holds
-  // the in-progress term (which may contain spaces / several qualifiers). Typing live-
-  // filters using committed chips + the pending text; pressing Enter snapshots the pending
-  // text into chips; Backspace on an empty input removes the last chip. We deliberately do
-  // NOT commit on space — that would break a qualifier you're still typing (e.g. `repo:`).
+  // Token-field search: committed qualifiers are chips inside the box; the input holds the
+  // in-progress term. Typing live-filters using committed chips + the pending text. Space or
+  // Enter commits the term to a chip (tag values never contain spaces) — EXCEPT a space right
+  // after `repo:` (an incomplete qualifier, no value yet) is swallowed so it can't make a junk
+  // chip. Backspace on an empty input removes the last chip.
   const searchEl = $<HTMLInputElement>("#hist-search-input");
   searchEl.addEventListener("input", () => renderHistory());
   searchEl.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && searchEl.value.trim()) {
+    const trimmed = searchEl.value.trim();
+    if (e.key === "Enter" || e.key === " ") {
+      if (!trimmed) return; // let a bare space through
       e.preventDefault();
+      if (trimmed.endsWith(":")) return; // incomplete `repo:` — swallow the stray space
       commitPending();
     } else if (e.key === "Backspace" && searchEl.value === "" && searchEl.selectionStart === 0) {
       if (removeLastChip()) e.preventDefault();
