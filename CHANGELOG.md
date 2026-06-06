@@ -6,25 +6,9 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-### Added
-- **Diff viewer toolbar.** A sticky toolbar replaces the old diff header: file/+/−
-  stats, a **collapse-all / expand-all** toggle, a **sort** (Default · Most changes ·
-  Most additions · Most removals), **show +/− line toggles**, and a × close. The
-  redundant "Diff — <pr>" panel title is gone in diff mode.
-- **Thread / comment navigators.** The diff toolbar's comment count opens a pinned list
-  of every inline thread (file:line · author · snippet) — clicking one jumps to and
-  expands it. The **Conversation** pane's count does the same for PR conversation
-  comments (a pop-out drawer; click to jump + flash).
-- **GitHub avatars** beside each commenter's name (in the floating header).
-- **Per-comment "ask Claude" insights.** Each comment header carries three buttons —
-  **explain**, **adversarial review**, **supporting points & strengths** — that ask the
-  running Claude session to unpack that specific (often dense) review comment.
-- Slimmer tab bar (matches the toolbar thickness).
+## [0.1.8] — 2026-06-06
 
-### Fixed
-- **Sorting the diff no longer rebuilds the whole view.** "Most changes" (etc.) now
-  re-orders the file nodes in place instead of tearing down `panel-body` (which removed
-  the `<select>` mid-event and looked like the app refreshed/broke).
+Full GitHub **PR comments** — read & write — plus a reworked diff viewer.
 
 ### Added
 - **PR comments — phase 1 (read).** A new **💬 Comments** toolbar button opens a
@@ -55,6 +39,24 @@ All notable changes to this project are documented here. The format is based on
   and pops the action buttons. (#43)
 - **Floating conversation headers.** In the comments panel each commenter's header sticks
   to the top while their comment is on screen, until the next comment pushes it up. (#43)
+- **Diff viewer toolbar.** A sticky toolbar replaces the old diff header: file/+/−
+  stats, a **collapse-all / expand-all** toggle, a **sort** (Default · Most changes ·
+  Most additions · Most removals), **show +/− line toggles**, and a × close. The
+  redundant "Diff — <pr>" panel title is gone in diff mode. (#44)
+- **Thread / comment navigators.** The diff toolbar's comment count opens a pinned list
+  of every inline thread (file:line · author · snippet) — clicking one jumps to and
+  expands it. The **Conversation** pane's count does the same for PR conversation
+  comments (a pop-out drawer; click to jump + flash). (#44)
+- **GitHub avatars** beside each commenter's name (in the floating header). (#44)
+- **Per-comment "ask Claude" insights.** Each comment header carries three buttons —
+  **explain**, **adversarial review**, **supporting points & strengths** — that ask the
+  running Claude session to unpack that specific (often dense) review comment. (#44)
+- Slimmer tab bar (matches the toolbar thickness). (#44)
+
+### Fixed
+- **Sorting the diff no longer rebuilds the whole view.** "Most changes" (etc.) now
+  re-orders the file nodes in place instead of tearing down `panel-body` (which removed
+  the `<select>` mid-event and looked like the app refreshed/broke). (#44)
 
 ## [0.1.7] — 2026-06-05
 
@@ -210,7 +212,8 @@ First public release. A functional, terminal-native PR review control center.
 - **Shipped review skills** — `pr-post-review`, `pr-copy`, `pr-distill`, `pr-walkthru`,
   `pr-explain`, `pr-video`.
 
-[Unreleased]: https://github.com/imbgar/peaR/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/imbgar/peaR/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/imbgar/peaR/compare/v0.1.7...v0.1.8
 [0.1.2]: https://github.com/imbgar/peaR/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/imbgar/peaR/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/imbgar/peaR/releases/tag/v0.1.0
