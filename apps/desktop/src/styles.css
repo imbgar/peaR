@@ -446,6 +446,24 @@ button:disabled { opacity: 0.38; cursor: default; }
 }
 .hist-search:focus { outline: none; border-color: var(--accent-d); }
 .hist-search::placeholder { color: var(--faint); }
+/* Parsed-filter chips — GitHub-style confirmation that each qualifier was recognized. */
+.hist-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 3px 2px; }
+.hist-chips.hidden { display: none; }
+.hist-chip {
+  display: inline-flex; align-items: center; gap: 2px;
+  font-family: var(--font-mono); font-size: 10px; padding: 1px 3px 1px 7px;
+  border-radius: 999px; border: 1px solid var(--bd2); color: var(--dim);
+}
+.hist-chip.key {
+  color: var(--accent); border-color: var(--accent-d);
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+}
+.hist-chip.text { background: var(--inp); }
+.hist-chip-x {
+  background: transparent; border: none; color: inherit; cursor: pointer;
+  font-size: 12px; line-height: 1; padding: 0 2px; opacity: 0.55;
+}
+.hist-chip-x:hover { opacity: 1; color: var(--red); }
 
 #history {
   list-style: none;

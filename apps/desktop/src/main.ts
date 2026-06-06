@@ -448,12 +448,14 @@ function matchFields(owner: string, repo: string, num: string, title: string, cl
     tokenize: true,
     alwaysArray: true,
   }) as SearchParserResult;
-  const has = (field: unknown, val: string) => {
+  // Keyword tags match EXACTLY (case-insensitive) — `repo:roboflow` is the roboflow repo,
+  // not roboflow-infra. Use free text for fuzzy/substring matching.
+  const eq = (field: unknown, val: string) => {
     if (!field) return true;
     const arr = Array.isArray(field) ? field : [field];
-    return arr.some((f) => val.toLowerCase().includes(String(f).toLowerCase()));
+    return arr.some((f) => String(f).toLowerCase() === val.toLowerCase());
   };
-  if (!has(q.org, owner) || !has(q.repo, repo) || !has(q.pr, num) || !has(q.cli, cli)) return false;
+  if (!eq(q.org, owner) || !eq(q.repo, repo) || !eq(q.pr, num) || !eq(q.cli, cli)) return false;
   const text = Array.isArray(q.text) ? q.text : q.text ? [q.text] : [];
   if (text.length) {
     const hay = `${owner}/${repo}#${num} ${title}`.toLowerCase();
@@ -466,6 +468,62 @@ const matchesRec = (r: PrRecord) =>
 
 function visibleEntries(): PrRecord[] {
   return historyEntries.filter((r) => (!favOnly || isFavRec(r)) && matchesRec(r));
+}
+
+// Parse the query into display chips (GitHub-style feedback that each filter was
+// recognized). `token` is the raw text used to rebuild the query when a chip is removed.
+interface HistChip {
+  label: string;
+  token: string;
+  key: boolean;
+}
+function parsedFilters(raw: string): HistChip[] {
+  if (!raw.trim()) return [];
+  const q = parseSearchQuery(raw, {
+    keywords: ["repo", "org", "pr", "cli"],
+    tokenize: true,
+    alwaysArray: true,
+  }) as SearchParserResult;
+  const out: HistChip[] = [];
+  for (const key of ["org", "repo", "pr", "cli"]) {
+    const v = q[key];
+    if (!v) continue;
+    for (const val of Array.isArray(v) ? v : [v]) {
+      out.push({ label: `${key}: ${val}`, token: `${key}:${val}`, key: true });
+    }
+  }
+  const text = Array.isArray(q.text) ? q.text : q.text ? [q.text] : [];
+  for (const t of text) out.push({ label: `"${t}"`, token: String(t), key: false });
+  return out;
+}
+
+function renderHistChips() {
+  const chips = $("#hist-chips");
+  const filters = parsedFilters(histQuery);
+  chips.innerHTML = "";
+  chips.classList.toggle("hidden", filters.length === 0);
+  filters.forEach((f, i) => {
+    const chip = document.createElement("span");
+    chip.className = "hist-chip " + (f.key ? "key" : "text");
+    const lbl = document.createElement("span");
+    lbl.textContent = f.label;
+    const x = document.createElement("button");
+    x.type = "button";
+    x.className = "hist-chip-x";
+    x.textContent = "×";
+    x.title = "Remove filter";
+    x.onclick = () => {
+      histQuery = filters
+        .filter((_, j) => j !== i)
+        .map((g) => g.token)
+        .join(" ");
+      $<HTMLInputElement>("#hist-search").value = histQuery;
+      renderHistChips();
+      renderHistory();
+    };
+    chip.append(lbl, x);
+    chips.appendChild(chip);
+  });
 }
 
 function renderHistory() {
@@ -1628,6 +1686,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   const searchEl = $<HTMLInputElement>("#hist-search");
   searchEl.addEventListener("input", () => {
     histQuery = searchEl.value;
+    renderHistChips();
     renderHistory();
   });
   // Dismiss the history context menu / add popover on any outside click or Escape.
