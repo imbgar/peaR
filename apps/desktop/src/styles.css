@@ -813,12 +813,12 @@ button:disabled { opacity: 0.38; cursor: default; }
   object-fit: cover; background: var(--inp); border: 1px solid var(--bd2);
 }
 /* per-comment ask-Claude insight buttons (subtle until you hover the comment) */
-.cv-ask { margin-left: auto; display: inline-flex; gap: 3px; opacity: 0.32; transition: opacity 0.12s var(--ease); }
+.cv-ask { margin-left: auto; display: inline-flex; gap: 3px; opacity: 0.75; transition: opacity 0.12s var(--ease); }
 .cv-cmt:hover .cv-ask, .cv-ask:hover { opacity: 1; }
 .cv-ask-btn {
-  font-size: 11px; line-height: 1; cursor: pointer; padding: 2px 5px;
-  background: transparent; border: 1px solid var(--bd2); border-radius: var(--r-sm);
-  color: var(--faint);
+  font-size: 11px; line-height: 1; cursor: pointer; padding: 2px 6px; color: var(--dim);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent); border-radius: var(--r-sm);
 }
 .cv-ask-btn:hover { color: var(--accent); border-color: var(--accent-d); box-shadow: var(--glow); }
 /* Floating author header: each conversation comment's header sticks to the top of
@@ -971,7 +971,12 @@ button:disabled { opacity: 0.38; cursor: default; }
 .dt-toggle.add.on { color: var(--green); border-color: color-mix(in srgb, var(--green) 55%, transparent); }
 .dt-toggle.del.on { color: var(--red); border-color: color-mix(in srgb, var(--red) 55%, transparent); }
 .dt-toggle:not(.on) { opacity: 0.5; text-decoration: line-through; }
-.dt-close { font-size: 15px; padding: 1px 7px; }
+.dt-close {
+  font-size: 15px; padding: 1px 8px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
+}
+.dt-close:hover { color: var(--red); border-color: color-mix(in srgb, var(--red) 50%, transparent); }
 
 /* show/hide added or removed lines (container = #panel-body) */
 #panel-body.hide-add .diff-row.r-add { display: none; }
@@ -996,14 +1001,16 @@ button:disabled { opacity: 0.38; cursor: default; }
   flex: 1; min-width: 0; color: var(--dim); font-size: 10.5px; text-align: left;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-/* ◂ widen / ▸ narrow drilldown + × close */
+/* ◂ widen / ▸ narrow drilldown + × close — dull-yellow chips so they're easy to spot */
 .dtree-step, #dtree-close {
-  background: transparent; border: none; color: var(--faint); cursor: pointer;
-  font-size: 12px; line-height: 1; padding: 2px 4px; border-radius: var(--r-sm);
+  color: var(--dim); cursor: pointer; font-size: 12px; line-height: 1;
+  padding: 2px 6px; border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
 }
-.dtree-step:hover:not(:disabled) { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
-.dtree-step:disabled { opacity: 0.25; cursor: default; }
-#dtree-close:hover { color: var(--red); }
+.dtree-step:hover:not(:disabled) { color: var(--accent); border-color: var(--accent-d); background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.dtree-step:disabled { opacity: 0.3; cursor: default; }
+#dtree-close:hover { color: var(--red); border-color: color-mix(in srgb, var(--red) 50%, transparent); }
 .dtree-body { flex: 1; overflow: auto; overscroll-behavior: contain; padding: 6px 4px 12px; }
 .dtree-empty { color: var(--faint); font-style: italic; padding: 10px; }
 .dtree-list, .dtree-folder { display: flex; flex-direction: column; }
@@ -1037,11 +1044,12 @@ button:disabled { opacity: 0.38; cursor: default; }
 
 /* comment-count toggle + the pinned thread navigator */
 .dt-threads {
-  font-family: var(--font-mono); font-size: 11px; cursor: pointer;
-  background: var(--inp); border: 1px solid var(--bd2); color: var(--blue);
-  border-radius: var(--r-sm); padding: 4px 8px;
+  font-family: var(--font-mono); font-size: 11px; cursor: pointer; color: var(--dim);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+  border-radius: var(--r-sm); padding: 4px 9px;
 }
-.dt-threads:hover { border-color: var(--accent-d); }
+.dt-threads:hover { color: var(--accent); border-color: var(--accent-d); }
 .dt-threads.on { border-color: var(--accent); color: var(--accent); box-shadow: var(--glow); }
 .diff-thread-list {
   position: absolute; top: calc(100% + 2px); right: 8px; z-index: 12;

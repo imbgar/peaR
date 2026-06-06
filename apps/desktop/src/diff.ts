@@ -244,8 +244,9 @@ function buildDiffToolbar(
     const cc = document.createElement("button");
     cc.type = "button";
     cc.className = "dt-threads";
-    cc.textContent = `${cmtCount} 💬`;
-    cc.title = "Show comment threads";
+    const nThreads = threads.length;
+    cc.textContent = `💬 See ${nThreads === 1 ? "Thread" : "Threads"} (${nThreads})`;
+    cc.title = "Show the inline comment threads";
     const list = buildThreadList(container, threads);
     cc.addEventListener("click", () => {
       const open = list.classList.toggle("hidden");
