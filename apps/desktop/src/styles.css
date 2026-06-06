@@ -1132,3 +1132,14 @@ button:disabled { opacity: 0.38; cursor: default; }
   font-family: var(--font-mono); font-size: 11.5px;
 }
 .rb-actions { display: flex; gap: 7px; margin-top: 7px; }
+
+/* ── auto-update pill (status bar) ─────────────────────────────────────────── */
+.update-pill {
+  font-family: var(--font-mono); font-size: 10.5px; cursor: pointer;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 1px solid var(--accent-d); color: var(--accent);
+  padding: 3px 9px; border-radius: 999px; box-shadow: var(--glow);
+  white-space: nowrap;
+}
+.update-pill:hover { background: color-mix(in srgb, var(--accent) 26%, transparent); }
+.update-pill.hidden { display: none; }

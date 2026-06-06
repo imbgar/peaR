@@ -12,6 +12,7 @@ import "@fontsource/ibm-plex-mono/700.css";
 import "@fontsource-variable/hanken-grotesk";
 import "@fontsource-variable/jetbrains-mono";
 import { marked } from "marked";
+import { initUpdater } from "./update";
 import {
   renderDiff,
   commentEl,
@@ -1484,4 +1485,5 @@ window.addEventListener("DOMContentLoaded", async () => {
   // *restores* the saved layout on a genuinely fresh start, so a reload never duplicates.
   send({ type: "load_layout", restore: persistOn() });
   setStatus("ready");
+  initUpdater(); // poll GitHub releases; surface an "update available" pill
 });

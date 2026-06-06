@@ -28,10 +28,15 @@ jobs:
       - name: install frontend deps
         run: npm ci
         working-directory: apps/desktop
-      - name: build & publish (draft release)
+      - name: build & publish (signed updater artifacts)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Updater signing — set these repo secrets to enable in-app auto-update.
+          # Without them the build still succeeds; it just won't emit latest.json/.sig,
+          # so existing installs won't auto-update (manual download still works).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name }}
@@ -39,4 +44,6 @@ jobs:
           releaseBody: 'See [CHANGELOG.md](https://github.com/imbgar/pear/blob/main/CHANGELOG.md). Unsigned build — right-click → Open on first launch.'
           releaseDraft: false
           prerelease: false
+          # Emit latest.json (the updater manifest) alongside the .dmg / .app.tar.gz.
+          includeUpdaterJson: true
           args: --target universal-apple-darwin

@@ -22,9 +22,18 @@ fn pear_command(state: State<'_, Mutex<Engine>>, command: Command) -> Result<(),
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_clipboard_manager::init());
+    // Auto-update (desktop only): the updater checks a GitHub-hosted manifest and
+    // installs the new bundle in place; process lets the frontend relaunch after.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        builder = builder
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_process::init());
+    }
+    builder
         .setup(|app| {
             // The sink forwards every engine Event to the webview as "pear:event".
             let handle = app.handle().clone();

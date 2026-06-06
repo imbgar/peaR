@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **In-app auto-update.** peaR checks GitHub Releases on launch (and every 6h); when a
+  newer version is available an **`⬆ vX.Y.Z`** pill appears in the status bar (changelog
+  on hover). Click it to download, install the new bundle **in place**, and relaunch.
+  Built on the Tauri updater plugin with a signed `latest.json` manifest — separate from
+  Apple notarization, so the build stays right-click-Open while still auto-updating. See
+  `docs/auto-update.md` for the one-time signing-secret setup. (#48)
+
 ## [0.1.8] — 2026-06-06
 
 Full GitHub **PR comments** — read & write — plus a reworked diff viewer.

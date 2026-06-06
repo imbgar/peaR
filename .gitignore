@@ -32,3 +32,4 @@ apps/desktop/src-tauri/gen
 
 # maintainer working notes — not for the public repo
 docs/memory/
+.secrets-local/
