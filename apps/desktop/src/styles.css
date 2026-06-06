@@ -1084,6 +1084,12 @@ button:disabled { opacity: 0.38; cursor: default; }
   background: var(--inp); border: 1px solid var(--bd2); color: var(--tx); border-radius: var(--r-sm);
   cursor: pointer;
 }
+.dt-review {
+  font-family: var(--font-ui); font-size: 11px; cursor: pointer; color: var(--accent);
+  background: transparent; border-radius: var(--r-sm); padding: 4px 9px;
+  border: 1px solid var(--accent-d);
+}
+.dt-review:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: var(--glow); }
 .dt-toggle { min-width: 24px; text-align: center; font-weight: 700; }
 .dt-toggle.add.on { color: var(--green); border-color: color-mix(in srgb, var(--green) 55%, transparent); }
 .dt-toggle.del.on { color: var(--red); border-color: color-mix(in srgb, var(--red) 55%, transparent); }
@@ -1305,6 +1311,25 @@ button.close-x:hover { color: var(--red); border-color: color-mix(in srgb, var(-
 .modal-foot { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--bd); }
 .modal-status { font-family: var(--font-mono); font-size: 11.5px; color: var(--accent); text-shadow: var(--glow); }
 .modal-status.warn { color: var(--red); }
+
+/* "Review changes" popup (Approve / Request changes / Comment) */
+.modal-card.review-card { width: min(420px, 88vw); height: auto; }
+.rv-fields { padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+.rv-body {
+  resize: vertical; min-height: 64px; padding: 9px 11px; border-radius: var(--r-sm);
+  background: var(--inp); border: 1px solid var(--bd2); color: var(--tx);
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.5;
+}
+.rv-body:focus { outline: none; border-color: var(--accent-d); }
+.rv-events { display: flex; flex-direction: column; gap: 6px; }
+.rv-event {
+  text-align: left; font-family: var(--font-ui); font-size: 12px; cursor: pointer;
+  padding: 7px 11px; border-radius: var(--r-sm); color: var(--dim);
+  background: transparent; border: 1px solid var(--bd2);
+}
+.rv-event:hover { color: var(--tx); border-color: var(--accent-d); }
+.rv-event.on { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.rv-submit.danger { color: var(--red); border-color: var(--red); }
 
 /* consent dialog — auto-height card, prose body (overrides the fixed copy-modal size) */
 .consent-card { width: min(520px, 88vw); height: auto; animation: rise 0.16s ease both; }

@@ -138,6 +138,11 @@ let onDiffClose: (() => void) | null = null;
 export function setDiffCloseHandler(fn: () => void) {
   onDiffClose = fn;
 }
+let onApprove: (() => void) | null = null;
+/** Wire the diff toolbar's "Review" (approve / request changes) button. */
+export function setApproveHandler(fn: () => void) {
+  onApprove = fn;
+}
 
 function sortFiles(files: DFile[]): DFile[] {
   const by = (f: DFile) =>
@@ -307,6 +312,16 @@ function buildDiffToolbar(
   };
   bar.appendChild(mkToggle("+", "hide-add", "Show / hide added lines"));
   bar.appendChild(mkToggle("−", "hide-del", "Show / hide removed lines"));
+
+  if (onApprove) {
+    const review = document.createElement("button");
+    review.type = "button";
+    review.className = "dt-review";
+    review.textContent = "✓ Review";
+    review.title = "Review changes — Approve / Request changes / Comment";
+    review.addEventListener("click", () => onApprove?.());
+    bar.appendChild(review);
+  }
 
   if (onDiffClose) {
     const close = document.createElement("button");

@@ -445,6 +445,15 @@ pub enum Command {
         #[serde(default)]
         body: String,
     },
+    /// Create AND submit a review in one shot (no pending review needed) — the GitHub
+    /// "Review changes" flow (Approve / Request changes / Comment + optional body). The
+    /// engine re-fetches and replies with `Event::Comments`.
+    CreateReview {
+        tab: TabId,
+        event: String,
+        #[serde(default)]
+        body: String,
+    },
     /// Reply to an existing inline review thread (its GraphQL node id). The engine
     /// re-fetches and replies with a fresh `Event::Comments`.
     ReplyReviewThread {

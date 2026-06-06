@@ -25,6 +25,7 @@ import {
   setResolveHandler,
   setPendingReview,
   setDiffCloseHandler,
+  setApproveHandler,
 } from "./diff";
 import {
   Command,
@@ -148,6 +149,7 @@ const TOOLBAR_ICONS: Record<string, string> = {
   copy: `<rect x="5.2" y="5.2" width="7.3" height="7.3" rx="1.2"/><path d="M3.5 10.8V4.5a1.3 1.3 0 011.3-1.3H10.8"/>`,
   comments: `<path d="M2.8 4.2a1.2 1.2 0 011.2-1.2h8a1.2 1.2 0 011.2 1.2v5a1.2 1.2 0 01-1.2 1.2H6l-2.6 2.3V10.4H4a1.2 1.2 0 01-1.2-1.2z"/>`,
   diff: `<path d="M4 6.2h6.5l-2-2M12 9.8H5.5l2 2"/>`,
+  approve: `<circle cx="8" cy="8" r="5.3"/><path d="M5.6 8.1l1.7 1.7 3.1-3.6"/>`,
   save: `<path d="M8 3v6.3M5.3 6.8 8 9.5l2.7-2.7"/><path d="M3.5 12.5h9"/>`,
 };
 function actionSvg(paths: string): string {
@@ -1457,6 +1459,108 @@ function ensureComments(tab: number) {
   send({ type: "load_comments", tab });
 }
 
+// ── review-changes popup (GitHub-style: Approve / Request changes / Comment) ───
+type ReviewEvent = "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
+const REVIEW_EVENTS: { id: ReviewEvent; label: string; hint: string }[] = [
+  { id: "APPROVE", label: "Approve", hint: "Submit feedback and approve merging." },
+  { id: "REQUEST_CHANGES", label: "Request changes", hint: "Submit feedback that must be addressed." },
+  { id: "COMMENT", label: "Comment", hint: "Submit general feedback without approval." },
+];
+
+/** Open the GitHub-style "Review changes" popup for the active PR tab. If the viewer has
+ *  a pending review (queued inline comments) it's submitted with the chosen verdict;
+ *  otherwise a fresh review is created + submitted in one shot. */
+function openReviewModal(defaultEvent: ReviewEvent = "APPROVE") {
+  if (active === null) return;
+  const v = tabs.get(active);
+  if (!v?.pr) {
+    setStatus("review: this tab isn't a pull request");
+    return;
+  }
+  const tab = active;
+  ensureComments(tab); // make sure we learn any pending-review id
+  let chosen: ReviewEvent = defaultEvent;
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal";
+  overlay.innerHTML = `
+    <div class="modal-card review-card">
+      <div class="modal-head">
+        <span class="modal-title"></span>
+        <button class="modal-x close-x" title="Close (Esc)">×</button>
+      </div>
+      <div class="rv-fields">
+        <textarea class="rv-body" rows="4" placeholder="Leave a comment (optional for approve)"></textarea>
+        <div class="rv-events"></div>
+      </div>
+      <div class="modal-foot">
+        <span class="modal-status rv-hint"></span>
+        <span class="toolbar-spacer"></span>
+        <button class="primary rv-submit"></button>
+      </div>
+    </div>`;
+  overlay.querySelector(".modal-title")!.textContent = `Review ${shortLabel(v.pr)}`;
+  const body = overlay.querySelector<HTMLTextAreaElement>(".rv-body")!;
+  const events = overlay.querySelector<HTMLElement>(".rv-events")!;
+  const hint = overlay.querySelector<HTMLElement>(".rv-hint")!;
+  const submit = overlay.querySelector<HTMLButtonElement>(".rv-submit")!;
+
+  const refresh = () => {
+    events.querySelectorAll<HTMLButtonElement>(".rv-event").forEach((b) =>
+      b.classList.toggle("on", b.dataset.ev === chosen),
+    );
+    const meta = REVIEW_EVENTS.find((e) => e.id === chosen)!;
+    hint.textContent = meta.hint;
+    submit.textContent = meta.label;
+    submit.classList.toggle("danger", chosen === "REQUEST_CHANGES");
+  };
+  for (const e of REVIEW_EVENTS) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "rv-event";
+    b.dataset.ev = e.id;
+    b.textContent = e.label;
+    b.addEventListener("click", () => {
+      chosen = e.id;
+      refresh();
+    });
+    events.appendChild(b);
+  }
+  refresh();
+
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  const onKey = (ev: KeyboardEvent) => {
+    if (ev.key === "Escape") close();
+  };
+  document.addEventListener("keydown", onKey);
+  overlay.querySelector(".modal-x")!.addEventListener("click", close);
+  overlay.addEventListener("click", (ev) => {
+    if (ev.target === overlay) close();
+  });
+  submit.addEventListener("click", () => {
+    const text = body.value.trim();
+    if ((chosen === "REQUEST_CHANGES" || chosen === "COMMENT") && !text) {
+      hint.textContent = "a comment is required for this verdict";
+      hint.classList.add("warn");
+      body.focus();
+      return;
+    }
+    const pendingId = commentsCache.get(tab)?.pending_review_id ?? null;
+    if (pendingId) {
+      send({ type: "submit_review", tab, review_id: pendingId, event: chosen, body: text });
+    } else {
+      send({ type: "create_review", tab, event: chosen, body: text });
+    }
+    setStatus(`submitting review (${chosen.toLowerCase().replace(/_/g, " ")})…`);
+    close();
+  });
+  document.body.appendChild(overlay);
+  body.focus();
+}
+
 function renderConversation(tab: number) {
   const c = commentsCache.get(tab);
   commentsBodyEl.innerHTML = "";
@@ -1961,6 +2065,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#panel-load").addEventListener("click", loadPanel);
   $("#diff-btn").addEventListener("click", loadDiff);
   $("#comments-btn").addEventListener("click", loadComments);
+  $("#approve-btn").addEventListener("click", () => openReviewModal("APPROVE"));
   $("#comments-close").addEventListener("click", () => setComments(false));
   // The comment count toggles a pop-out navigator (jump to each conversation comment).
   commentsCountEl.addEventListener("click", () => {
@@ -2015,6 +2120,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
   // The diff toolbar's × closes the panel.
   setDiffCloseHandler(() => setPanel(false));
+  setApproveHandler(() => openReviewModal("APPROVE"));
   // Insight is hard-coded off for now — hide its controls (the panel itself is reused
   // by the diff view, so it stays). Flip INSIGHT_ENABLED to bring these back.
   if (!INSIGHT_ENABLED) {

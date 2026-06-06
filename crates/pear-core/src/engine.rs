@@ -223,6 +223,9 @@ impl Engine {
             } => self.comment_mutation(tab, move |gh, _pr| {
                 gh.submit_review(&review_id, &event, &body)
             }),
+            Command::CreateReview { tab, event, body } => {
+                self.comment_mutation(tab, move |gh, pr| gh.create_review(pr, &event, &body))
+            }
             Command::ReplyReviewThread {
                 tab,
                 thread_id,
