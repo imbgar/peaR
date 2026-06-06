@@ -7,7 +7,7 @@ Every pull request is a tab. Every tab is a real terminal running the AI CLI of 
 Review with one keystroke, resume any past session, and keep your reviews close.
 
 [![CI](https://github.com/imbgar/peaR/actions/workflows/ci.yml/badge.svg)](https://github.com/imbgar/peaR/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/imbgar/peaR?include_prereleases&sort=semver)](https://github.com/imbgar/peaR/releases)
+[![Release](https://github.com/imbgar/peaR/actions/workflows/release.yml/badge.svg)](https://github.com/imbgar/peaR/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-c6f24e.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/macOS-Apple%20Silicon%20%7C%20Intel-ffb000)](#install)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24c8db)](https://tauri.app)
