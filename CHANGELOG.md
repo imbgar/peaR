@@ -26,6 +26,15 @@ All notable changes to this project are documented here. The format is based on
   bar above the diff submits the pending review as Comment / Approve / Request changes. You
   can also **reply** to any open inline thread. Anchors map to the right side+line (RIGHT/
   new for additions & context, LEFT/old for deletions). (#43)
+- **Ask Claude about a section.** After selecting diff lines, a second **✦** button
+  appears beside the 💬 — it opens a prompt box and sends `In <file> lines X–Y: <your
+  question>` to the tab's running Claude session (referencing the file + lines), then
+  focuses the terminal. (#43)
+- **Select code to act on it.** The comment / ask actions now also trigger from a plain
+  text selection in the diff (not just the gutter) — the selection maps to its line range
+  and pops the action buttons. (#43)
+- **Floating conversation headers.** In the comments panel each commenter's header sticks
+  to the top while their comment is on screen, until the next comment pushes it up. (#43)
 
 ## [0.1.7] — 2026-06-05
 

@@ -18,6 +18,7 @@ import {
   setReactionHandler,
   setCreateHandler,
   setReplyHandler,
+  setAskHandler,
   setPendingReview,
 } from "./diff";
 import {
@@ -1230,6 +1231,15 @@ window.addEventListener("DOMContentLoaded", async () => {
   setReplyHandler((thread_id, body) => {
     if (active === null) return;
     send({ type: "reply_review_thread", tab: active, thread_id, body });
+  });
+  // "Ask Claude about this section" — type the prompt into the active tab's session
+  // (a single line referencing the file + lines) and submit it, then focus the terminal.
+  setAskHandler((message) => {
+    if (active === null) return;
+    const bytes = Array.from(new TextEncoder().encode(message + "\r"));
+    send({ type: "input", tab: active, bytes });
+    tabs.get(active)?.term.focus();
+    setStatus("asked Claude about the selected section");
   });
   // Insight is hard-coded off for now — hide its controls (the panel itself is reused
   // by the diff view, so it stays). Flip INSIGHT_ENABLED to bring these back.

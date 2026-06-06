@@ -499,14 +499,20 @@ export interface NewComment {
 }
 type CreateFn = (c: NewComment) => void;
 type ReplyFn = (threadId: string, body: string) => void;
+type AskFn = (message: string) => void;
 let onCreate: CreateFn | null = null;
 let onReply: ReplyFn | null = null;
+let onAsk: AskFn | null = null;
 let pendingReviewId: string | null = null;
 export function setCreateHandler(fn: CreateFn) {
   onCreate = fn;
 }
 export function setReplyHandler(fn: ReplyFn) {
   onReply = fn;
+}
+/** Set the handler that sends an "ask Claude about this section" prompt to the tab. */
+export function setAskHandler(fn: AskFn) {
+  onAsk = fn;
 }
 /** The viewer's pending review id (drives the composer's review button label). */
 export function setPendingReview(id: string | null) {
@@ -535,7 +541,7 @@ let sel: LineSelection | null = null;
 function clearSelection() {
   if (!sel) return;
   for (const r of sel.body.querySelectorAll(".diff-row.sel")) r.classList.remove("sel");
-  sel.body.querySelector(".diff-bubble-new")?.remove();
+  sel.body.querySelector(".diff-actions")?.remove();
   sel.body.querySelector(".diff-composer")?.remove();
   sel = null;
 }
@@ -544,35 +550,52 @@ function bodyRows(body: HTMLElement): HTMLElement[] {
   return Array.from(body.querySelectorAll<HTMLElement>(".diff-row"));
 }
 
-function applySelection(body: HTMLElement, a: number, b: number) {
+function applySelection(body: HTMLElement, a: number, b: number, highlight = true) {
   const rows = bodyRows(body);
   const lo = Math.min(a, b);
   const hi = Math.max(a, b);
   const chosen: HTMLElement[] = [];
   rows.forEach((r, i) => {
     const on = i >= lo && i <= hi;
-    r.classList.toggle("sel", on);
+    if (highlight) r.classList.toggle("sel", on);
+    else r.classList.remove("sel");
     if (on) chosen.push(r);
   });
   sel = { body, rows: chosen, anchor: a };
 }
 
-/** Show the comment bubble at the left of the first selected row. */
-function showBubble() {
+/** Show the floating action group (comment + ask Claude) at the left of the first
+ *  selected row. */
+function showActions() {
   if (!sel || !sel.rows.length) return;
-  sel.body.querySelector(".diff-bubble-new")?.remove();
+  sel.body.querySelector(".diff-actions")?.remove();
   const first = sel.rows[0];
-  const bubble = document.createElement("button");
-  bubble.type = "button";
-  bubble.className = "diff-bubble-new";
-  bubble.textContent = "💬";
-  bubble.title = "Comment on the selected lines";
-  bubble.style.top = `${first.offsetTop}px`;
-  bubble.addEventListener("click", (e) => {
+  const group = document.createElement("div");
+  group.className = "diff-actions";
+  group.style.top = `${first.offsetTop}px`;
+
+  const comment = document.createElement("button");
+  comment.type = "button";
+  comment.className = "diff-act";
+  comment.textContent = "💬";
+  comment.title = "Comment on the selected lines";
+  comment.addEventListener("click", (e) => {
     e.stopPropagation();
     openComposer();
   });
-  sel.body.appendChild(bubble);
+
+  const ask = document.createElement("button");
+  ask.type = "button";
+  ask.className = "diff-act ask";
+  ask.textContent = "✦";
+  ask.title = "Ask Claude about this section";
+  ask.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openAskComposer();
+  });
+
+  group.append(comment, ask);
+  sel.body.appendChild(group);
 }
 
 /** Insert the composer block right after the last selected row. */
@@ -635,64 +658,129 @@ function openComposer() {
   ta.focus();
 }
 
-/** Wire gutter-drag + shift-click line selection on a freshly rendered diff. */
-function wireLineSelection(container: HTMLElement) {
-  sel = null; // DOM was rebuilt; drop any stale selection
-  let dragging: HTMLElement | null = null; // the body being dragged within
+/** Open the "ask Claude about this section" composer under the selection. */
+function openAskComposer() {
+  if (!sel || !sel.rows.length || !onAsk) return;
+  sel.body.querySelector(".diff-composer")?.remove();
+  const first = sel.rows[0];
+  const last = sel.rows[sel.rows.length - 1];
+  const startA = rowAnchor(first);
+  const endA = rowAnchor(last);
+  const path = first.dataset.path ?? "";
+  const lineLabel =
+    sel.rows.length > 1 && startA && endA
+      ? `lines ${startA.line}–${endA.line}`
+      : `line ${endA?.line ?? startA?.line ?? "?"}`;
 
-  const rowFromPoint = (x: number, y: number, body: HTMLElement): number => {
-    const el = document.elementFromPoint(x, y)?.closest<HTMLElement>(".diff-row");
-    if (!el || el.parentElement !== body) return -1;
-    return bodyRows(body).indexOf(el);
-  };
+  const box = document.createElement("div");
+  box.className = "diff-composer ask";
+  const head = document.createElement("div");
+  head.className = "dc-head";
+  head.textContent = `✦ Ask Claude about ${path} ${lineLabel}`;
+  const ta = document.createElement("textarea");
+  ta.placeholder = "What do you want to ask? (the file + line range is referenced for Claude)";
+  ta.rows = 2;
+  const actions = document.createElement("div");
+  actions.className = "dc-actions";
+  const askBtn = document.createElement("button");
+  askBtn.type = "button";
+  askBtn.className = "dc-btn primary";
+  askBtn.textContent = "Ask Claude";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "dc-btn ghost";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => clearSelection());
+  askBtn.addEventListener("click", () => {
+    const q = ta.value.trim() || "explain this section and flag anything risky";
+    // Reference the file + lines (Claude reads them itself) rather than pasting code
+    // into the interactive TUI.
+    onAsk!(`In \`${path}\` ${lineLabel}: ${q}`);
+    clearSelection();
+  });
+  actions.append(askBtn, cancel);
+  box.append(head, ta, actions);
+  last.after(box);
+  ta.focus();
+}
 
-  container.addEventListener("pointerdown", (e) => {
-    const gutter = (e.target as HTMLElement).closest<HTMLElement>(".diff-gutter");
-    if (!gutter) return; // only the line-number gutter is the selection handle
+// ── selection driver (attached ONCE; the diff DOM is rebuilt every render) ────
+let dragging: HTMLElement | null = null;
+
+/** Reset stale selection state after a re-render (called at the end of renderDiff). */
+function wireLineSelection(_container: HTMLElement) {
+  sel = null;
+  dragging = null;
+}
+
+function rowIndexAtPoint(x: number, y: number, body: HTMLElement): number {
+  const el = document.elementFromPoint(x, y)?.closest<HTMLElement>(".diff-row");
+  if (!el || el.parentElement !== body) return -1;
+  return bodyRows(body).indexOf(el);
+}
+
+// Gutter drag / shift-click starts or extends a line selection; a click elsewhere
+// (outside the action UI) dismisses it.
+document.addEventListener("pointerdown", (e) => {
+  const t = e.target as HTMLElement;
+  const gutter = t.closest<HTMLElement>(".diff-gutter");
+  if (gutter && gutter.closest(".diff-body")) {
     const row = gutter.closest<HTMLElement>(".diff-row");
     const body = row?.parentElement as HTMLElement | undefined;
     if (!row || !body || !rowAnchor(row)) return;
     e.preventDefault();
     const idx = bodyRows(body).indexOf(row);
-
-    // Shift-click extends the current selection (if it's in this body) instead of dragging.
     if (e.shiftKey && sel && sel.body === body) {
       applySelection(body, sel.anchor, idx);
-      showBubble();
+      showActions();
       return;
     }
     clearSelection();
     applySelection(body, idx, idx);
     dragging = body;
     body.classList.add("selecting");
-  });
+    return;
+  }
+  if (sel && !t.closest(".diff-composer") && !t.closest(".diff-actions")) clearSelection();
+});
 
-  window.addEventListener("pointermove", (e) => {
-    if (!dragging || !sel) return;
-    const idx = rowFromPoint(e.clientX, e.clientY, dragging);
-    if (idx >= 0) applySelection(dragging, sel.anchor, idx);
-  });
+window.addEventListener("pointermove", (e) => {
+  if (!dragging || !sel) return;
+  const idx = rowIndexAtPoint(e.clientX, e.clientY, dragging);
+  if (idx >= 0) applySelection(dragging, sel.anchor, idx);
+});
 
-  window.addEventListener("pointerup", () => {
-    if (!dragging) return;
-    dragging.classList.remove("selecting");
-    dragging = null;
-    showBubble();
-  });
-}
+window.addEventListener("pointerup", () => {
+  if (!dragging) return;
+  dragging.classList.remove("selecting");
+  dragging = null;
+  showActions();
+});
 
-// Clear a selection on Escape, or on a click that isn't part of the diff comment UI.
+// Selecting text in the code itself also offers the actions: map the text selection
+// to its whole-line range (the native highlight stays, so copy still works) and show
+// the action group anchored to the first line.
+document.addEventListener("mouseup", () => {
+  if (dragging) return; // a gutter drag handles its own finish
+  const s = window.getSelection();
+  if (!s || s.isCollapsed || s.rangeCount === 0) return;
+  const range = s.getRangeAt(0);
+  const rowOf = (n: Node): HTMLElement | null =>
+    (n.nodeType === 1 ? (n as HTMLElement) : n.parentElement)?.closest<HTMLElement>(".diff-row") ??
+    null;
+  const startRow = rowOf(range.startContainer);
+  const endRow = rowOf(range.endContainer);
+  if (!startRow || !endRow) return;
+  const body = startRow.parentElement as HTMLElement;
+  if (!body || endRow.parentElement !== body) return;
+  const rows = bodyRows(body);
+  const a = rows.indexOf(startRow);
+  const b = rows.indexOf(endRow);
+  if (a < 0 || b < 0 || !rowAnchor(startRow)) return;
+  applySelection(body, a, b, false); // keep the native highlight (don't add .sel)
+  showActions();
+});
+
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") clearSelection();
-});
-document.addEventListener("pointerdown", (e) => {
-  const t = e.target as HTMLElement;
-  if (
-    sel &&
-    !t.closest(".diff-composer") &&
-    !t.closest(".diff-bubble-new") &&
-    !t.closest(".diff-gutter")
-  ) {
-    clearSelection();
-  }
 });

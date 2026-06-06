@@ -673,6 +673,10 @@ button:disabled { opacity: 0.38; cursor: default; }
   min-height: 0;
   overflow: hidden;
 }
+/* No top padding: the sticky author headers pin flush to the top (otherwise scrolled
+   body text bleeds through the padding band above the stuck header). */
+#comments-body { padding-top: 0; }
+#comments-body > .cv-card:first-child { margin-top: 12px; }
 .cv-count {
   font-family: var(--font-mono); font-size: 11px; color: var(--dim);
   border: 1px solid var(--bd2); border-radius: 999px; padding: 0 7px;
@@ -684,6 +688,14 @@ button:disabled { opacity: 0.38; cursor: default; }
 /* one comment (shared: conversation cards + inline diff threads) */
 .cv-cmt { padding: 0; }
 .cv-top { display: flex; align-items: baseline; gap: 7px; margin-bottom: 3px; }
+/* Floating author header: each conversation comment's header sticks to the top of
+   the panel while its comment is on screen, until the next comment pushes it up. The
+   negative margins let the opaque bar span the full card width. */
+#comments-body .cv-card .cv-top {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--elev); border-bottom: 1px solid var(--bd);
+  margin: -8px -10px 6px; padding: 7px 10px;
+}
 .cv-who { font-weight: 600; font-size: 12px; color: var(--tx); }
 .cv-who.me { color: var(--accent); text-shadow: var(--glow); }
 .cv-when { font-size: 10px; color: var(--faint); font-family: var(--font-mono); }
@@ -944,15 +956,19 @@ button:disabled { opacity: 0.38; cursor: default; }
 .diff-row.sel { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .diff-row.sel .diff-gutter { color: var(--accent); }
 
-/* the 💬 bubble that appears at the left of the first selected line */
-.diff-bubble-new {
+/* floating action group (💬 comment · ✦ ask Claude) at the left of the first line */
+.diff-actions {
   position: absolute; left: 2px; z-index: 5;
+  display: inline-flex; flex-direction: column; gap: 2px;
+}
+.diff-act {
   display: inline-flex; align-items: center; justify-content: center;
   width: 22px; height: 20px; padding: 0; font-size: 11px; line-height: 1;
   background: var(--accent); color: var(--on-accent); border: none;
   border-radius: 5px; cursor: pointer; box-shadow: var(--glow);
 }
-.diff-bubble-new:hover { filter: brightness(1.1); }
+.diff-act:hover { filter: brightness(1.1); }
+.diff-act.ask { background: var(--blue); }
 
 /* the composer inserted under the selected range */
 .diff-composer {
