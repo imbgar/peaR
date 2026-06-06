@@ -490,16 +490,16 @@ button:disabled { opacity: 0.38; cursor: default; }
   display: flex;
   align-items: stretch;
   gap: 6px;
-  padding: 10px 12px 0;
+  padding: 6px 12px 0;
   overflow-x: auto;
-  min-height: 44px;
+  min-height: 0;
   animation: rise 0.5s var(--ease) 0.05s both;
 }
 .tab {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 10px 7px 11px;
+  padding: 6px 10px 7px 11px;
   background: var(--panel);
   border: 1px solid var(--bd);
   border-bottom: none;
@@ -834,6 +834,46 @@ button:disabled { opacity: 0.38; cursor: default; }
 /* show/hide added or removed lines (container = #panel-body) */
 #panel-body.hide-add .diff-row.r-add { display: none; }
 #panel-body.hide-del .diff-row.r-del { display: none; }
+
+/* comment-count toggle + the pinned thread navigator */
+.dt-threads {
+  font-family: var(--font-mono); font-size: 11px; cursor: pointer;
+  background: var(--inp); border: 1px solid var(--bd2); color: var(--blue);
+  border-radius: var(--r-sm); padding: 4px 8px;
+}
+.dt-threads:hover { border-color: var(--accent-d); }
+.dt-threads.on { border-color: var(--accent); color: var(--accent); box-shadow: var(--glow); }
+.diff-thread-list {
+  position: absolute; top: calc(100% + 2px); right: 8px; z-index: 12;
+  width: min(360px, calc(100% - 16px)); max-height: 60vh; overflow: auto;
+  background: var(--panel); border: 1px solid var(--bd2); border-radius: var(--r);
+  box-shadow: 0 18px 50px -18px rgba(0, 0, 0, 0.75);
+}
+.diff-thread-list.hidden { display: none; }
+.dtl-head {
+  position: sticky; top: 0; display: flex; align-items: center; justify-content: space-between;
+  padding: 7px 10px; background: var(--elev); border-bottom: 1px solid var(--bd);
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.8px; color: var(--dim);
+}
+.dtl-close { background: transparent; border: none; color: var(--faint); font-size: 15px; line-height: 1; cursor: pointer; }
+.dtl-close:hover { color: var(--accent); }
+.dtl-item {
+  display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left;
+  padding: 7px 10px; background: transparent; border: none; border-bottom: 1px solid var(--bd);
+  cursor: pointer;
+}
+.dtl-item:hover { background: var(--elev); }
+.dtl-item.resolved { opacity: 0.6; }
+.dtl-loc { font-family: var(--font-mono); font-size: 11px; color: var(--accent); }
+.dtl-item.resolved .dtl-loc { color: var(--green); }
+.dtl-meta { font-size: 11px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* brief highlight when you jump to a thread */
+.diff-thread.flash { animation: thread-flash 1.1s var(--ease); }
+@keyframes thread-flash {
+  0%, 30% { background: color-mix(in srgb, var(--accent) 26%, transparent); }
+  100% { background: var(--panel); }
+}
 .diff-summary {
   position: sticky; top: 0; z-index: 3;
   display: flex; align-items: center; gap: 11px;

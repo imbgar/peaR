@@ -153,6 +153,55 @@ function sortFiles(files: DFile[]): DFile[] {
   return [...files].sort((a, b) => by(b) - by(a));
 }
 
+/** A pinned navigator listing every inline thread; clicking one jumps to it. Stays
+ *  open until toggled off (via the count button) or its own × — not on item click. */
+function buildThreadList(container: HTMLElement, threads: ReviewThread[]): HTMLElement {
+  const list = document.createElement("div");
+  list.className = "diff-thread-list hidden";
+  const head = document.createElement("div");
+  head.className = "dtl-head";
+  const title = document.createElement("span");
+  title.textContent = `${threads.length} thread${threads.length > 1 ? "s" : ""}`;
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "dtl-close";
+  close.textContent = "×";
+  close.title = "Hide thread list";
+  close.addEventListener("click", () => list.classList.add("hidden"));
+  head.append(title, close);
+  list.appendChild(head);
+
+  const findByThread = (sel: string, id: string) =>
+    [...container.querySelectorAll<HTMLElement>(sel)].find((e) => e.dataset.threadId === id);
+
+  for (const t of threads) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "dtl-item" + (t.is_resolved ? " resolved" : "");
+    const loc = document.createElement("span");
+    loc.className = "dtl-loc";
+    const base = t.path.split("/").pop() ?? t.path;
+    loc.textContent = `${base}:${t.line ?? t.original_line ?? "?"}`;
+    const meta = document.createElement("span");
+    meta.className = "dtl-meta";
+    const first = t.comments[0];
+    const snippet = (first?.body ?? "").replace(/\s+/g, " ").trim().slice(0, 70);
+    meta.textContent = first ? `${first.author}: ${snippet}` : "";
+    item.append(loc, meta);
+    item.addEventListener("click", () => {
+      const block = findByThread(".diff-thread", t.id);
+      if (!block) return;
+      block.closest(".diff-file")?.classList.remove("collapsed");
+      if (block.classList.contains("hidden")) findByThread(".diff-bubble", t.id)?.click();
+      block.scrollIntoView({ behavior: "smooth", block: "center" });
+      block.classList.add("flash");
+      setTimeout(() => block.classList.remove("flash"), 1100);
+    });
+    list.appendChild(item);
+  }
+  return list;
+}
+
 /** The sticky diff toolbar: stats · collapse-all · sort · show +/− · close. */
 function buildDiffToolbar(
   container: HTMLElement,
@@ -160,13 +209,13 @@ function buildDiffToolbar(
   totAdd: number,
   totDel: number,
   cmtCount: number,
+  threads: ReviewThread[],
 ): HTMLElement {
   const bar = document.createElement("div");
   bar.className = "diff-toolbar";
 
   const stat = document.createElement("span");
   stat.className = "dt-stat";
-  stat.innerHTML = "";
   const fc = document.createElement("span");
   fc.className = "diff-fcount";
   fc.textContent = `${files.length} file${files.length > 1 ? "s" : ""}`;
@@ -177,13 +226,22 @@ function buildDiffToolbar(
   d.className = "diff-dels";
   d.textContent = `−${totDel}`;
   stat.append(fc, a, d);
-  if (cmtCount) {
-    const cc = document.createElement("span");
-    cc.className = "diff-ccount";
-    cc.textContent = `${cmtCount} 💬`;
-    stat.append(cc);
-  }
   bar.appendChild(stat);
+
+  // Comment count → a toggle that pins a thread navigator (jump to each inline thread).
+  if (cmtCount && threads.length) {
+    const cc = document.createElement("button");
+    cc.type = "button";
+    cc.className = "dt-threads";
+    cc.textContent = `${cmtCount} 💬`;
+    cc.title = "Show comment threads";
+    const list = buildThreadList(container, threads);
+    cc.addEventListener("click", () => {
+      const open = list.classList.toggle("hidden");
+      cc.classList.toggle("on", !open);
+    });
+    bar.append(cc, list);
+  }
 
   const spacer = document.createElement("span");
   spacer.className = "dt-spacer";
@@ -299,7 +357,7 @@ export function renderDiff(
     : comments.length;
   const totAdd = files.reduce((s, f) => s + f.adds, 0);
   const totDel = files.reduce((s, f) => s + f.dels, 0);
-  container.appendChild(buildDiffToolbar(container, files, totAdd, totDel, cmtCount));
+  container.appendChild(buildDiffToolbar(container, files, totAdd, totDel, cmtCount, threads));
   lastDiff = { container, diff, comments, threads };
 
   for (const f of sortFiles(files)) {
@@ -374,10 +432,12 @@ export function renderDiff(
           const blocks: HTMLElement[] = [];
           for (const t of lineThreads) {
             const block = renderThread(t);
+            block.dataset.threadId = t.id;
             const n = t.comments.length;
             const bubble = document.createElement("button");
             bubble.type = "button";
             bubble.className = "diff-bubble" + (t.is_resolved ? " resolved" : "");
+            bubble.dataset.threadId = t.id;
             const setLabel = () =>
               (bubble.textContent = `💬 ${n}${block.classList.contains("hidden") ? " ▸" : " ▾"}`);
             bubble.addEventListener("click", () => {
