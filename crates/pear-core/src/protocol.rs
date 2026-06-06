@@ -234,6 +234,42 @@ pub struct SessionRec {
     pub id: String,
     pub started: String,     // RFC3339
     pub last_opened: String, // RFC3339
+    /// Number of user+assistant messages in the session transcript — a cheap "how much
+    /// happened here" signal for the history view (the busiest session is starred).
+    /// Filled in on history load; defaults to 0 when the transcript can't be read.
+    #[serde(default)]
+    pub messages: u64,
+}
+
+/// Favorited repos + PRs, persisted in the data dir. Repos are `"owner/repo"` keys.
+/// Drives the history tree's ★ marks, the "favorites only" filter, and manually-added
+/// entries (a favorite that has no history still shows in the tree).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Favorites {
+    #[serde(default)]
+    pub repos: Vec<String>,
+    #[serde(default)]
+    pub prs: Vec<PrRef>,
+}
+
+/// One PR queued for review, with a simple workflow status. Ordered (the list order is
+/// the review priority). `status` is `"queued"` | `"active"` | `"done"`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueueItem {
+    pub pr: PrRef,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub added: String, // RFC3339
+}
+
+/// The review queue, persisted in the data dir. Order = priority (top = next up).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Queue {
+    #[serde(default)]
+    pub items: Vec<QueueItem>,
 }
 
 /// A reviewed PR and its session history (newest session first).
@@ -335,6 +371,30 @@ pub enum Command {
     DeleteHistory { pr: PrRef },
     /// Restore history from the last clear's backup.
     RestoreHistory,
+    /// Favorite (`on: true`) or unfavorite a whole repo by `owner`/`repo`. A favorited
+    /// repo shows in the history tree (with a ★) even if it has no sessions yet. Replied
+    /// via `Event::History`.
+    FavoriteRepo {
+        owner: String,
+        repo: String,
+        on: bool,
+    },
+    /// Favorite (`on: true`) or unfavorite a single PR. A favorited PR with no history
+    /// still shows in the tree. Doubles as the "add a PR to the list" action. Replied via
+    /// `Event::History`.
+    FavoritePr { pr: PrRef, on: bool },
+    /// Add a PR to the review queue (no-op if already queued). Replied via `Event::History`.
+    QueueAdd {
+        pr: PrRef,
+        #[serde(default)]
+        title: String,
+    },
+    /// Set a queued PR's status: `"queued"` | `"active"` | `"done"`.
+    QueueSetStatus { pr: PrRef, status: String },
+    /// Remove a PR from the review queue.
+    QueueRemove { pr: PrRef },
+    /// Reorder a queued PR by `dir` (-1 = up/higher priority, +1 = down).
+    QueueMove { pr: PrRef, dir: i64 },
     /// Report whether the bundled `/pr-*` review skills are installed in
     /// `~/.claude/skills` (replied via `Event::SkillsStatus`).
     CheckSkills,
@@ -385,6 +445,15 @@ pub enum Command {
         #[serde(default)]
         body: String,
     },
+    /// Create AND submit a review in one shot (no pending review needed) — the GitHub
+    /// "Review changes" flow (Approve / Request changes / Comment + optional body). The
+    /// engine re-fetches and replies with `Event::Comments`.
+    CreateReview {
+        tab: TabId,
+        event: String,
+        #[serde(default)]
+        body: String,
+    },
     /// Reply to an existing inline review thread (its GraphQL node id). The engine
     /// re-fetches and replies with a fresh `Event::Comments`.
     ReplyReviewThread {
@@ -399,6 +468,20 @@ pub enum Command {
         thread_id: String,
         resolved: bool,
     },
+    /// Ask Claude a bite-size question *off the main thread* — the engine spawns a
+    /// headless `claude -p` one-shot (forking the tab's session when it has one, so the
+    /// answer carries the review's full context) and streams the reply back as
+    /// `Event::Insight`s, leaving the tab's live conversation untouched. `id` is a
+    /// frontend-chosen request id so concurrent asks each render their own card.
+    AskInsight {
+        tab: TabId,
+        id: String,
+        prompt: String,
+    },
+    /// List the tab's repository's tracked files (`git ls-files` in its live cwd) for the
+    /// diff's file-tree panel — the "whole repo" / contextual scopes beyond the diff's own
+    /// files. Replied via `Event::RepoTree`.
+    LoadRepoTree { tab: TabId },
     /// Start streaming the tab's Claude session *thinking* to the brain panel
     /// (replied via `Event::Thought`s). No-op for non-Claude / session-less tabs.
     WatchBrain { tab: TabId },
@@ -451,6 +534,9 @@ pub enum Event {
     /// The tab's PR conversation comments + inline review threads (reply to
     /// `LoadComments`).
     Comments { tab: TabId, comments: PrComments },
+    /// The tab repo's tracked files (repo-relative paths) for the diff file-tree panel
+    /// (reply to `LoadRepoTree`). Empty when the cwd isn't a git repo.
+    RepoTree { tab: TabId, files: Vec<String> },
     /// One streamed item from the tab's Claude transcript for the brain panel.
     /// `kind` is `thinking` | `action` | `note`; `detail` is the full content revealed
     /// on click (e.g. a tool's whole command/input), empty when there's nothing more.
@@ -460,8 +546,25 @@ pub enum Event {
         text: String,
         detail: String,
     },
-    /// Reply to `LoadHistory`.
-    History { entries: Vec<PrRecord> },
+    /// One streamed piece of an `AskInsight` reply, keyed by the request `id`. `kind` is
+    /// `chunk` (append `text` to the answer), `done` (the one-shot finished; `text` is an
+    /// optional closing note), or `error` (`text` is the failure message).
+    Insight {
+        tab: TabId,
+        id: String,
+        kind: String,
+        text: String,
+    },
+    /// Reply to `LoadHistory` (and to the clear/delete/restore/favorite commands).
+    /// `entries` carry per-session message counts; `favorites` drives the ★ marks,
+    /// the favorites-only filter, and manually-added repos/PRs.
+    History {
+        entries: Vec<PrRecord>,
+        #[serde(default)]
+        favorites: Favorites,
+        #[serde(default)]
+        queue: Queue,
+    },
     /// Whether the bundled `/pr-*` skills are installed (reply to `CheckSkills`,
     /// also emitted after `InstallSkills`).
     SkillsStatus { installed: bool },

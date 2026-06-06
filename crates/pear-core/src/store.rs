@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{CoreError, Result};
-use crate::protocol::{CliKind, Layout, PrRecord, PrRef, SessionRec};
+use crate::protocol::{CliKind, Favorites, Layout, PrRecord, PrRef, Queue, QueueItem, SessionRec};
 
 /// Owns the `<data-dir>/pear/` tree.
 #[derive(Debug, Clone)]
@@ -72,6 +72,108 @@ impl Store {
 
     fn history_backup_path(&self) -> PathBuf {
         self.root.join("history.bak.json")
+    }
+
+    fn favorites_path(&self) -> PathBuf {
+        self.root.join("favorites.json")
+    }
+
+    /// Load the favorited repos + PRs (missing/corrupt -> empty).
+    pub fn favorites(&self) -> Favorites {
+        fs::read(self.favorites_path())
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    fn write_favorites(&self, f: &Favorites) -> Result<()> {
+        let json = serde_json::to_vec_pretty(f).map_err(|e| CoreError::Storage(e.to_string()))?;
+        fs::write(self.favorites_path(), json).map_err(|e| CoreError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Favorite / unfavorite a repo (`"owner/repo"` key). Idempotent.
+    pub fn toggle_favorite_repo(&self, owner: &str, repo: &str, on: bool) -> Result<()> {
+        let key = format!("{owner}/{repo}");
+        let mut f = self.favorites();
+        f.repos.retain(|r| r != &key);
+        if on {
+            f.repos.push(key);
+        }
+        self.write_favorites(&f)
+    }
+
+    /// Favorite / unfavorite a single PR. Idempotent.
+    pub fn toggle_favorite_pr(&self, pr: &PrRef, on: bool) -> Result<()> {
+        let mut f = self.favorites();
+        f.prs.retain(|p| p != pr);
+        if on {
+            f.prs.push(pr.clone());
+        }
+        self.write_favorites(&f)
+    }
+
+    fn queue_path(&self) -> PathBuf {
+        self.root.join("queue.json")
+    }
+
+    /// Load the review queue (missing/corrupt -> empty).
+    pub fn queue(&self) -> Queue {
+        fs::read(self.queue_path())
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    fn write_queue(&self, q: &Queue) -> Result<()> {
+        let json = serde_json::to_vec_pretty(q).map_err(|e| CoreError::Storage(e.to_string()))?;
+        fs::write(self.queue_path(), json).map_err(|e| CoreError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Add a PR to the queue (status `queued`) — no-op if already present.
+    pub fn queue_add(&self, pr: &PrRef, title: &str, now: &str) -> Result<()> {
+        let mut q = self.queue();
+        if q.items.iter().any(|i| &i.pr == pr) {
+            return Ok(());
+        }
+        q.items.push(QueueItem {
+            pr: pr.clone(),
+            title: title.to_string(),
+            status: "queued".into(),
+            added: now.to_string(),
+        });
+        self.write_queue(&q)
+    }
+
+    /// Set a queued PR's status (`queued` | `active` | `done`).
+    pub fn queue_set_status(&self, pr: &PrRef, status: &str) -> Result<()> {
+        let mut q = self.queue();
+        if let Some(item) = q.items.iter_mut().find(|i| &i.pr == pr) {
+            item.status = status.to_string();
+        }
+        self.write_queue(&q)
+    }
+
+    /// Remove a PR from the queue.
+    pub fn queue_remove(&self, pr: &PrRef) -> Result<()> {
+        let mut q = self.queue();
+        q.items.retain(|i| &i.pr != pr);
+        self.write_queue(&q)
+    }
+
+    /// Reorder a queued PR by `dir` (-1 = up, +1 = down), clamped to the ends.
+    pub fn queue_move(&self, pr: &PrRef, dir: i64) -> Result<()> {
+        let mut q = self.queue();
+        let Some(i) = q.items.iter().position(|x| &x.pr == pr) else {
+            return Ok(());
+        };
+        let j = i as i64 + dir;
+        if j >= 0 && (j as usize) < q.items.len() {
+            q.items.swap(i, j as usize);
+            self.write_queue(&q)?;
+        }
+        Ok(())
     }
 
     /// Clear the history, backing it up first so it can be restored (across runs —
@@ -187,6 +289,7 @@ impl Store {
                         id: id.to_string(),
                         started: now.to_string(),
                         last_opened: now.to_string(),
+                        messages: 0, // filled in on history load (engine::history_payload)
                     },
                 );
             }

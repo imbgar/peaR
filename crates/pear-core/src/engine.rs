@@ -100,6 +100,21 @@ impl Engine {
         (self.sink)(e);
     }
 
+    /// Emit `Event::History` on a worker thread — enriching each session with its message
+    /// count reads transcript files, which we keep off the engine lock.
+    fn emit_history(&self) {
+        let store = self.store.clone();
+        let sink = self.sink.clone();
+        std::thread::spawn(move || {
+            let (entries, favorites, queue) = history_payload(&store);
+            sink(Event::History {
+                entries,
+                favorites,
+                queue,
+            });
+        });
+    }
+
     /// The GitHub client, resolving the token lazily and caching it. Lets PR metadata /
     /// diff recover after a `gh auth login` (or a Finder-launch PATH that only resolves
     /// `gh` once warmed) without restarting the app.
@@ -152,9 +167,7 @@ impl Engine {
                     message: format!("Claude permission mode: {mode}"),
                 });
             }
-            Command::LoadHistory => self.emit(Event::History {
-                entries: self.store.history(),
-            }),
+            Command::LoadHistory => self.emit_history(),
             Command::LoadDiff { tab } => self.load_diff(tab),
             Command::LoadComments { tab } => self.load_comments(tab),
             Command::ToggleReaction {
@@ -210,6 +223,9 @@ impl Engine {
             } => self.comment_mutation(tab, move |gh, _pr| {
                 gh.submit_review(&review_id, &event, &body)
             }),
+            Command::CreateReview { tab, event, body } => {
+                self.comment_mutation(tab, move |gh, pr| gh.create_review(pr, &event, &body))
+            }
             Command::ReplyReviewThread {
                 tab,
                 thread_id,
@@ -224,6 +240,8 @@ impl Engine {
             } => self.comment_mutation(tab, move |gh, _pr| {
                 gh.set_thread_resolved(&thread_id, resolved)
             }),
+            Command::AskInsight { tab, id, prompt } => self.ask_insight(tab, id, prompt),
+            Command::LoadRepoTree { tab } => self.load_repo_tree(tab),
             Command::WatchBrain { tab } => self.watch_brain(tab),
             Command::StopBrain { tab } => self.stop_brain(tab),
             Command::SaveLayout { active } => self.persist_layout(active),
@@ -253,9 +271,7 @@ impl Engine {
                         tab: None,
                         message: format!("cleared {n} PR(s) — Restore to undo"),
                     });
-                    self.emit(Event::History {
-                        entries: self.store.history(),
-                    });
+                    self.emit_history();
                 }
                 Err(e) => self.emit(Event::Error {
                     tab: None,
@@ -263,9 +279,7 @@ impl Engine {
                 }),
             },
             Command::DeleteHistory { pr } => match self.store.delete_entry(&pr) {
-                Ok(_) => self.emit(Event::History {
-                    entries: self.store.history(),
-                }),
+                Ok(_) => self.emit_history(),
                 Err(e) => self.emit(Event::Error {
                     tab: None,
                     message: format!("delete history: {e}"),
@@ -281,13 +295,60 @@ impl Engine {
                         tab: None,
                         message: format!("restored {n} PR(s)"),
                     });
-                    self.emit(Event::History {
-                        entries: self.store.history(),
-                    });
+                    self.emit_history();
                 }
                 Err(e) => self.emit(Event::Error {
                     tab: None,
                     message: format!("restore history: {e}"),
+                }),
+            },
+            Command::FavoriteRepo { owner, repo, on } => {
+                match self.store.toggle_favorite_repo(&owner, &repo, on) {
+                    Ok(()) => self.emit_history(),
+                    Err(e) => self.emit(Event::Error {
+                        tab: None,
+                        message: format!("favorite repo: {e}"),
+                    }),
+                }
+            }
+            Command::FavoritePr { pr, on } => match self.store.toggle_favorite_pr(&pr, on) {
+                Ok(()) => self.emit_history(),
+                Err(e) => self.emit(Event::Error {
+                    tab: None,
+                    message: format!("favorite PR: {e}"),
+                }),
+            },
+            Command::QueueAdd { pr, title } => {
+                let now = now_rfc3339();
+                match self.store.queue_add(&pr, &title, &now) {
+                    Ok(()) => self.emit_history(),
+                    Err(e) => self.emit(Event::Error {
+                        tab: None,
+                        message: format!("queue add: {e}"),
+                    }),
+                }
+            }
+            Command::QueueSetStatus { pr, status } => {
+                match self.store.queue_set_status(&pr, &status) {
+                    Ok(()) => self.emit_history(),
+                    Err(e) => self.emit(Event::Error {
+                        tab: None,
+                        message: format!("queue status: {e}"),
+                    }),
+                }
+            }
+            Command::QueueRemove { pr } => match self.store.queue_remove(&pr) {
+                Ok(()) => self.emit_history(),
+                Err(e) => self.emit(Event::Error {
+                    tab: None,
+                    message: format!("queue remove: {e}"),
+                }),
+            },
+            Command::QueueMove { pr, dir } => match self.store.queue_move(&pr, dir) {
+                Ok(()) => self.emit_history(),
+                Err(e) => self.emit(Event::Error {
+                    tab: None,
+                    message: format!("queue move: {e}"),
                 }),
             },
         }
@@ -435,9 +496,7 @@ impl Engine {
             // Refresh the sidebar now — history is recorded on OPEN (not close), so the
             // just-opened PR should appear immediately. The gh-meta thread below
             // re-emits once the real title resolves.
-            self.emit(Event::History {
-                entries: self.store.history(),
-            });
+            self.emit_history();
 
             // Working dir: either check out the PR branch in the found repo, or tell
             // the user we couldn't locate it (reviews won't have a repo otherwise).
@@ -496,8 +555,11 @@ impl Engine {
                             // Update the title only (no session change), then re-emit
                             // history so the sidebar entry shows the real PR title.
                             let _ = store.record_open(&pr, &meta.title, cli, None, &now);
+                            let (entries, favorites, queue) = history_payload(&store);
                             sink(Event::History {
-                                entries: store.history(),
+                                entries,
+                                favorites,
+                                queue,
                             });
                             sink(Event::PrMeta { tab, meta });
                         }
@@ -816,6 +878,24 @@ impl Engine {
         });
     }
 
+    /// List the tab repo's tracked files (`git ls-files` in its live cwd) for the diff
+    /// file-tree panel, on a worker thread. A non-repo / failure yields an empty list.
+    fn load_repo_tree(&mut self, tab: TabId) {
+        let cwd = self.tabs.get(&tab).and_then(|t| self.live_cwd(t));
+        let Some(cwd) = cwd else {
+            self.emit(Event::RepoTree {
+                tab,
+                files: Vec::new(),
+            });
+            return;
+        };
+        let sink = self.sink.clone();
+        std::thread::spawn(move || {
+            let files = git_ls_files(&cwd).unwrap_or_default();
+            sink(Event::RepoTree { tab, files });
+        });
+    }
+
     /// Run a comment-write mutation (`op`) on a worker thread, then re-fetch the PR's
     /// comments and emit a fresh `Event::Comments` so the UI reflects authoritative
     /// state. Shared by reactions, new comments, replies, and review submission.
@@ -857,6 +937,27 @@ impl Engine {
                 }),
             }
         });
+    }
+
+    /// Ask Claude a bite-size question off the main thread — spawn a forked headless
+    /// `claude -p` one-shot and stream its reply back as `Event::Insight`s (see `insight`).
+    /// Forks the tab's Claude session when it has one (so the answer carries the review's
+    /// context); otherwise runs a fresh one-shot in the tab's live cwd.
+    fn ask_insight(&mut self, tab: TabId, id: String, prompt: String) {
+        let (session_id, cwd) = match self.tabs.get(&tab) {
+            Some(t) => {
+                // Only fork an actual Claude session; other engines get a fresh one-shot.
+                let sid = if t.cli == CliKind::Claude {
+                    t.session_id.clone()
+                } else {
+                    None
+                };
+                (sid, self.live_cwd(t))
+            }
+            None => (None, None),
+        };
+        let sink = self.sink.clone();
+        std::thread::spawn(move || crate::insight::run(tab, id, prompt, session_id, cwd, sink));
     }
 
     /// Start streaming the tab's Claude session thinking to the brain panel. No-op if
@@ -923,6 +1024,48 @@ fn first_line(bytes: &[u8]) -> String {
         .find(|l| !l.trim().is_empty())
         .unwrap_or("")
         .to_string()
+}
+
+/// Tracked files (repo-relative paths) under `cwd`, via `git ls-files`. `None` when the
+/// dir isn't a git repo or git can't run. Resolves `git` against the login PATH so a
+/// Finder-launched app finds it.
+fn git_ls_files(cwd: &str) -> Option<Vec<String>> {
+    let path = crate::shellenv::login_path();
+    let git = crate::shellenv::resolve_program("git", path);
+    let out = std::process::Command::new(&git)
+        .args(["-C", cwd, "ls-files"])
+        .env("PATH", path)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+/// Build the `Event::History` payload: history records with each session's message count
+/// filled in (read from its transcript), the persisted favorites, and the review queue.
+/// Reads files, so run it off the engine lock (see `emit_history`).
+fn history_payload(
+    store: &Store,
+) -> (
+    Vec<crate::protocol::PrRecord>,
+    crate::protocol::Favorites,
+    crate::protocol::Queue,
+) {
+    let mut entries = store.history();
+    for r in &mut entries {
+        for s in &mut r.sessions {
+            s.messages = crate::brain::count_messages(&s.id);
+        }
+    }
+    (entries, store.favorites(), store.queue())
 }
 
 fn now_rfc3339() -> String {

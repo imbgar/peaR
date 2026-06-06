@@ -16,7 +16,7 @@ interface DHunk {
   header: string;
   lines: DLine[];
 }
-interface DFile {
+export interface DFile {
   path: string;
   oldPath: string | null;
   status: "added" | "deleted" | "renamed" | "modified";
@@ -138,6 +138,11 @@ let onDiffClose: (() => void) | null = null;
 export function setDiffCloseHandler(fn: () => void) {
   onDiffClose = fn;
 }
+let onApprove: (() => void) | null = null;
+/** Wire the diff toolbar's "Review" (approve / request changes) button. */
+export function setApproveHandler(fn: () => void) {
+  onApprove = fn;
+}
 
 function sortFiles(files: DFile[]): DFile[] {
   const by = (f: DFile) =>
@@ -175,7 +180,7 @@ function buildThreadList(container: HTMLElement, threads: ReviewThread[]): HTMLE
   title.textContent = `${threads.length} thread${threads.length > 1 ? "s" : ""}`;
   const close = document.createElement("button");
   close.type = "button";
-  close.className = "dtl-close";
+  close.className = "dtl-close close-x";
   close.textContent = "×";
   close.title = "Hide thread list";
   close.addEventListener("click", () => list.classList.add("hidden"));
@@ -244,8 +249,9 @@ function buildDiffToolbar(
     const cc = document.createElement("button");
     cc.type = "button";
     cc.className = "dt-threads";
-    cc.textContent = `${cmtCount} 💬`;
-    cc.title = "Show comment threads";
+    const nThreads = threads.length;
+    cc.textContent = `💬 See ${nThreads === 1 ? "Thread" : "Threads"} (${nThreads})`;
+    cc.title = "Show the inline comment threads";
     const list = buildThreadList(container, threads);
     cc.addEventListener("click", () => {
       const open = list.classList.toggle("hidden");
@@ -308,10 +314,20 @@ function buildDiffToolbar(
   bar.appendChild(mkToggle("+", "hide-add", "Show / hide added lines"));
   bar.appendChild(mkToggle("−", "hide-del", "Show / hide removed lines"));
 
+  if (onApprove) {
+    const review = document.createElement("button");
+    review.type = "button";
+    review.className = "dt-review";
+    review.textContent = "✓ Review";
+    review.title = "Review changes — Approve / Request changes / Comment";
+    review.addEventListener("click", () => onApprove?.());
+    bar.appendChild(review);
+  }
+
   if (onDiffClose) {
     const close = document.createElement("button");
     close.type = "button";
-    close.className = "dt-close";
+    close.className = "dt-close close-x";
     close.textContent = "×";
     close.title = "Close diff";
     close.addEventListener("click", () => onDiffClose?.());
@@ -378,6 +394,7 @@ export function renderDiff(
     card.dataset.order = String(parseOrder.get(f));
     card.dataset.adds = String(f.adds);
     card.dataset.dels = String(f.dels);
+    card.dataset.path = f.path; // lets the file-tree rail jump to this file's card
 
     const head = document.createElement("button");
     head.type = "button";
@@ -571,7 +588,7 @@ function askInsightGroup(c: Comment): HTMLElement {
     b.title = `Ask Claude: ${ins.label}`;
     b.addEventListener("click", (e) => {
       e.stopPropagation();
-      onAsk?.(ins.prompt(c));
+      onAsk?.(ins.prompt(c), `${ins.glyph} ${ins.label} — @${c.author}`);
     });
     g.appendChild(b);
   }
@@ -749,8 +766,10 @@ export interface NewComment {
 }
 type CreateFn = (c: NewComment) => void;
 type ReplyFn = (threadId: string, body: string) => void;
-type AskFn = (message: string) => void;
+type AskFn = (message: string, label: string) => void;
 type ResolveFn = (threadId: string, resolved: boolean) => void;
+/** Scope of the diff's file-tree rail (owned + rendered by main.ts). */
+export type TreeLevel = "diff" | "dir" | "repo";
 let onCreate: CreateFn | null = null;
 let onReply: ReplyFn | null = null;
 let onAsk: AskFn | null = null;
@@ -951,7 +970,7 @@ function openAskComposer() {
     const q = ta.value.trim() || "explain this section and flag anything risky";
     // Reference the file + lines (Claude reads them itself) rather than pasting code
     // into the interactive TUI.
-    onAsk!(`In \`${path}\` ${lineLabel}: ${q}`);
+    onAsk!(`In \`${path}\` ${lineLabel}: ${q}`, `✦ ${path} ${lineLabel}`);
     clearSelection();
   });
   actions.append(askBtn, cancel);

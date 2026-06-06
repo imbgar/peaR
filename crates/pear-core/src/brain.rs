@@ -37,6 +37,28 @@ fn transcript_for(session_id: &str) -> Option<PathBuf> {
     None
 }
 
+/// Count the user + assistant messages in a session's transcript — a cheap "how much
+/// happened here" number for the history view. Uses a substring check (not full JSON
+/// parse) per line for speed; returns 0 when there's no transcript.
+pub fn count_messages(session_id: &str) -> u64 {
+    let Some(path) = transcript_for(session_id) else {
+        return 0;
+    };
+    let Ok(file) = std::fs::File::open(path) else {
+        return 0;
+    };
+    let mut n = 0u64;
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+    while reader.read_line(&mut line).unwrap_or(0) > 0 {
+        if line.contains("\"type\":\"user\"") || line.contains("\"type\":\"assistant\"") {
+            n += 1;
+        }
+        line.clear();
+    }
+    n
+}
+
 /// One streamed thought: `(kind, label, detail)`. `detail` is the full content the UI
 /// reveals on click (the whole command / input); empty when there's nothing more to show.
 type Thought = (String, String, String);
