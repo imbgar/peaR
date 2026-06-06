@@ -626,7 +626,12 @@ button:disabled { opacity: 0.38; cursor: default; }
   font-size: 0.95em; padding: 0 3px; line-height: 1;
 }
 .insight-btn:hover { color: var(--accent); }
+.insight-btn.break:hover { color: var(--green); }
 .insight-btn.close:hover { color: var(--red); }
+.insight-btn:disabled { opacity: 0.28; cursor: default; pointer-events: none; }
+.modal-prose { max-width: 440px; line-height: 1.55; }
+.modal-prose p { margin: 0 0 10px; }
+.modal-prose p:last-child { margin-bottom: 0; }
 .insight-body {
   padding: 9px 12px; overflow-y: auto; overscroll-behavior: contain;
   font-size: 0.86em; line-height: 1.55; color: var(--tx);

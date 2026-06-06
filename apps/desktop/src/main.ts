@@ -757,6 +757,70 @@ function closeSkillsModal() {
   skillsModalEl.classList.add("hidden");
 }
 
+function escapeHtml(s: string): string {
+  const map: Record<string, string> = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  };
+  return s.replace(/[&<>"']/g, (ch) => map[ch]);
+}
+
+// A lightweight, dynamically-built confirm modal (reuses the .modal styling). `body` may
+// contain trusted inline markup (<b>/<code>); interpolate untrusted text via escapeHtml.
+interface ModalOpts {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+}
+function showModal(opts: ModalOpts) {
+  const overlay = document.createElement("div");
+  overlay.className = "modal";
+  overlay.innerHTML = `
+    <div class="modal-card">
+      <div class="modal-head">
+        <span class="modal-title"></span>
+        <button class="modal-x" title="Close (Esc)">×</button>
+      </div>
+      <div class="consent-body modal-prose"></div>
+      <div class="modal-foot">
+        <span class="toolbar-spacer"></span>
+        <button class="action subtle" data-act="cancel">Cancel</button>
+        <button class="primary" data-act="ok"></button>
+      </div>
+    </div>`;
+  overlay.querySelector(".modal-title")!.textContent = opts.title;
+  overlay.querySelector(".modal-prose")!.innerHTML = opts.body
+    .split("\n\n")
+    .map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`)
+    .join("");
+  const okBtn = overlay.querySelector<HTMLButtonElement>('[data-act="ok"]')!;
+  okBtn.textContent = opts.confirmLabel;
+
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === "Escape") close();
+  };
+  document.addEventListener("keydown", onKey);
+  overlay.querySelector(".modal-x")!.addEventListener("click", close);
+  overlay.querySelector('[data-act="cancel"]')!.addEventListener("click", close);
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+  okBtn.addEventListener("click", () => {
+    close();
+    opts.onConfirm();
+  });
+  document.body.appendChild(overlay);
+  okBtn.focus();
+}
+
 /** "Not now" — dismiss for this session; we won't re-prompt until next launch. */
 function dismissSkills() {
   skillsPrompted = true;
@@ -1164,12 +1228,18 @@ interface InsightCard {
   el: HTMLElement;
   body: HTMLElement;
   raw: string;
+  /** The PR this ask came from — break-out resumes the fork as a tab on the same PR. */
+  pr: PrRef | null;
+  label: string;
+  /** "↗ open as tab" button (enabled once the forked session id arrives on `done`). */
+  breakBtn: HTMLButtonElement;
 }
 const insightCards = new Map<string, InsightCard>();
 
 /** Create a streaming insight card and return its request id (sent with `ask_insight`). */
 function openInsight(label: string, prompt: string): string {
   const id = crypto.randomUUID();
+  const pr = (active !== null ? tabs.get(active)?.pr : null) ?? null;
   const card = document.createElement("div");
   card.className = "insight working";
 
@@ -1181,7 +1251,17 @@ function openInsight(label: string, prompt: string): string {
   const title = document.createElement("span");
   title.className = "insight-title";
   title.textContent = label;
-  title.title = prompt;
+  title.title = `${prompt}\n\n(forked side-conversation — won't touch your terminal session)`;
+
+  // ↗ promote this forked one-shot into a live tab (resumes the exact branch). Disabled
+  // until `done` delivers the forked session id; absent for non-PR asks (can't resume).
+  const breakBtn = document.createElement("button");
+  breakBtn.type = "button";
+  breakBtn.className = "insight-btn break";
+  breakBtn.textContent = "↗";
+  breakBtn.title = "Open this forked chat as a tab";
+  breakBtn.disabled = true;
+
   const copy = document.createElement("button");
   copy.type = "button";
   copy.className = "insight-btn";
@@ -1203,7 +1283,7 @@ function openInsight(label: string, prompt: string): string {
     card.remove();
     insightCards.delete(id);
   });
-  head.append(spinner, title, copy, close);
+  head.append(spinner, title, breakBtn, copy, close);
 
   const body = document.createElement("div");
   body.className = "insight-body markdown";
@@ -1211,7 +1291,7 @@ function openInsight(label: string, prompt: string): string {
 
   card.append(head, body);
   $("#insight-stack").appendChild(card);
-  insightCards.set(id, { el: card, body, raw: "" });
+  insightCards.set(id, { el: card, body, raw: "", pr, label, breakBtn });
   return id;
 }
 
@@ -1227,6 +1307,14 @@ function updateInsight(id: string, kind: string, text: string) {
   } else if (kind === "done") {
     c.el.classList.remove("working");
     if (!c.raw.trim()) c.body.innerHTML = `<div class="insight-wait">no answer.</div>`;
+    // `text` carries the forked session id — enable "open as tab" (PR asks only; the
+    // engine resumes Claude sessions on PR tabs).
+    const sid = text.trim();
+    if (sid && c.pr) {
+      const pr = c.pr;
+      c.breakBtn.disabled = false;
+      c.breakBtn.addEventListener("click", () => confirmForkOut(pr, sid, c.label, id));
+    }
   } else if (kind === "error") {
     c.el.classList.remove("working");
     c.el.classList.add("errored");
@@ -1236,6 +1324,28 @@ function updateInsight(id: string, kind: string, text: string) {
     if (!c.raw.trim()) c.body.innerHTML = "";
     c.body.appendChild(err);
   }
+}
+
+/** Informative confirm before promoting a forked insight into a live, resumable tab. */
+function confirmForkOut(pr: PrRef, sessionId: string, label: string, cardId: string) {
+  showModal({
+    title: "Open forked chat as a tab",
+    body:
+      `This answer came from a <b>forked side-conversation</b> — a throwaway branch of this ` +
+      `tab's Claude session that inherited the review's context but never touched it.\n\n` +
+      `Opening it as a tab <b>resumes that exact branch</b> as a live, interactive session on ` +
+      `<b>${escapeHtml(shortLabel(pr))}</b>, so you can keep going. Your original review ` +
+      `conversation stays exactly where it was.`,
+    confirmLabel: "↗ Open as tab",
+    onConfirm: () => {
+      openPr(pr, "claude", { session_id: sessionId });
+      setStatus(`opening forked chat — ${label}`);
+      // Dismiss the card; the conversation continues in the new tab.
+      const c = insightCards.get(cardId);
+      c?.el.remove();
+      insightCards.delete(cardId);
+    },
+  });
 }
 
 function renderPanel(p: PanelPayload) {

@@ -28,6 +28,10 @@ struct Run {
     emitted: bool,
     /// `Some(msg)` if the process failed (spawn error / non-zero exit / reported error).
     error: Option<String>,
+    /// The session id this one-shot ran under — the *forked* branch id (or the fresh
+    /// one-shot's id on the fallback path). Lets the frontend later promote the card to a
+    /// live tab by resuming this exact conversation.
+    session: Option<String>,
 }
 
 /// Run an `AskInsight`: stream a forked (or fresh) `claude -p` reply for `tab`/`id`.
@@ -61,6 +65,7 @@ pub fn run(
         Run {
             emitted: false,
             error: Some(msg),
+            ..
         } => sink(Event::Insight {
             tab,
             id,
@@ -68,11 +73,13 @@ pub fn run(
             text: msg,
         }),
         // Emitted something (even if it later errored) or finished cleanly: close the card.
-        _ => sink(Event::Insight {
+        // The `done` event carries the forked session id in `text` (empty if none), so the
+        // frontend can offer to open this side-conversation as a live tab.
+        Run { session, .. } => sink(Event::Insight {
             tab,
             id,
             kind: "done".into(),
-            text: String::new(),
+            text: session.unwrap_or_default(),
         }),
     }
 }
@@ -116,6 +123,7 @@ fn run_once(
             return Run {
                 emitted: false,
                 error: Some(format!("couldn't launch claude: {e}")),
+                session: None,
             }
         }
     };
@@ -135,6 +143,7 @@ fn run_once(
 
     let mut emitted = false;
     let mut reported_error: Option<String> = None;
+    let mut session: Option<String> = None;
     if let Some(out) = child.stdout.take() {
         let reader = BufReader::new(out);
         for line in reader.lines().map_while(std::result::Result::ok) {
@@ -144,6 +153,8 @@ fn run_once(
             }
             for piece in parse_line(line) {
                 match piece {
+                    // Every line carries the run's (forked) session id; last-seen wins.
+                    Piece::Session(s) => session = Some(s),
                     Piece::Text(t) => {
                         if !t.is_empty() {
                             emitted = true;
@@ -191,11 +202,17 @@ fn run_once(
         }
     });
 
-    Run { emitted, error }
+    Run {
+        emitted,
+        error,
+        session,
+    }
 }
 
 /// A meaningful piece pulled from one stream-json line.
 enum Piece {
+    /// The run's session id (the forked branch's id).
+    Session(String),
     /// Streamed assistant answer text.
     Text(String),
     /// The terminal `result` text — a fallback used only if no `Text` was streamed.
@@ -212,6 +229,9 @@ fn parse_line(line: &str) -> Vec<Piece> {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
         return out;
     };
+    if let Some(s) = v.get("session_id").and_then(|s| s.as_str()) {
+        out.push(Piece::Session(s.to_string()));
+    }
     match v.get("type").and_then(|t| t.as_str()) {
         Some("assistant") => {
             let blocks = v
