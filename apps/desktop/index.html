@@ -63,7 +63,6 @@
         </div>
         <input type="text" id="hist-search" class="hist-search" placeholder="search · repo:x org:y pr:123" autocomplete="off" spellcheck="false" />
         <ul id="history"></ul>
-        <div id="hist-ctx" class="hist-ctx hidden"></div>
       </aside>
 
       <section id="workspace">
@@ -178,5 +177,9 @@
         </div>
       </div>
     </div>
+
+    <!-- History right-click menu / add popover — lives at the body root (not inside the
+         sidebar, which is a transformed containing block that would clip it). -->
+    <div id="hist-ctx" class="hist-ctx hidden"></div>
   </body>
 </html>
