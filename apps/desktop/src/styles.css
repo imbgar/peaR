@@ -806,7 +806,7 @@ button:disabled { opacity: 0.38; cursor: default; }
   font-size: 15px; padding: 0 5px; line-height: 1;
 }
 .panel-head-actions button:hover:not(:disabled) { color: var(--accent); }
-.panel-body { flex: 1; overflow: auto; overscroll-behavior: contain; padding: 14px 16px; min-height: 0; }
+.panel-body { flex: 1; overflow: auto; overscroll-behavior: contain; padding: 14px 16px; min-height: 0; min-width: 0; }
 .panel-empty { color: var(--faint); font-size: 12px; line-height: 1.65; }
 .panel-empty b { color: var(--dim); font-weight: 600; }
 
@@ -867,12 +867,12 @@ button:disabled { opacity: 0.38; cursor: default; }
   object-fit: cover; background: var(--inp); border: 1px solid var(--bd2);
 }
 /* per-comment ask-Claude insight buttons (subtle until you hover the comment) */
-.cv-ask { margin-left: auto; display: inline-flex; gap: 3px; opacity: 0.32; transition: opacity 0.12s var(--ease); }
+.cv-ask { margin-left: auto; display: inline-flex; gap: 3px; opacity: 0.75; transition: opacity 0.12s var(--ease); }
 .cv-cmt:hover .cv-ask, .cv-ask:hover { opacity: 1; }
 .cv-ask-btn {
-  font-size: 11px; line-height: 1; cursor: pointer; padding: 2px 5px;
-  background: transparent; border: 1px solid var(--bd2); border-radius: var(--r-sm);
-  color: var(--faint);
+  font-size: 11px; line-height: 1; cursor: pointer; padding: 2px 6px; color: var(--dim);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent); border-radius: var(--r-sm);
 }
 .cv-ask-btn:hover { color: var(--accent); border-color: var(--accent-d); box-shadow: var(--glow); }
 /* Floating author header: each conversation comment's header sticks to the top of
@@ -997,7 +997,7 @@ button:disabled { opacity: 0.38; cursor: default; }
 .panel-body.diff-mode { padding: 0; }
 
 /* The diff view is its own surface — drop the redundant "Diff — <pr>" panel header. */
-#panel:has(> .panel-body.diff-mode) .panel-head { display: none; }
+#panel:has(.panel-body.diff-mode) .panel-head { display: none; }
 
 /* diff toolbar (replaces the old summary header): stats · collapse · sort · ± · × */
 .diff-toolbar {
@@ -1025,19 +1025,85 @@ button:disabled { opacity: 0.38; cursor: default; }
 .dt-toggle.add.on { color: var(--green); border-color: color-mix(in srgb, var(--green) 55%, transparent); }
 .dt-toggle.del.on { color: var(--red); border-color: color-mix(in srgb, var(--red) 55%, transparent); }
 .dt-toggle:not(.on) { opacity: 0.5; text-decoration: line-through; }
-.dt-close { font-size: 15px; padding: 1px 7px; }
+.dt-close {
+  font-size: 15px; padding: 1px 8px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
+}
+.dt-close:hover { color: var(--red); border-color: color-mix(in srgb, var(--red) 50%, transparent); }
 
 /* show/hide added or removed lines (container = #panel-body) */
 #panel-body.hide-add .diff-row.r-add { display: none; }
 #panel-body.hide-del .diff-row.r-del { display: none; }
 
+/* ── diff file-tree rail ──────────────────────────────────────────────────────
+   A GitHub-style file tree to the LEFT of the diff. The panel-head/review-bar stay as
+   full-width rows; the tree + body share a flex row below them (.panel-split). */
+.panel-split { flex: 1; min-height: 0; display: flex; }
+#diff-tree {
+  flex: none; width: var(--dtree-w, 232px); min-width: 150px;
+  display: flex; flex-direction: column; min-height: 0;
+  background: color-mix(in srgb, var(--panel) 60%, var(--bg));
+  border-right: 1px solid var(--bd); font-family: var(--font-mono); font-size: 11.5px;
+}
+#diff-tree.hidden { display: none; }
+.dtree-head {
+  display: flex; align-items: center; gap: 8px; padding: 7px 9px;
+  border-bottom: 1px solid var(--bd); background: var(--panel);
+}
+.dtree-scope {
+  flex: 1; min-width: 0; color: var(--dim); font-size: 10.5px; text-align: left;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* ◂ widen / ▸ narrow drilldown + × close — dull-yellow chips so they're easy to spot */
+.dtree-step, #dtree-close {
+  color: var(--dim); cursor: pointer; font-size: 12px; line-height: 1;
+  padding: 2px 6px; border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+}
+.dtree-step:hover:not(:disabled) { color: var(--accent); border-color: var(--accent-d); background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.dtree-step:disabled { opacity: 0.3; cursor: default; }
+#dtree-close:hover { color: var(--red); border-color: color-mix(in srgb, var(--red) 50%, transparent); }
+.dtree-body { flex: 1; overflow: auto; overscroll-behavior: contain; padding: 6px 4px 12px; }
+.dtree-empty { color: var(--faint); font-style: italic; padding: 10px; }
+.dtree-list, .dtree-folder { display: flex; flex-direction: column; }
+.dtree-dir, .dtree-file {
+  display: flex; align-items: center; gap: 5px; width: 100%; text-align: left; font: inherit;
+  background: transparent; border: none; color: var(--dim); cursor: pointer;
+  padding: 3px 6px; border-radius: var(--r-sm);
+}
+.dtree-dir:hover { color: var(--tx); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.dtree-chev { color: var(--faint); font-size: 9px; width: 9px; flex: none; transition: transform 120ms var(--ease); }
+.dtree-dir.collapsed .dtree-chev { transform: rotate(-90deg); }
+.dtree-name { overflow: hidden; text-overflow: ellipsis; }
+.dtree-children { padding-left: 9px; margin-left: 8px; border-left: 1px solid var(--bd); }
+.dtree-children.collapsed { display: none; }
+.dtree-file::before { content: "•"; color: var(--faint); font-size: 9px; width: 8px; flex: none; text-align: center; }
+.dtree-fname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dtree-fstat { flex: none; display: flex; align-items: center; gap: 6px; font-size: 10px; }
+.dtree-fc { color: var(--dim); }
+.dtree-fa { color: var(--green); }
+.dtree-fd { color: var(--red); }
+.dtree-file.changed { color: var(--tx); }
+.dtree-file.changed::before { content: "◆"; color: var(--accent); }
+.dtree-file.changed:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.dtree-file.plain { color: var(--faint); cursor: default; }
+.dtree-file.plain:disabled { opacity: 0.7; }
+.diff-file.dtree-jump { animation: dtree-flash 1.1s var(--ease); }
+@keyframes dtree-flash {
+  0% { box-shadow: inset 3px 0 0 var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  100% { box-shadow: inset 3px 0 0 transparent; background: transparent; }
+}
+
 /* comment-count toggle + the pinned thread navigator */
 .dt-threads {
-  font-family: var(--font-mono); font-size: 11px; cursor: pointer;
-  background: var(--inp); border: 1px solid var(--bd2); color: var(--blue);
-  border-radius: var(--r-sm); padding: 4px 8px;
+  font-family: var(--font-mono); font-size: 11px; cursor: pointer; color: var(--dim);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+  border-radius: var(--r-sm); padding: 4px 9px;
 }
-.dt-threads:hover { border-color: var(--accent-d); }
+.dt-threads:hover { color: var(--accent); border-color: var(--accent-d); }
 .dt-threads.on { border-color: var(--accent); color: var(--accent); box-shadow: var(--glow); }
 .diff-thread-list {
   position: absolute; top: calc(100% + 2px); right: 8px; z-index: 12;

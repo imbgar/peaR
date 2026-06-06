@@ -409,6 +409,10 @@ pub enum Command {
         id: String,
         prompt: String,
     },
+    /// List the tab's repository's tracked files (`git ls-files` in its live cwd) for the
+    /// diff's file-tree panel — the "whole repo" / contextual scopes beyond the diff's own
+    /// files. Replied via `Event::RepoTree`.
+    LoadRepoTree { tab: TabId },
     /// Start streaming the tab's Claude session *thinking* to the brain panel
     /// (replied via `Event::Thought`s). No-op for non-Claude / session-less tabs.
     WatchBrain { tab: TabId },
@@ -461,6 +465,9 @@ pub enum Event {
     /// The tab's PR conversation comments + inline review threads (reply to
     /// `LoadComments`).
     Comments { tab: TabId, comments: PrComments },
+    /// The tab repo's tracked files (repo-relative paths) for the diff file-tree panel
+    /// (reply to `LoadRepoTree`). Empty when the cwd isn't a git repo.
+    RepoTree { tab: TabId, files: Vec<String> },
     /// One streamed item from the tab's Claude transcript for the brain panel.
     /// `kind` is `thinking` | `action` | `note`; `detail` is the full content revealed
     /// on click (e.g. a tool's whole command/input), empty when there's nothing more.

@@ -143,6 +143,7 @@ export type Command =
   | { type: "reply_review_thread"; tab: number; thread_id: string; body: string }
   | { type: "resolve_thread"; tab: number; thread_id: string; resolved: boolean }
   | { type: "ask_insight"; tab: number; id: string; prompt: string }
+  | { type: "load_repo_tree"; tab: number }
   | { type: "watch_brain"; tab: number }
   | { type: "stop_brain"; tab: number }
   | { type: "save_layout"; active?: number | null }
@@ -158,6 +159,7 @@ export type Event =
   | { type: "panel"; tab: number; payload: PanelPayload }
   | { type: "diff"; tab: number; diff: string; comments: DiffComment[] }
   | { type: "comments"; tab: number; comments: PrComments }
+  | { type: "repo_tree"; tab: number; files: string[] }
   | { type: "thought"; tab: number; kind: string; text: string; detail: string }
   | { type: "insight"; tab: number; id: string; kind: string; text: string }
   | { type: "history"; entries: PrRecord[] }

@@ -71,6 +71,7 @@
           <span class="toolbar-div"></span>
           <button data-btn="copy_content" data-icon="copy" data-needs-tab class="action" title="Copy the terminal content to the clipboard"><span class="lbl">Copy</span></button>
           <button id="comments-btn" data-icon="comments" data-needs-tab class="action" title="Show this PR's conversation comments"><span class="lbl">Comments</span></button>
+          <button id="files-btn" data-icon="tree" data-needs-tab class="action" title="Show the file tree beside the diff"><span class="lbl">Files</span></button>
           <button id="diff-btn" data-icon="diff" data-needs-tab class="action" title="Show this PR's diff + review comments"><span class="lbl">Diff</span></button>
           <button data-btn="save_review" data-icon="save" data-needs-tab class="action" title="Save the full review to a markdown file"><span class="lbl">Save</span></button>
           <span class="toolbar-spacer"></span>
@@ -103,10 +104,21 @@
               </div>
             </div>
             <div id="review-bar" hidden></div>
-            <div class="panel-body" id="panel-body">
-              <div class="panel-empty">
-                Nothing here yet. Run a review, <b>Save review</b>, then hit ⟳ to render it —
-                or wire the live bus (see roadmap) so the agent can push diffs &amp; notes here.
+            <div class="panel-split">
+              <aside id="diff-tree" class="hidden" aria-label="Diff file tree">
+                <div class="dtree-head">
+                  <span class="dtree-scope" id="dtree-scope"></span>
+                  <button id="dtree-wider" class="dtree-step" title="Widen scope">◂</button>
+                  <button id="dtree-narrower" class="dtree-step" title="Narrow scope">▸</button>
+                  <button id="dtree-close" title="Hide file tree">×</button>
+                </div>
+                <div class="dtree-body" id="dtree-body"></div>
+              </aside>
+              <div class="panel-body" id="panel-body">
+                <div class="panel-empty">
+                  Nothing here yet. Run a review, <b>Save review</b>, then hit ⟳ to render it —
+                  or wire the live bus (see roadmap) so the agent can push diffs &amp; notes here.
+                </div>
               </div>
             </div>
           </aside>
