@@ -953,10 +953,14 @@ function openHistCtx(x: number, y: number, items: CtxItem[]) {
     b.type = "button";
     b.className = "hist-ctx-item" + (it.danger ? " danger" : "");
     b.textContent = it.label;
-    b.onclick = () => {
+    // stopPropagation so this click doesn't reach the document close-handler — important for
+    // two-step menus (split → quick-launch) that rebuild #hist-ctx in place: the handler would
+    // otherwise see the now-detached button as "outside" and close the freshly-opened menu.
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
       closeHistCtx();
       it.on();
-    };
+    });
     ctx.appendChild(b);
   }
   ctx.classList.remove("hidden");
