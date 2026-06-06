@@ -575,21 +575,43 @@ button:disabled { opacity: 0.38; cursor: default; }
 [data-theme="phosphor"] .action.tier::before { content: "("; color: var(--accent-d); }
 [data-theme="phosphor"] .action.tier::after { content: ")"; color: var(--accent-d); }
 
-/* ── stage: terminals + panel ──────────────────────────────────────────── */
+/* ── stage: terminals | conversation | diff ────────────────────────────────
+   Five tracks: terminals (flex) | comments-resizer | comments | diff-resizer |
+   diff. Each panel is an independent toggle, composed via per-track CSS vars so
+   any combination (comments only, diff only, both) lays out correctly. */
 #stage {
   display: grid;
-  grid-template-columns: 1fr 0 0;
+  --cres: 0px; --cw: 0px; --dres: 0px; --dw: 0px;
+  /* Panels keep their (freely resizable) width; the terminal flexes with a floor so
+     it never collapses to a 1-char vertical sliver. The resizers are terminal-aware
+     (see main.ts) so dragging can't crush past the floor either. */
+  grid-template-columns:
+    minmax(140px, 1fr)
+    var(--cres) var(--cw)
+    var(--dres) var(--dw);
   min-height: 0;
   min-width: 0;
   transition: grid-template-columns 0.18s var(--ease);
 }
-#stage.panel-open { grid-template-columns: 1fr 5px var(--panel-w, 420px); }
-/* While dragging the resizer, drop the transition so it tracks the pointer 1:1. */
+#stage.comments-open { --cres: 5px; --cw: var(--comments-w, 340px); }
+#stage.panel-open { --dres: 5px; --dw: var(--panel-w, 420px); }
+/* Pin each child to its column. Essential: when a panel is closed its resizer +
+   panel are display:none, so auto-placement would otherwise shift the *other*
+   visible panel into the wrong (0px) track — making it vanish. */
+#terminals { grid-column: 1; }
+#comments-resizer { grid-column: 2; }
+#comments-panel { grid-column: 3; }
+#panel-resizer { grid-column: 4; }
+#panel { grid-column: 5; }
+/* While dragging a resizer, drop the transition so it tracks the pointer 1:1. */
 #stage.resizing { transition: none; }
 
-#panel-resizer { background: transparent; cursor: col-resize; }
-#panel-resizer:hover, #stage.resizing #panel-resizer { background: var(--accent-d); }
+#panel-resizer, #comments-resizer { background: transparent; cursor: col-resize; }
+#panel-resizer:hover, #comments-resizer:hover,
+#stage.resizing #panel-resizer, #stage.resizing #comments-resizer { background: var(--accent-d); }
 #stage:not(.panel-open) #panel-resizer { display: none; }
+#stage:not(.comments-open) #comments-resizer,
+#stage:not(.comments-open) #comments-panel { display: none; }
 
 #terminals { position: relative; min-height: 0; min-width: 0; background: var(--term-bg); }
 .terminal-host { position: absolute; inset: 0; padding: 8px 10px; }
@@ -641,6 +663,140 @@ button:disabled { opacity: 0.38; cursor: default; }
 .panel-diff .d-del { color: var(--red); }
 .panel-diff .d-hunk { color: var(--blue); }
 
+/* ── PR conversation panel (splits left of the diff) ───────────────────────── */
+#comments-panel {
+  border-left: 1px solid var(--bd);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+/* No top padding: the sticky author headers pin flush to the top (otherwise scrolled
+   body text bleeds through the padding band above the stuck header). */
+#comments-body { padding-top: 0; }
+#comments-body > .cv-card:first-child { margin-top: 12px; }
+.cv-count {
+  font-family: var(--font-mono); font-size: 11px; color: var(--dim);
+  border: 1px solid var(--bd2); border-radius: 999px; padding: 0 7px;
+}
+.cv-card {
+  border: 1px solid var(--bd); border-radius: var(--r); margin-bottom: 10px;
+  padding: 8px 10px; background: var(--elev);
+}
+/* one comment (shared: conversation cards + inline diff threads) */
+.cv-cmt { padding: 0; }
+.cv-top { display: flex; align-items: baseline; gap: 7px; margin-bottom: 3px; }
+/* Floating author header: each conversation comment's header sticks to the top of
+   the panel while its comment is on screen, until the next comment pushes it up. The
+   negative margins let the opaque bar span the full card width. */
+#comments-body .cv-card .cv-top {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--elev); border-bottom: 1px solid var(--bd);
+  margin: -8px -10px 6px; padding: 7px 10px;
+}
+.cv-who { font-weight: 600; font-size: 12px; color: var(--tx); }
+.cv-who.me { color: var(--accent); text-shadow: var(--glow); }
+.cv-when { font-size: 10px; color: var(--faint); font-family: var(--font-mono); }
+/* PR review summary state badge (approved / requested changes / …) */
+.cv-review-state {
+  font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.8px;
+  border: 1px solid var(--bd2); border-radius: 999px; padding: 1px 7px; color: var(--dim);
+}
+.cv-review-state.ok { color: var(--green); border-color: color-mix(in srgb, var(--green) 55%, transparent); }
+.cv-review-state.warn { color: #e8b84b; border-color: #7a5f1e; }
+.cv-review-state.dim { color: var(--faint); }
+.cv-body { font-size: 12px; color: var(--dim); line-height: 1.5; word-break: break-word; }
+/* rendered markdown inside a comment body — tight, comment-appropriate spacing */
+.cv-body.markdown > :first-child { margin-top: 0; }
+.cv-body.markdown > :last-child { margin-bottom: 0; }
+.cv-body.markdown p { margin: 0 0 6px; }
+.cv-body.markdown h1, .cv-body.markdown h2, .cv-body.markdown h3,
+.cv-body.markdown h4 { color: var(--tx); margin: 10px 0 5px; line-height: 1.3; font-size: 12.5px; }
+.cv-body.markdown a { color: var(--blue); }
+.cv-body.markdown code {
+  font-family: var(--font-mono); font-size: 11px;
+  background: var(--inp); padding: 1px 4px; border-radius: 4px;
+}
+.cv-body.markdown pre {
+  background: var(--inp); border: 1px solid var(--bd); border-radius: var(--r-sm);
+  padding: 8px 10px; overflow: auto; margin: 6px 0;
+}
+.cv-body.markdown pre code { background: none; padding: 0; font-size: 11px; }
+.cv-body.markdown ul, .cv-body.markdown ol { padding-left: 18px; margin: 4px 0 6px; }
+.cv-body.markdown li { margin: 1px 0; }
+.cv-body.markdown blockquote {
+  border-left: 2px solid var(--bd2); margin: 6px 0; padding-left: 9px; color: var(--faint);
+}
+.cv-body.markdown img { max-width: 100%; border-radius: var(--r-sm); }
+.cv-body.markdown hr { border: none; border-top: 1px solid var(--bd); margin: 8px 0; }
+/* Tables scroll horizontally rather than crushing (a 3-col table in a ~340px panel
+   would otherwise hard-break every word). display:block + width:max-content makes the
+   table its natural width and the block scrolls when that exceeds the panel. */
+.cv-body.markdown table {
+  border-collapse: collapse; margin: 6px 0;
+  display: block; width: max-content; max-width: 100%; overflow-x: auto;
+}
+.cv-body.markdown th, .cv-body.markdown td {
+  border: 1px solid var(--bd); padding: 3px 8px;
+  word-break: normal; overflow-wrap: normal; white-space: nowrap;
+}
+.cv-body.markdown input[type="checkbox"] { margin-right: 5px; vertical-align: middle; }
+.cv-react { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.cv-pill {
+  font-family: var(--font-mono); font-size: 11px; color: var(--dim);
+  border: 1px solid var(--bd2); border-radius: 999px; padding: 1px 7px;
+  background: transparent; cursor: pointer; line-height: 1.5;
+}
+.cv-pill:hover { border-color: var(--accent-d); color: var(--tx); }
+.cv-pill.me { border-color: var(--accent-d); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+/* add-reaction "+" + its emoji picker popover */
+.cv-react-add { position: relative; display: inline-flex; }
+.cv-addreact {
+  font-family: var(--font-mono); font-size: 12px; line-height: 1; color: var(--faint);
+  border: 1px solid var(--bd2); border-radius: 999px; padding: 1px 6px;
+  background: transparent; cursor: pointer;
+}
+.cv-addreact:hover { color: var(--accent); border-color: var(--accent-d); }
+.cv-picker {
+  position: absolute; bottom: calc(100% + 5px); left: 0; z-index: 20;
+  display: flex; gap: 1px; padding: 4px;
+  background: var(--elev); border: 1px solid var(--bd2); border-radius: var(--r-sm);
+  box-shadow: 0 8px 24px -10px rgba(0, 0, 0, 0.7);
+}
+.cv-picker.hidden { display: none; }
+.cv-pick {
+  font-size: 15px; line-height: 1; padding: 3px 4px; border-radius: 5px;
+  background: transparent; border: none; cursor: pointer;
+}
+.cv-pick:hover { background: var(--inp); transform: scale(1.18); }
+.cv-pick.me { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+
+/* inline review thread inside the diff (toggled by the 💬 bubble on the line) */
+.diff-bubble {
+  display: inline-flex; align-items: center; gap: 3px; margin-left: 8px;
+  font-family: var(--font-mono); font-size: 10px; color: var(--accent);
+  border: 1px solid var(--accent-d); border-radius: 999px; padding: 0 7px;
+  cursor: pointer; vertical-align: middle; background: transparent;
+}
+.diff-bubble:hover { box-shadow: var(--glow); }
+.diff-bubble.resolved { color: var(--green); border-color: var(--green); }
+.diff-row.has-cmt { border-left: 2px solid var(--accent); }
+.diff-thread {
+  background: var(--panel); border-top: 1px solid var(--bd); border-bottom: 1px solid var(--bd);
+  padding: 7px 12px 9px 42px; font-family: var(--font-ui);
+}
+.diff-thread.hidden { display: none; }
+.diff-thread.resolved { opacity: 0.66; }
+.diff-thread .cv-cmt { padding: 5px 0; border-top: 1px solid var(--bd); }
+.diff-thread .cv-cmt:first-of-type { border-top: none; }
+.dt-state {
+  font-family: var(--font-mono); font-size: 9.5px; text-transform: uppercase;
+  letter-spacing: 1px; color: var(--green); margin-bottom: 2px;
+}
+
 /* ── PR diff panel ─────────────────────────────────────────────────────────── */
 .panel-body.diff-mode { padding: 0; }
 .diff-summary {
@@ -664,7 +820,6 @@ button:disabled { opacity: 0.38; cursor: default; }
   padding: 8px 11px; background: var(--elev); border: none;
   border-bottom: 1px solid var(--bd); cursor: pointer; text-align: left;
   font-family: var(--font-mono); font-size: 11.5px; color: var(--tx);
-  position: sticky; top: 36px; z-index: 2;
 }
 .diff-file-head:hover { background: var(--inp); }
 .diff-chev { color: var(--faint); transition: transform 0.15s var(--ease); font-size: 10px; flex: none; }
@@ -793,3 +948,87 @@ button:disabled { opacity: 0.38; cursor: default; }
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background: var(--bd2); border-radius: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ── inline comment creation (line select → bubble → composer) ──────────────── */
+.diff-body { position: relative; }
+.diff-body.selecting { user-select: none; cursor: row-resize; }
+.diff-gutter { cursor: pointer; }
+.diff-row.sel { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.diff-row.sel .diff-gutter { color: var(--accent); }
+
+/* floating action group (💬 comment · ✦ ask Claude) at the left of the first line */
+.diff-actions {
+  position: absolute; left: 2px; z-index: 5;
+  display: inline-flex; flex-direction: column; gap: 2px;
+}
+.diff-act {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 20px; padding: 0; font-size: 11px; line-height: 1;
+  background: var(--accent); color: var(--on-accent); border: none;
+  border-radius: 5px; cursor: pointer; box-shadow: var(--glow);
+}
+.diff-act:hover { filter: brightness(1.1); }
+.diff-act.ask { background: var(--blue); }
+
+/* the composer inserted under the selected range */
+.diff-composer {
+  background: var(--panel); border-top: 1px solid var(--accent-d);
+  border-bottom: 1px solid var(--accent-d); padding: 9px 12px 10px 42px;
+  font-family: var(--font-ui);
+}
+.diff-composer .dc-head, .dt-reply + * .dc-head {
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.8px; color: var(--dim); margin-bottom: 6px;
+}
+.diff-composer textarea, .dt-reply textarea {
+  width: 100%; box-sizing: border-box; resize: vertical;
+  background: var(--inp); border: 1px solid var(--bd2); color: var(--tx);
+  border-radius: var(--r-sm); padding: 7px 9px;
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.5;
+}
+.diff-composer textarea:focus, .dt-reply textarea:focus {
+  outline: none; border-color: var(--accent-d);
+}
+.dc-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+.dc-btn {
+  font-family: var(--font-ui); font-size: 11px; cursor: pointer;
+  border: 1px solid var(--bd2); background: var(--inp); color: var(--tx);
+  border-radius: var(--r-sm); padding: 5px 11px;
+}
+.dc-btn:hover:not(:disabled) { border-color: var(--accent-d); }
+.dc-btn:disabled { opacity: 0.5; cursor: default; }
+.dc-btn.primary {
+  background: var(--accent); color: var(--on-accent); border-color: transparent;
+  font-weight: 600; box-shadow: var(--glow);
+}
+.dc-btn.ok { color: var(--green); border-color: color-mix(in srgb, var(--green) 55%, transparent); }
+.dc-btn.warn { color: #e8b84b; border-color: #7a5f1e; }
+.dc-btn.ghost { background: transparent; color: var(--dim); }
+
+/* reply box inside an existing inline thread */
+.dt-reply { display: flex; gap: 7px; align-items: flex-start; margin-top: 8px; }
+.dt-reply textarea { flex: 1; min-height: 30px; }
+.dt-reply .dc-btn { flex: none; }
+
+/* ── pending-review bar (above the diff) ───────────────────────────────────── */
+#review-bar { border-bottom: 1px solid var(--bd); background: var(--elev); }
+#review-bar[hidden] { display: none; }
+.rb-row { display: flex; align-items: center; gap: 8px; padding: 7px 12px; }
+.rb-dot { width: 8px; height: 8px; border-radius: 50%; background: #e8b84b; box-shadow: 0 0 8px #e8b84b88; flex: none; }
+.rb-label { font-family: var(--font-mono); font-size: 11px; color: var(--dim); }
+.rb-spacer { flex: 1; }
+.rb-finish {
+  font-family: var(--font-ui); font-size: 11px; cursor: pointer;
+  background: var(--inp); border: 1px solid var(--accent-d); color: var(--accent);
+  border-radius: var(--r-sm); padding: 4px 10px;
+}
+.rb-finish:hover { box-shadow: var(--glow); }
+.rb-menu { padding: 0 12px 10px; }
+.rb-menu.hidden { display: none; }
+.rb-menu textarea {
+  width: 100%; box-sizing: border-box; resize: vertical;
+  background: var(--inp); border: 1px solid var(--bd2); color: var(--tx);
+  border-radius: var(--r-sm); padding: 6px 9px;
+  font-family: var(--font-mono); font-size: 11.5px;
+}
+.rb-actions { display: flex; gap: 7px; margin-top: 7px; }

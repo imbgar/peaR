@@ -12,13 +12,23 @@ import "@fontsource/ibm-plex-mono/700.css";
 import "@fontsource-variable/hanken-grotesk";
 import "@fontsource-variable/jetbrains-mono";
 import { marked } from "marked";
-import { renderDiff } from "./diff";
+import {
+  renderDiff,
+  commentEl,
+  setReactionHandler,
+  setCreateHandler,
+  setReplyHandler,
+  setAskHandler,
+  setPendingReview,
+} from "./diff";
 import {
   Command,
   Event as CoreEvent,
   CliKind,
+  Comment,
   DiffComment,
   PanelPayload,
+  PrComments,
   PrMeta,
   PrRecord,
   PrRef,
@@ -90,6 +100,7 @@ const TOOLBAR_ICONS: Record<string, string> = {
   explain: `<circle cx="8" cy="8" r="5.3"/><path d="M8 10.6V7.4"/><path d="M8 5.1h0"/>`,
   video: `<circle cx="8" cy="8" r="5.3"/><path d="M6.8 5.9v4.2l3.4-2.1z"/>`,
   copy: `<rect x="5.2" y="5.2" width="7.3" height="7.3" rx="1.2"/><path d="M3.5 10.8V4.5a1.3 1.3 0 011.3-1.3H10.8"/>`,
+  comments: `<path d="M2.8 4.2a1.2 1.2 0 011.2-1.2h8a1.2 1.2 0 011.2 1.2v5a1.2 1.2 0 01-1.2 1.2H6l-2.6 2.3V10.4H4a1.2 1.2 0 01-1.2-1.2z"/>`,
   diff: `<path d="M4 6.2h6.5l-2-2M12 9.8H5.5l2 2"/>`,
   save: `<path d="M8 3v6.3M5.3 6.8 8 9.5l2.7-2.7"/><path d="M3.5 12.5h9"/>`,
 };
@@ -112,6 +123,9 @@ let stageEl: HTMLElement;
 let panelBodyEl: HTMLElement;
 let panelTitleEl: HTMLElement;
 let panelToggleBtn: HTMLButtonElement;
+let commentsBodyEl: HTMLElement;
+let commentsCountEl: HTMLElement;
+let reviewBarEl: HTMLElement;
 let skillsModalEl: HTMLElement;
 let skillsStatusEl: HTMLElement;
 // True once dismissed/installed this session, so we don't re-nag on the next
@@ -488,6 +502,10 @@ function setActive(id: number) {
   if (stageEl.classList.contains("panel-open") && panelBodyEl.classList.contains("diff-mode")) {
     syncDiffToActive();
   }
+  // The conversation panel + pending-review bar follow the active tab.
+  if (stageEl.classList.contains("comments-open")) syncCommentsToActive();
+  setPendingReview(commentsCache.get(id)?.pending_review_id ?? null);
+  updateReviewBar(id);
   // The brain drawer also follows the active tab.
   if (brainOpen() && brainTab !== id) watchBrainFor(id);
 }
@@ -575,6 +593,20 @@ function handle(ev: CoreEvent) {
       const changed =
         !prev || prev.diff !== ev.diff || prev.comments.length !== ev.comments.length;
       if (ev.tab === active && changed) showDiff(ev.tab, ev.diff, ev.comments);
+      break;
+    }
+    case "comments": {
+      commentsCache.set(ev.tab, ev.comments);
+      if (ev.tab !== active) break;
+      setPendingReview(ev.comments.pending_review_id);
+      updateReviewBar(ev.tab);
+      // Refresh the conversation panel if it's showing this tab.
+      if (stageEl.classList.contains("comments-open")) renderConversation(ev.tab);
+      // Upgrade the diff's inline threads now that we have them.
+      const cached = diffCache.get(ev.tab);
+      if (cached && stageEl.classList.contains("panel-open") && panelBodyEl.classList.contains("diff-mode")) {
+        showDiff(ev.tab, cached.diff, cached.comments);
+      }
       break;
     }
     case "thought": {
@@ -746,7 +778,9 @@ function diffTitle(tab: number): string {
 function showDiff(tab: number, diff: string, comments: DiffComment[]) {
   panelTitleEl.textContent = diffTitle(tab);
   panelBodyEl.classList.add("diff-mode");
-  renderDiff(panelBodyEl, diff, comments);
+  // Drive inline threads from the comments cache (resolved state + reactions) when
+  // present; renderDiff falls back to the flat REST comments until they arrive.
+  renderDiff(panelBodyEl, diff, comments, commentsCache.get(tab)?.threads ?? []);
   setPanel(true);
   setStatus(`diff · ${comments.length} comment${comments.length === 1 ? "" : "s"}`);
 }
@@ -777,6 +811,10 @@ function syncDiffToActive() {
   } else {
     showDiffMessage(active, "No diff — this tab isn't a pull request.");
   }
+  // The diff shows inline threads, so make sure comments are loaded too.
+  if (v?.pr) ensureComments(active);
+  setPendingReview(commentsCache.get(active)?.pending_review_id ?? null);
+  updateReviewBar(active);
 }
 
 /** Diff toolbar button: toggle the diff panel for the active tab. */
@@ -787,6 +825,128 @@ function loadDiff() {
     return;
   }
   syncDiffToActive();
+}
+
+// ── comments panel (PR conversation; splits left of the diff) ─────────────────
+// Per-tab cache of the PR's conversation comments + inline review threads.
+const commentsCache = new Map<number, PrComments>();
+
+function setComments(open: boolean) {
+  stageEl.classList.toggle("comments-open", open);
+  document.getElementById("comments-btn")?.classList.toggle("active", open);
+  requestAnimationFrame(refitActive);
+}
+
+/** Fetch comments for a tab once and cache them (shared by the panel + the diff's
+ *  inline threads). Re-fetch is explicit via the Comments button. */
+function ensureComments(tab: number) {
+  if (commentsCache.has(tab)) return;
+  if (!tabs.get(tab)?.pr) return;
+  send({ type: "load_comments", tab });
+}
+
+function renderConversation(tab: number) {
+  const c = commentsCache.get(tab);
+  commentsBodyEl.innerHTML = "";
+  if (!c) {
+    const div = document.createElement("div");
+    div.className = "panel-empty";
+    div.textContent = tabs.get(tab)?.pr ? "loading conversation…" : "This tab isn't a pull request.";
+    commentsBodyEl.appendChild(div);
+    commentsCountEl.textContent = "";
+    return;
+  }
+  commentsCountEl.textContent = `${c.conversation.length}`;
+  if (!c.conversation.length) {
+    const div = document.createElement("div");
+    div.className = "panel-empty";
+    div.textContent = "No conversation comments on this PR yet.";
+    commentsBodyEl.appendChild(div);
+    return;
+  }
+  for (const cm of c.conversation as Comment[]) {
+    const card = document.createElement("div");
+    card.className = "cv-card";
+    card.appendChild(commentEl(cm));
+    commentsBodyEl.appendChild(card);
+  }
+}
+
+/** Point the (open) comments panel at the active tab: cached → render, PR-without-
+ *  cache → fetch, non-PR → placeholder. */
+function syncCommentsToActive() {
+  if (active === null) return;
+  renderConversation(active);
+  if (tabs.get(active)?.pr) ensureComments(active);
+}
+
+/** Comments toolbar button: toggle the conversation panel for the active tab. */
+function loadComments() {
+  if (active === null) return;
+  if (stageEl.classList.contains("comments-open")) {
+    setComments(false);
+    return;
+  }
+  syncCommentsToActive();
+  setComments(true);
+}
+
+/** The "review in progress · Finish review" bar above the diff, shown when the viewer
+ *  has a pending review on this tab's PR. */
+function updateReviewBar(tab: number) {
+  const meta = commentsCache.get(tab);
+  reviewBarEl.innerHTML = "";
+  if (!meta?.pending_review_id || tab !== active) {
+    reviewBarEl.hidden = true;
+    return;
+  }
+  const reviewId = meta.pending_review_id;
+  reviewBarEl.hidden = false;
+
+  const row = document.createElement("div");
+  row.className = "rb-row";
+  const dot = document.createElement("span");
+  dot.className = "rb-dot";
+  const label = document.createElement("span");
+  label.className = "rb-label";
+  const n = meta.pending_count;
+  label.textContent = `Review in progress · ${n} comment${n === 1 ? "" : "s"}`;
+  const spacer = document.createElement("span");
+  spacer.className = "rb-spacer";
+  const finish = document.createElement("button");
+  finish.type = "button";
+  finish.className = "rb-finish";
+  finish.textContent = "Finish review ▾";
+  row.append(dot, label, spacer, finish);
+
+  const menu = document.createElement("div");
+  menu.className = "rb-menu hidden";
+  const ta = document.createElement("textarea");
+  ta.placeholder = "Review summary (optional)…";
+  ta.rows = 2;
+  const actions = document.createElement("div");
+  actions.className = "rb-actions";
+  const mk = (text: string, event: string, cls: string) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "dc-btn " + cls;
+    b.textContent = text;
+    b.addEventListener("click", () => {
+      if (active === null) return;
+      actions.querySelectorAll("button").forEach((x) => (x.disabled = true));
+      finish.textContent = "Submitting…";
+      send({ type: "submit_review", tab: active, review_id: reviewId, event, body: ta.value.trim() });
+    });
+    return b;
+  };
+  actions.append(
+    mk("Comment", "COMMENT", "primary"),
+    mk("Approve", "APPROVE", "ok"),
+    mk("Request changes", "REQUEST_CHANGES", "warn"),
+  );
+  menu.append(ta, actions);
+  finish.addEventListener("click", () => menu.classList.toggle("hidden"));
+  reviewBarEl.append(row, menu);
 }
 
 // ── brain drawer (tail Claude's thinking) ─────────────────────────────────────
@@ -996,6 +1156,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   panelBodyEl = $("#panel-body");
   panelTitleEl = $("#panel-title");
   panelToggleBtn = $("#panel-toggle");
+  commentsBodyEl = $("#comments-body");
+  commentsCountEl = $("#comments-count");
+  reviewBarEl = $("#review-bar");
 
   initLauncher();
 
@@ -1036,6 +1199,48 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#panel-close").addEventListener("click", () => setPanel(false));
   $("#panel-load").addEventListener("click", loadPanel);
   $("#diff-btn").addEventListener("click", loadDiff);
+  $("#comments-btn").addEventListener("click", loadComments);
+  $("#comments-close").addEventListener("click", () => setComments(false));
+  // Reactions (shared by the conversation panel + inline diff threads): toggle on the
+  // active tab; the engine re-fetches and re-emits comments with authoritative state.
+  setReactionHandler((subject_id, content, add) => {
+    if (active === null) return;
+    send({ type: "toggle_reaction", tab: active, subject_id, content, add });
+  });
+  // Create a new inline comment (single, or batched into the pending review).
+  setCreateHandler((c) => {
+    if (active === null) return;
+    const meta = commentsCache.get(active);
+    if (!meta) return;
+    send({
+      type: "create_review_comment",
+      tab: active,
+      mode: c.mode,
+      body: c.body,
+      commit_id: meta.head_sha,
+      pr_node_id: meta.pr_node_id,
+      review_id: meta.pending_review_id,
+      path: c.path,
+      line: c.line,
+      side: c.side,
+      start_line: c.start_line ?? null,
+      start_side: c.start_side ?? null,
+    });
+  });
+  // Reply to an existing inline thread.
+  setReplyHandler((thread_id, body) => {
+    if (active === null) return;
+    send({ type: "reply_review_thread", tab: active, thread_id, body });
+  });
+  // "Ask Claude about this section" — type the prompt into the active tab's session
+  // (a single line referencing the file + lines) and submit it, then focus the terminal.
+  setAskHandler((message) => {
+    if (active === null) return;
+    const bytes = Array.from(new TextEncoder().encode(message + "\r"));
+    send({ type: "input", tab: active, bytes });
+    tabs.get(active)?.term.focus();
+    setStatus("asked Claude about the selected section");
+  });
   // Insight is hard-coded off for now — hide its controls (the panel itself is reused
   // by the diff view, so it stays). Flip INSIGHT_ENABLED to bring these back.
   if (!INSIGHT_ENABLED) {
@@ -1088,7 +1293,14 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  // Resizable panel (drag the divider between the terminal and the panel).
+  // Smallest the terminal may get squeezed to by a panel drag (keeps xterm rendering
+  // horizontally; below ~120px it collapses to a 1-char vertical sliver).
+  const TERMINAL_MIN = 160;
+  const commentsPanelEl = $<HTMLElement>("#comments-panel");
+  const diffPanelEl = $<HTMLElement>("#panel");
+
+  // Resizable diff panel (drag the divider on its left). Free drag, but bounded so the
+  // terminal (and the other panel, if open) keep their minimum — no hard width cap.
   const savedPanelW = localStorage.getItem("pear.panelW");
   if (savedPanelW) stageEl.style.setProperty("--panel-w", savedPanelW);
   const resizer = $<HTMLElement>("#panel-resizer");
@@ -1098,7 +1310,11 @@ window.addEventListener("DOMContentLoaded", async () => {
     stageEl.classList.add("resizing");
     const onMove = (ev: PointerEvent) => {
       const rect = stageEl.getBoundingClientRect();
-      const w = Math.min(Math.max(rect.right - ev.clientX, 300), rect.width - 360);
+      const commentsW = stageEl.classList.contains("comments-open")
+        ? commentsPanelEl.getBoundingClientRect().width
+        : 0;
+      const maxDiff = rect.width - commentsW - 10 - TERMINAL_MIN;
+      const w = Math.min(Math.max(rect.right - ev.clientX, 300), maxDiff);
       stageEl.style.setProperty("--panel-w", `${Math.round(w)}px`);
       refitActive();
     };
@@ -1108,6 +1324,40 @@ window.addEventListener("DOMContentLoaded", async () => {
       window.removeEventListener("pointerup", onUp);
       const w = stageEl.style.getPropertyValue("--panel-w");
       if (w) localStorage.setItem("pear.panelW", w);
+      refitActive();
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  });
+
+  // Resizable conversation panel (drag the divider between the terminal and it).
+  const savedCommentsW = localStorage.getItem("pear.commentsW");
+  if (savedCommentsW) stageEl.style.setProperty("--comments-w", savedCommentsW);
+  const cResizer = $<HTMLElement>("#comments-resizer");
+  cResizer.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    cResizer.setPointerCapture(e.pointerId);
+    stageEl.classList.add("resizing");
+    const onMove = (ev: PointerEvent) => {
+      // The panel is right-anchored (terminals absorb the change), so its right edge
+      // is stable during the drag — width is just (right edge − pointer). Bounded so
+      // the terminal (and the diff, if open) keep their minimum.
+      const rect = stageEl.getBoundingClientRect();
+      const diffW = stageEl.classList.contains("panel-open")
+        ? diffPanelEl.getBoundingClientRect().width
+        : 0;
+      const right = commentsPanelEl.getBoundingClientRect().right;
+      const max = rect.width - diffW - 10 - TERMINAL_MIN;
+      const w = Math.min(Math.max(right - ev.clientX, 240), max);
+      stageEl.style.setProperty("--comments-w", `${Math.round(w)}px`);
+      refitActive();
+    };
+    const onUp = () => {
+      stageEl.classList.remove("resizing");
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      const w = stageEl.style.getPropertyValue("--comments-w");
+      if (w) localStorage.setItem("pear.commentsW", w);
       refitActive();
     };
     window.addEventListener("pointermove", onMove);

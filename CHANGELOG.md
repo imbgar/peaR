@@ -6,6 +6,36 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **PR comments — phase 1 (read).** A new **💬 Comments** toolbar button opens a
+  conversation panel that splits in to the **left of the diff** (terminal │ conversation │
+  diff), showing the PR's issue-level comments with author, relative time, and reaction
+  rollups. Inline review comments now render **inside the diff**, GitHub-style: each
+  anchored line gets a collapsible **💬 bubble** that toggles its thread (collapsed by
+  default), carrying resolved/outdated state and reactions. Both panels are independently
+  resizable and follow the active tab. Comment bodies render as sanitized markdown.
+  Fetched in a single `gh`-token GraphQL round-trip. (#43)
+- **React to comments.** Click a reaction pill to add/remove it, or the **＋** for the
+  full eight-emoji picker — on any conversation comment or inline-thread comment. Toggles
+  via GraphQL (`addReaction`/`removeReaction`); the panel re-syncs to authoritative state. (#43)
+- **Write inline review comments — single & multi-line.** Drag down the diff gutter (or
+  click a line, then shift-click another) to select a whole-line range; the lines highlight
+  and a 💬 bubble appears at the left of the first line. Click it to open a composer and
+  either **Add single comment** (posts immediately) or **Start a review / Add review
+  comment** (batches into a pending review). A **"Review in progress · Finish review ▾"**
+  bar above the diff submits the pending review as Comment / Approve / Request changes. You
+  can also **reply** to any open inline thread. Anchors map to the right side+line (RIGHT/
+  new for additions & context, LEFT/old for deletions). (#43)
+- **Ask Claude about a section.** After selecting diff lines, a second **✦** button
+  appears beside the 💬 — it opens a prompt box and sends `In <file> lines X–Y: <your
+  question>` to the tab's running Claude session (referencing the file + lines), then
+  focuses the terminal. (#43)
+- **Select code to act on it.** The comment / ask actions now also trigger from a plain
+  text selection in the diff (not just the gutter) — the selection maps to its line range
+  and pops the action buttons. (#43)
+- **Floating conversation headers.** In the comments panel each commenter's header sticks
+  to the top while their comment is on screen, until the next comment pushes it up. (#43)
+
 ## [0.1.7] — 2026-06-05
 
 ### Added

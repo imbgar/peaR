@@ -143,6 +143,77 @@ pub struct DiffComment {
     pub body: String,
 }
 
+/// One emoji reaction rollup on a comment (read side). `me` is whether the
+/// authenticated viewer has reacted with this emoji.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Reaction {
+    /// The GraphQL `ReactionContent` enum (e.g. `THUMBS_UP`) — sent back on toggle.
+    pub content: String,
+    pub emoji: String,
+    pub count: u64,
+    #[serde(default)]
+    pub me: bool,
+}
+
+/// A single comment — used for both PR conversation (issue) comments and the
+/// comments inside an inline review thread. `id` is the GraphQL node id (used by
+/// later phases to edit/delete/react). `mine` = the viewer authored it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Comment {
+    pub id: String,
+    pub author: String,
+    pub body: String,
+    /// RFC3339 creation timestamp.
+    pub created_at: String,
+    #[serde(default)]
+    pub mine: bool,
+    #[serde(default)]
+    pub reactions: Vec<Reaction>,
+    /// For a PR *review* summary surfaced in the conversation, its state
+    /// (`APPROVED` | `CHANGES_REQUESTED` | `COMMENTED` | `DISMISSED`). `None` for a
+    /// plain issue comment.
+    #[serde(default)]
+    pub review_state: Option<String>,
+}
+
+/// One inline review thread anchored to a file + line in the diff, with its
+/// resolved/outdated state and the ordered comments in it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewThread {
+    /// GraphQL node id (used by later phases to resolve/unresolve/reply).
+    pub id: String,
+    pub path: String,
+    /// Current new-side line (`None` when the thread is outdated).
+    pub line: Option<u64>,
+    /// The line in the diff the thread was originally left on.
+    pub original_line: Option<u64>,
+    pub is_resolved: bool,
+    pub is_outdated: bool,
+    pub comments: Vec<Comment>,
+}
+
+/// All comments on a PR: the conversation (issue-level) comments plus the inline
+/// review threads. Reply to [`Command::LoadComments`]. Also carries the ids the UI
+/// needs to *write* comments (anchor a new comment, batch into / submit a review).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PrComments {
+    pub conversation: Vec<Comment>,
+    pub threads: Vec<ReviewThread>,
+    /// PR GraphQL node id (to start a review / add review threads).
+    #[serde(default)]
+    pub pr_node_id: String,
+    /// Head commit SHA (required to anchor a standalone review comment via REST).
+    #[serde(default)]
+    pub head_sha: String,
+    /// The viewer's in-progress (PENDING) review id, if any — present once a review
+    /// has been started, drives the "Finish review" UI.
+    #[serde(default)]
+    pub pending_review_id: Option<String>,
+    /// Number of comments queued in that pending review.
+    #[serde(default)]
+    pub pending_count: u64,
+}
+
 /// Lightweight metadata about a PR for the UI (subset of the GitHub payload).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrMeta {
@@ -272,6 +343,55 @@ pub enum Command {
     /// Fetch the tab's PR diff + existing review comments for the diff panel
     /// (replied via `Event::Diff`).
     LoadDiff { tab: TabId },
+    /// Fetch the tab's PR conversation comments + inline review threads for the
+    /// comments panel (replied via `Event::Comments`). One GraphQL round-trip.
+    LoadComments { tab: TabId },
+    /// Add (`add: true`) or remove a reaction on a comment, identified by its GraphQL
+    /// node id. `content` is the `ReactionContent` enum. The engine re-fetches and
+    /// replies with a fresh `Event::Comments`.
+    ToggleReaction {
+        tab: TabId,
+        subject_id: String,
+        content: String,
+        add: bool,
+    },
+    /// Create a new inline review comment anchored to a diff line (or line range).
+    /// `mode` = `"single"` posts it immediately as a standalone comment; `"review"`
+    /// adds it to the viewer's pending review (starting one if needed). `side` /
+    /// `start_side` are `"RIGHT"` | `"LEFT"`. `start_line` is set only for a multi-line
+    /// range. The engine re-fetches and replies with a fresh `Event::Comments`.
+    CreateReviewComment {
+        tab: TabId,
+        mode: String,
+        body: String,
+        commit_id: String,
+        pr_node_id: String,
+        #[serde(default)]
+        review_id: Option<String>,
+        path: String,
+        line: u64,
+        side: String,
+        #[serde(default)]
+        start_line: Option<u64>,
+        #[serde(default)]
+        start_side: Option<String>,
+    },
+    /// Submit the viewer's pending review. `event` = `"COMMENT"` | `"APPROVE"` |
+    /// `"REQUEST_CHANGES"`. The engine re-fetches and replies with `Event::Comments`.
+    SubmitReview {
+        tab: TabId,
+        review_id: String,
+        event: String,
+        #[serde(default)]
+        body: String,
+    },
+    /// Reply to an existing inline review thread (its GraphQL node id). The engine
+    /// re-fetches and replies with a fresh `Event::Comments`.
+    ReplyReviewThread {
+        tab: TabId,
+        thread_id: String,
+        body: String,
+    },
     /// Start streaming the tab's Claude session *thinking* to the brain panel
     /// (replied via `Event::Thought`s). No-op for non-Claude / session-less tabs.
     WatchBrain { tab: TabId },
@@ -321,6 +441,9 @@ pub enum Event {
         diff: String,
         comments: Vec<DiffComment>,
     },
+    /// The tab's PR conversation comments + inline review threads (reply to
+    /// `LoadComments`).
+    Comments { tab: TabId, comments: PrComments },
     /// One streamed item from the tab's Claude transcript for the brain panel.
     /// `kind` is `thinking` | `action` | `note`; `detail` is the full content revealed
     /// on click (e.g. a tool's whole command/input), empty when there's nothing more.

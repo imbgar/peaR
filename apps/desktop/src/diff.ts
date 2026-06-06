@@ -1,7 +1,9 @@
-// Unified-diff parser + renderer for the PR diff panel. Dependency-free; all output
-// is built with the DOM (textContent), so PR content is never injected as HTML.
+// Unified-diff parser + renderer for the PR diff panel. Diff code is built with the
+// DOM (textContent), so diff content is never injected as HTML. Comment *bodies* are
+// markdown, rendered through the sanitizing `renderMarkdown` helper (see markdown.ts).
 
-import { DiffComment } from "./protocol";
+import { Comment, DiffComment, ReviewThread } from "./protocol";
+import { renderMarkdown } from "./markdown";
 
 type LineKind = "add" | "del" | "ctx";
 interface DLine {
@@ -122,8 +124,18 @@ const STATUS_LETTER: Record<string, string> = {
   modified: "M",
 };
 
-/** Render the parsed diff (with existing review comments) into `container`. */
-export function renderDiff(container: HTMLElement, diff: string, comments: DiffComment[]) {
+/**
+ * Render the parsed diff into `container`. When `threads` is provided (full review
+ * threads with resolved state + reactions) it drives the inline UI — each anchored
+ * line gets a collapsible 💬 bubble that toggles a GitHub-style thread. Otherwise we
+ * fall back to the flat `comments` list (rendered open) until threads arrive.
+ */
+export function renderDiff(
+  container: HTMLElement,
+  diff: string,
+  comments: DiffComment[],
+  threads: ReviewThread[] = [],
+) {
   container.innerHTML = "";
   const files = parseDiff(diff);
   if (!files.length) {
@@ -134,7 +146,17 @@ export function renderDiff(container: HTMLElement, diff: string, comments: DiffC
     return;
   }
 
-  // Index comments by path → new-side line.
+  const useThreads = threads.length > 0;
+  // Index inline threads by path → anchored line (current line, else original).
+  const threadByPath = new Map<string, Map<number, ReviewThread[]>>();
+  for (const t of threads) {
+    const line = t.line ?? t.original_line;
+    if (line == null) continue;
+    const m = threadByPath.get(t.path) ?? new Map<number, ReviewThread[]>();
+    (m.get(line) ?? m.set(line, []).get(line)!).push(t);
+    threadByPath.set(t.path, m);
+  }
+  // Fallback: index flat comments by path → new-side line.
   const byPath = new Map<string, Map<number, DiffComment[]>>();
   for (const c of comments) {
     if (c.line == null) continue;
@@ -143,6 +165,9 @@ export function renderDiff(container: HTMLElement, diff: string, comments: DiffC
     byPath.set(c.path, m);
   }
 
+  const cmtCount = useThreads
+    ? threads.reduce((s, t) => s + t.comments.length, 0)
+    : comments.length;
   const totAdd = files.reduce((s, f) => s + f.adds, 0);
   const totDel = files.reduce((s, f) => s + f.dels, 0);
   const summary = document.createElement("div");
@@ -156,10 +181,10 @@ export function renderDiff(container: HTMLElement, diff: string, comments: DiffC
   const d = document.createElement("span");
   d.className = "diff-dels";
   d.textContent = `−${totDel}`;
-  if (comments.length) {
+  if (cmtCount) {
     const cc = document.createElement("span");
     cc.className = "diff-ccount";
-    cc.textContent = `${comments.length} comment${comments.length > 1 ? "s" : ""}`;
+    cc.textContent = `${cmtCount} comment${cmtCount > 1 ? "s" : ""}`;
     summary.append(fc, a, d, cc);
   } else {
     summary.append(fc, a, d);
@@ -201,6 +226,7 @@ export function renderDiff(container: HTMLElement, diff: string, comments: DiffC
       b.textContent = "Binary file — not shown";
       body.appendChild(b);
     }
+    const threadMap = threadByPath.get(f.path);
     const cmtMap = byPath.get(f.path);
     for (const hunk of f.hunks) {
       const hh = document.createElement("div");
@@ -210,6 +236,12 @@ export function renderDiff(container: HTMLElement, diff: string, comments: DiffC
       for (const line of hunk.lines) {
         const row = document.createElement("div");
         row.className = `diff-row r-${line.kind}`;
+        // Anchor data for commenting: a row maps to a side+line (RIGHT/newNo for
+        // add/ctx, LEFT/oldNo for del).
+        row.dataset.path = f.path;
+        row.dataset.kind = line.kind;
+        if (line.newNo != null) row.dataset.newno = String(line.newNo);
+        if (line.oldNo != null) row.dataset.oldno = String(line.oldNo);
         const go = document.createElement("span");
         go.className = "diff-gutter";
         go.textContent = line.oldNo?.toString() ?? "";
@@ -223,9 +255,36 @@ export function renderDiff(container: HTMLElement, diff: string, comments: DiffC
         code.className = "diff-code";
         code.textContent = line.text.length ? line.text : " ";
         row.append(go, gn, sign, code);
+        // Inline threads (collapsible, GitHub-style): render a 💬 bubble on the line
+        // that toggles the thread, collapsed by default.
+        const lineThreads = line.newNo != null ? threadMap?.get(line.newNo) : undefined;
+        if (lineThreads) {
+          row.classList.add("has-cmt");
+          const blocks: HTMLElement[] = [];
+          for (const t of lineThreads) {
+            const block = renderThread(t);
+            const n = t.comments.length;
+            const bubble = document.createElement("button");
+            bubble.type = "button";
+            bubble.className = "diff-bubble" + (t.is_resolved ? " resolved" : "");
+            const setLabel = () =>
+              (bubble.textContent = `💬 ${n}${block.classList.contains("hidden") ? " ▸" : " ▾"}`);
+            bubble.addEventListener("click", () => {
+              block.classList.toggle("hidden");
+              setLabel();
+            });
+            setLabel();
+            code.appendChild(bubble);
+            blocks.push(block);
+          }
+          body.appendChild(row);
+          for (const b of blocks) body.appendChild(b);
+          continue;
+        }
         body.appendChild(row);
+        // Fallback (pre-threads): render flat comments open under the line.
         if (line.newNo != null && cmtMap?.has(line.newNo)) {
-          for (const c of cmtMap.get(line.newNo)!) body.appendChild(renderComment(c));
+          for (const c of cmtMap.get(line.newNo)!) body.appendChild(renderFlatComment(c));
         }
       }
     }
@@ -233,9 +292,189 @@ export function renderDiff(container: HTMLElement, diff: string, comments: DiffC
     head.addEventListener("click", () => card.classList.toggle("collapsed"));
     container.appendChild(card);
   }
+  wireLineSelection(container);
 }
 
-function renderComment(c: DiffComment): HTMLElement {
+/** A short relative time ("2h", "3d", "5mo") from an RFC3339 timestamp. */
+export function relTime(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 60) return "now";
+  const m = s / 60;
+  if (m < 60) return `${Math.floor(m)}m`;
+  const h = m / 60;
+  if (h < 24) return `${Math.floor(h)}h`;
+  const d = h / 24;
+  if (d < 30) return `${Math.floor(d)}d`;
+  const mo = d / 30;
+  if (mo < 12) return `${Math.floor(mo)}mo`;
+  return `${Math.floor(mo / 12)}y`;
+}
+
+/**
+ * Render one comment — author, relative time, body, and reaction rollups. Shared
+ * by the inline diff threads and the conversation panel (same `Comment` shape).
+ * The body is GitHub markdown, rendered via the sanitizing `renderMarkdown`.
+ */
+export function commentEl(c: Comment): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "cv-cmt";
+  const top = document.createElement("div");
+  top.className = "cv-top";
+  const who = document.createElement("span");
+  who.className = "cv-who" + (c.mine ? " me" : "");
+  who.textContent = c.author;
+  const when = document.createElement("span");
+  when.className = "cv-when";
+  when.textContent = relTime(c.created_at);
+  top.append(who);
+  if (c.review_state) top.appendChild(reviewBadge(c.review_state));
+  top.appendChild(when);
+  wrap.append(top);
+  if (c.body.trim()) {
+    const body = document.createElement("div");
+    body.className = "cv-body markdown";
+    renderMarkdown(body, c.body);
+    wrap.appendChild(body);
+  }
+  wrap.appendChild(reactionRow(c));
+  return wrap;
+}
+
+const REVIEW_STATE: Record<string, { label: string; cls: string }> = {
+  APPROVED: { label: "approved", cls: "ok" },
+  CHANGES_REQUESTED: { label: "requested changes", cls: "warn" },
+  COMMENTED: { label: "reviewed", cls: "" },
+  DISMISSED: { label: "dismissed", cls: "dim" },
+};
+
+function reviewBadge(state: string): HTMLElement {
+  const meta = REVIEW_STATE[state] ?? { label: state.toLowerCase().replace(/_/g, " "), cls: "" };
+  const b = document.createElement("span");
+  b.className = "cv-review-state" + (meta.cls ? ` ${meta.cls}` : "");
+  b.textContent = meta.label;
+  return b;
+}
+
+// The eight reactions GitHub supports, in its display order (emoji ↔ enum).
+const REACTIONS: ReadonlyArray<{ emoji: string; content: string }> = [
+  { emoji: "👍", content: "THUMBS_UP" },
+  { emoji: "👎", content: "THUMBS_DOWN" },
+  { emoji: "😄", content: "LAUGH" },
+  { emoji: "🎉", content: "HOORAY" },
+  { emoji: "😕", content: "CONFUSED" },
+  { emoji: "❤️", content: "HEART" },
+  { emoji: "🚀", content: "ROCKET" },
+  { emoji: "👀", content: "EYES" },
+];
+
+// Set once by the app (main.ts) — toggles a reaction on a comment node id.
+type ReactFn = (subjectId: string, content: string, add: boolean) => void;
+let onReact: ReactFn | null = null;
+export function setReactionHandler(fn: ReactFn) {
+  onReact = fn;
+}
+
+// Close any open reaction picker when clicking elsewhere (the toggles below
+// stopPropagation, so opening one doesn't immediately close it).
+document.addEventListener("click", () => {
+  document.querySelectorAll(".cv-picker:not(.hidden)").forEach((p) => p.classList.add("hidden"));
+});
+
+function reactionRow(c: Comment): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "cv-react";
+  for (const r of c.reactions) {
+    const pill = document.createElement("button");
+    pill.type = "button";
+    pill.className = "cv-pill" + (r.me ? " me" : "");
+    pill.textContent = `${r.emoji} ${r.count}`;
+    pill.title = r.me ? "Remove your reaction" : "React";
+    pill.addEventListener("click", () => onReact?.(c.id, r.content, !r.me));
+    row.appendChild(pill);
+  }
+  // "+" opens a small picker of the eight reactions; clicking one toggles it.
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "cv-addreact";
+  add.textContent = "＋";
+  add.title = "Add reaction";
+  const picker = document.createElement("div");
+  picker.className = "cv-picker hidden";
+  for (const opt of REACTIONS) {
+    const mine = c.reactions.find((x) => x.content === opt.content)?.me ?? false;
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "cv-pick" + (mine ? " me" : "");
+    b.textContent = opt.emoji;
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      picker.classList.add("hidden");
+      onReact?.(c.id, opt.content, !mine);
+    });
+    picker.appendChild(b);
+  }
+  add.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const wasHidden = picker.classList.contains("hidden");
+    document.querySelectorAll(".cv-picker:not(.hidden)").forEach((p) => p.classList.add("hidden"));
+    picker.classList.toggle("hidden", !wasHidden);
+  });
+  const wrap = document.createElement("span");
+  wrap.className = "cv-react-add";
+  wrap.append(add, picker);
+  row.appendChild(wrap);
+  return row;
+}
+
+/** An inline review thread block (collapsed by default via the `hidden` class). */
+function renderThread(t: ReviewThread): HTMLElement {
+  const block = document.createElement("div");
+  block.className = "diff-thread hidden" + (t.is_resolved ? " resolved" : "");
+  if (t.is_resolved || t.is_outdated) {
+    const tag = document.createElement("div");
+    tag.className = "dt-state";
+    tag.textContent = [t.is_resolved ? "✓ resolved" : "", t.is_outdated ? "outdated" : ""]
+      .filter(Boolean)
+      .join(" · ");
+    block.appendChild(tag);
+  }
+  for (const c of t.comments) block.appendChild(commentEl(c));
+  if (!t.is_resolved && t.id) block.appendChild(replyBox(t.id));
+  return block;
+}
+
+/** A compact reply composer for an existing inline thread. */
+function replyBox(threadId: string): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "dt-reply";
+  const ta = document.createElement("textarea");
+  ta.placeholder = "Reply…";
+  ta.rows = 1;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "dc-btn primary";
+  btn.textContent = "Reply";
+  const send = () => {
+    const body = ta.value.trim();
+    if (!body || !onReply) return;
+    ta.disabled = true;
+    btn.disabled = true;
+    btn.textContent = "Posting…";
+    onReply(threadId, body);
+  };
+  btn.addEventListener("click", send);
+  // ⌘/Ctrl+Enter sends; plain Enter keeps newlines for multi-line replies.
+  ta.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") send();
+  });
+  wrap.append(ta, btn);
+  return wrap;
+}
+
+/** Fallback inline render of a flat REST review comment (before threads arrive). */
+function renderFlatComment(c: DiffComment): HTMLElement {
   const wrap = document.createElement("div");
   wrap.className = "diff-comment";
   const who = document.createElement("div");
@@ -247,3 +486,306 @@ function renderComment(c: DiffComment): HTMLElement {
   wrap.append(who, body);
   return wrap;
 }
+
+// ── inline comment creation (line selection → bubble → composer) ──────────────
+export interface NewComment {
+  mode: "single" | "review";
+  body: string;
+  path: string;
+  line: number;
+  side: string;
+  start_line?: number;
+  start_side?: string;
+}
+type CreateFn = (c: NewComment) => void;
+type ReplyFn = (threadId: string, body: string) => void;
+type AskFn = (message: string) => void;
+let onCreate: CreateFn | null = null;
+let onReply: ReplyFn | null = null;
+let onAsk: AskFn | null = null;
+let pendingReviewId: string | null = null;
+export function setCreateHandler(fn: CreateFn) {
+  onCreate = fn;
+}
+export function setReplyHandler(fn: ReplyFn) {
+  onReply = fn;
+}
+/** Set the handler that sends an "ask Claude about this section" prompt to the tab. */
+export function setAskHandler(fn: AskFn) {
+  onAsk = fn;
+}
+/** The viewer's pending review id (drives the composer's review button label). */
+export function setPendingReview(id: string | null) {
+  pendingReviewId = id;
+}
+
+/** A diff row's comment anchor: the side + line GitHub expects for that row. */
+function rowAnchor(row: HTMLElement): { side: string; line: number } | null {
+  const kind = row.dataset.kind;
+  if (kind === "del") {
+    const l = row.dataset.oldno;
+    return l ? { side: "LEFT", line: parseInt(l, 10) } : null;
+  }
+  const l = row.dataset.newno;
+  return l ? { side: "RIGHT", line: parseInt(l, 10) } : null;
+}
+
+// Active selection within a single file body.
+interface LineSelection {
+  body: HTMLElement;
+  rows: HTMLElement[]; // contiguous, in DOM order
+  anchor: number; // index into the body's row list where the drag began
+}
+let sel: LineSelection | null = null;
+
+function clearSelection() {
+  if (!sel) return;
+  for (const r of sel.body.querySelectorAll(".diff-row.sel")) r.classList.remove("sel");
+  sel.body.querySelector(".diff-actions")?.remove();
+  sel.body.querySelector(".diff-composer")?.remove();
+  sel = null;
+}
+
+function bodyRows(body: HTMLElement): HTMLElement[] {
+  return Array.from(body.querySelectorAll<HTMLElement>(".diff-row"));
+}
+
+function applySelection(body: HTMLElement, a: number, b: number, highlight = true) {
+  const rows = bodyRows(body);
+  const lo = Math.min(a, b);
+  const hi = Math.max(a, b);
+  const chosen: HTMLElement[] = [];
+  rows.forEach((r, i) => {
+    const on = i >= lo && i <= hi;
+    if (highlight) r.classList.toggle("sel", on);
+    else r.classList.remove("sel");
+    if (on) chosen.push(r);
+  });
+  sel = { body, rows: chosen, anchor: a };
+}
+
+/** Show the floating action group (comment + ask Claude) at the left of the first
+ *  selected row. */
+function showActions() {
+  if (!sel || !sel.rows.length) return;
+  sel.body.querySelector(".diff-actions")?.remove();
+  const first = sel.rows[0];
+  const group = document.createElement("div");
+  group.className = "diff-actions";
+  group.style.top = `${first.offsetTop}px`;
+
+  const comment = document.createElement("button");
+  comment.type = "button";
+  comment.className = "diff-act";
+  comment.textContent = "💬";
+  comment.title = "Comment on the selected lines";
+  comment.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openComposer();
+  });
+
+  const ask = document.createElement("button");
+  ask.type = "button";
+  ask.className = "diff-act ask";
+  ask.textContent = "✦";
+  ask.title = "Ask Claude about this section";
+  ask.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openAskComposer();
+  });
+
+  group.append(comment, ask);
+  sel.body.appendChild(group);
+}
+
+/** Insert the composer block right after the last selected row. */
+function openComposer() {
+  if (!sel || !sel.rows.length) return;
+  sel.body.querySelector(".diff-composer")?.remove();
+  const last = sel.rows[sel.rows.length - 1];
+  const first = sel.rows[0];
+  const startA = rowAnchor(first);
+  const endA = rowAnchor(last);
+  if (!endA) return;
+
+  const box = document.createElement("div");
+  box.className = "diff-composer";
+  const head = document.createElement("div");
+  head.className = "dc-head";
+  head.textContent =
+    sel.rows.length > 1 && startA
+      ? `Commenting on lines ${startA.line}–${endA.line}`
+      : `Commenting on line ${endA.line}`;
+  const ta = document.createElement("textarea");
+  ta.placeholder = "Leave a comment (markdown supported)…";
+  ta.rows = 3;
+  const actions = document.createElement("div");
+  actions.className = "dc-actions";
+
+  const submit = (mode: "single" | "review") => {
+    const body = ta.value.trim();
+    if (!body || !onCreate) return;
+    const nc: NewComment = { mode, body, path: first.dataset.path!, line: endA.line, side: endA.side };
+    if (sel!.rows.length > 1 && startA) {
+      nc.start_line = startA.line;
+      nc.start_side = startA.side;
+    }
+    box.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    ta.disabled = true;
+    head.textContent = "Posting…";
+    onCreate(nc);
+  };
+
+  const single = document.createElement("button");
+  single.type = "button";
+  single.className = "dc-btn primary";
+  single.textContent = "Add single comment";
+  single.addEventListener("click", () => submit("single"));
+  const review = document.createElement("button");
+  review.type = "button";
+  review.className = "dc-btn";
+  review.textContent = pendingReviewId ? "Add review comment" : "Start a review";
+  review.addEventListener("click", () => submit("review"));
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "dc-btn ghost";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => clearSelection());
+
+  actions.append(single, review, cancel);
+  box.append(head, ta, actions);
+  last.after(box);
+  ta.focus();
+}
+
+/** Open the "ask Claude about this section" composer under the selection. */
+function openAskComposer() {
+  if (!sel || !sel.rows.length || !onAsk) return;
+  sel.body.querySelector(".diff-composer")?.remove();
+  const first = sel.rows[0];
+  const last = sel.rows[sel.rows.length - 1];
+  const startA = rowAnchor(first);
+  const endA = rowAnchor(last);
+  const path = first.dataset.path ?? "";
+  const lineLabel =
+    sel.rows.length > 1 && startA && endA
+      ? `lines ${startA.line}–${endA.line}`
+      : `line ${endA?.line ?? startA?.line ?? "?"}`;
+
+  const box = document.createElement("div");
+  box.className = "diff-composer ask";
+  const head = document.createElement("div");
+  head.className = "dc-head";
+  head.textContent = `✦ Ask Claude about ${path} ${lineLabel}`;
+  const ta = document.createElement("textarea");
+  ta.placeholder = "What do you want to ask? (the file + line range is referenced for Claude)";
+  ta.rows = 2;
+  const actions = document.createElement("div");
+  actions.className = "dc-actions";
+  const askBtn = document.createElement("button");
+  askBtn.type = "button";
+  askBtn.className = "dc-btn primary";
+  askBtn.textContent = "Ask Claude";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "dc-btn ghost";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => clearSelection());
+  askBtn.addEventListener("click", () => {
+    const q = ta.value.trim() || "explain this section and flag anything risky";
+    // Reference the file + lines (Claude reads them itself) rather than pasting code
+    // into the interactive TUI.
+    onAsk!(`In \`${path}\` ${lineLabel}: ${q}`);
+    clearSelection();
+  });
+  actions.append(askBtn, cancel);
+  box.append(head, ta, actions);
+  last.after(box);
+  ta.focus();
+}
+
+// ── selection driver (attached ONCE; the diff DOM is rebuilt every render) ────
+let dragging: HTMLElement | null = null;
+
+/** Reset stale selection state after a re-render (called at the end of renderDiff). */
+function wireLineSelection(_container: HTMLElement) {
+  sel = null;
+  dragging = null;
+}
+
+function rowIndexAtPoint(x: number, y: number, body: HTMLElement): number {
+  const el = document.elementFromPoint(x, y)?.closest<HTMLElement>(".diff-row");
+  if (!el || el.parentElement !== body) return -1;
+  return bodyRows(body).indexOf(el);
+}
+
+// Gutter drag / shift-click starts or extends a line selection; a click elsewhere
+// (outside the action UI) dismisses it.
+document.addEventListener("pointerdown", (e) => {
+  const t = e.target as HTMLElement;
+  const gutter = t.closest<HTMLElement>(".diff-gutter");
+  if (gutter && gutter.closest(".diff-body")) {
+    const row = gutter.closest<HTMLElement>(".diff-row");
+    const body = row?.parentElement as HTMLElement | undefined;
+    if (!row || !body || !rowAnchor(row)) return;
+    e.preventDefault();
+    const idx = bodyRows(body).indexOf(row);
+    if (e.shiftKey && sel && sel.body === body) {
+      applySelection(body, sel.anchor, idx);
+      showActions();
+      return;
+    }
+    clearSelection();
+    applySelection(body, idx, idx);
+    dragging = body;
+    body.classList.add("selecting");
+    return;
+  }
+  if (sel && !t.closest(".diff-composer") && !t.closest(".diff-actions")) clearSelection();
+});
+
+window.addEventListener("pointermove", (e) => {
+  if (!dragging || !sel) return;
+  const idx = rowIndexAtPoint(e.clientX, e.clientY, dragging);
+  if (idx >= 0) applySelection(dragging, sel.anchor, idx);
+});
+
+window.addEventListener("pointerup", () => {
+  if (!dragging) return;
+  dragging.classList.remove("selecting");
+  dragging = null;
+  showActions();
+});
+
+// Selecting text in the code itself also offers the actions: map the text selection
+// to its whole-line range (the native highlight stays, so copy still works) and show
+// the action group anchored to the first line.
+document.addEventListener("mouseup", (e) => {
+  if (dragging) return; // a gutter drag handles its own finish
+  // Releasing on the action group / composer is a click on the UI, not a new text
+  // selection — don't rebuild the group (that would yank the button out from under the
+  // click and swallow it).
+  const tgt = e.target as HTMLElement;
+  if (tgt.closest(".diff-actions") || tgt.closest(".diff-composer")) return;
+  const s = window.getSelection();
+  if (!s || s.isCollapsed || s.rangeCount === 0) return;
+  const range = s.getRangeAt(0);
+  const rowOf = (n: Node): HTMLElement | null =>
+    (n.nodeType === 1 ? (n as HTMLElement) : n.parentElement)?.closest<HTMLElement>(".diff-row") ??
+    null;
+  const startRow = rowOf(range.startContainer);
+  const endRow = rowOf(range.endContainer);
+  if (!startRow || !endRow) return;
+  const body = startRow.parentElement as HTMLElement;
+  if (!body || endRow.parentElement !== body) return;
+  const rows = bodyRows(body);
+  const a = rows.indexOf(startRow);
+  const b = rows.indexOf(endRow);
+  if (a < 0 || b < 0 || !rowAnchor(startRow)) return;
+  applySelection(body, a, b, false); // keep the native highlight (don't add .sel)
+  showActions();
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") clearSelection();
+});

@@ -70,6 +70,7 @@
           <button data-btn="video" data-icon="video" data-needs-tab class="action" title="Narrated video walk-through"><span class="lbl">Video</span></button>
           <span class="toolbar-div"></span>
           <button data-btn="copy_content" data-icon="copy" data-needs-tab class="action" title="Copy the terminal content to the clipboard"><span class="lbl">Copy</span></button>
+          <button id="comments-btn" data-icon="comments" data-needs-tab class="action" title="Show this PR's conversation comments"><span class="lbl">Comments</span></button>
           <button id="diff-btn" data-icon="diff" data-needs-tab class="action" title="Show this PR's diff + review comments"><span class="lbl">Diff</span></button>
           <button data-btn="save_review" data-icon="save" data-needs-tab class="action" title="Save the full review to a markdown file"><span class="lbl">Save</span></button>
           <span class="toolbar-spacer"></span>
@@ -78,6 +79,19 @@
 
         <div id="stage">
           <div id="terminals"></div>
+          <div id="comments-resizer" title="Drag to resize"></div>
+          <aside id="comments-panel" aria-label="PR conversation">
+            <div class="panel-head">
+              <span class="panel-title" id="comments-title">💬 Conversation</span>
+              <div class="panel-head-actions">
+                <span class="cv-count" id="comments-count"></span>
+                <button id="comments-close" title="Collapse">×</button>
+              </div>
+            </div>
+            <div class="panel-body" id="comments-body">
+              <div class="panel-empty">No conversation comments loaded yet.</div>
+            </div>
+          </aside>
           <div id="panel-resizer" title="Drag to resize"></div>
           <aside id="panel">
             <div class="panel-head">
@@ -87,6 +101,7 @@
                 <button id="panel-close" title="Collapse">×</button>
               </div>
             </div>
+            <div id="review-bar" hidden></div>
             <div class="panel-body" id="panel-body">
               <div class="panel-empty">
                 Nothing here yet. Run a review, <b>Save review</b>, then hit ⟳ to render it —
