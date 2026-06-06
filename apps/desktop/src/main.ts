@@ -1500,7 +1500,7 @@ function buildConversationNav(comments: Comment[]) {
   title.textContent = `${comments.length} comment${comments.length > 1 ? "s" : ""}`;
   const close = document.createElement("button");
   close.type = "button";
-  close.className = "dtl-close";
+  close.className = "dtl-close close-x";
   close.textContent = "×";
   close.title = "Hide list";
   close.addEventListener("click", () => {

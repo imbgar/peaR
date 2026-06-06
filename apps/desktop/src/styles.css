@@ -1088,11 +1088,6 @@ button:disabled { opacity: 0.38; cursor: default; }
 .dt-toggle.add.on { color: var(--green); border-color: color-mix(in srgb, var(--green) 55%, transparent); }
 .dt-toggle.del.on { color: var(--red); border-color: color-mix(in srgb, var(--red) 55%, transparent); }
 .dt-toggle:not(.on) { opacity: 0.5; text-decoration: line-through; }
-.dt-close {
-  font-size: 15px; padding: 1px 8px; background: transparent;
-  border-color: color-mix(in srgb, var(--accent) 38%, transparent);
-}
-.dt-close:hover { color: var(--red); border-color: color-mix(in srgb, var(--red) 50%, transparent); }
 
 /* show/hide added or removed lines (container = #panel-body) */
 #panel-body.hide-add .diff-row.r-add { display: none; }
@@ -1119,12 +1114,16 @@ button:disabled { opacity: 0.38; cursor: default; }
   font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
   letter-spacing: 0.8px; color: var(--dim);
 }
-.dtl-close {
-  color: var(--dim); font-size: 13px; line-height: 1; cursor: pointer; padding: 1px 6px;
-  background: transparent;
-  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent); border-radius: var(--r-sm);
+/* Unified close button (×) — one box for every close so they all align identically:
+   the conversation/insight header ×, the diff toolbar ×, and the nav/thread-list ×. */
+button.close-x {
+  display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box;
+  width: 22px; height: 22px; padding: 0; flex: none;
+  font-size: 15px; line-height: 1; color: var(--dim); cursor: pointer;
+  background: transparent; border-radius: var(--r-sm);
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
 }
-.dtl-close:hover { color: var(--red); border-color: color-mix(in srgb, var(--red) 50%, transparent); }
+button.close-x:hover { color: var(--red); border-color: color-mix(in srgb, var(--red) 50%, transparent); }
 .dtl-item {
   display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left;
   padding: 7px 10px; background: transparent; border: none; border-bottom: 1px solid var(--bd);

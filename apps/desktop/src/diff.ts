@@ -175,7 +175,7 @@ function buildThreadList(container: HTMLElement, threads: ReviewThread[]): HTMLE
   title.textContent = `${threads.length} thread${threads.length > 1 ? "s" : ""}`;
   const close = document.createElement("button");
   close.type = "button";
-  close.className = "dtl-close";
+  close.className = "dtl-close close-x";
   close.textContent = "×";
   close.title = "Hide thread list";
   close.addEventListener("click", () => list.classList.add("hidden"));
@@ -311,7 +311,7 @@ function buildDiffToolbar(
   if (onDiffClose) {
     const close = document.createElement("button");
     close.type = "button";
-    close.className = "dt-close";
+    close.className = "dt-close close-x";
     close.textContent = "×";
     close.title = "Close diff";
     close.addEventListener("click", () => onDiffClose?.());

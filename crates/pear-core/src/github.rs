@@ -346,6 +346,16 @@ impl GitHub {
         Ok(())
     }
 
+    /// Create AND submit a review in one shot (no pending review needed) — the GitHub
+    /// "Review changes" flow. `event` is `APPROVE` | `REQUEST_CHANGES` | `COMMENT`.
+    /// (REST: `POST /pulls/{n}/reviews` with `{event, body}`.)
+    pub fn create_review(&self, pr: &PrRef, event: &str, body: &str) -> Result<()> {
+        self.post_json(
+            &format!("/repos/{}/{}/pulls/{}/reviews", pr.owner, pr.repo, pr.number),
+            serde_json::json!({ "event": event, "body": body }),
+        )
+    }
+
     /// Reply to an existing inline review thread (GraphQL).
     pub fn reply_review_thread(&self, thread_id: &str, body: &str) -> Result<()> {
         self.graphql(
