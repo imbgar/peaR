@@ -861,11 +861,11 @@ button:disabled { opacity: 0.38; cursor: default; }
 }
 .panel-title { font-weight: 600; font-size: 12.5px; text-shadow: var(--glow); }
 .panel-head-actions { display: flex; align-items: center; gap: 5px; }
-/* dull-yellow chip treatment so these small header buttons are easy to see */
+/* dull-yellow OUTLINE (border only, no fill) so these small header buttons are easy to see */
 .panel-head-actions button {
   color: var(--dim); font-size: 14px; padding: 1px 7px; line-height: 1; cursor: pointer;
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent); border-radius: var(--r-sm);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent); border-radius: var(--r-sm);
 }
 .panel-head-actions button:hover:not(:disabled) { color: var(--accent); border-color: var(--accent-d); }
 .panel-head-actions button.close-x:hover:not(:disabled) { color: var(--red); border-color: color-mix(in srgb, var(--red) 50%, transparent); }
@@ -904,8 +904,8 @@ button:disabled { opacity: 0.38; cursor: default; }
 #comments-body > .cv-card:first-child { margin-top: 12px; }
 .cv-count {
   font-family: var(--font-mono); font-size: 11px; color: var(--dim); cursor: pointer;
-  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent); border-radius: var(--r-sm);
-  padding: 2px 9px; background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent); border-radius: var(--r-sm);
+  padding: 2px 9px; background: transparent;
 }
 .cv-count:hover { color: var(--accent); border-color: var(--accent-d); }
 .cv-count.on { color: var(--accent); border-color: var(--accent); box-shadow: var(--glow); }
@@ -1117,8 +1117,8 @@ button:disabled { opacity: 0.38; cursor: default; }
 }
 .dtl-close {
   color: var(--dim); font-size: 13px; line-height: 1; cursor: pointer; padding: 1px 6px;
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent); border-radius: var(--r-sm);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent); border-radius: var(--r-sm);
 }
 .dtl-close:hover { color: var(--red); border-color: color-mix(in srgb, var(--red) 50%, transparent); }
 .dtl-item {
