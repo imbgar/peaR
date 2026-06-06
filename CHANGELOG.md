@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **Four new themes + a theme picker.** Alongside Phosphor and Instrument, peaR now
+  ships **VS Code**, **Dark**, **macOS Dark**, and **Light**. The status-bar theme
+  control is now a picker (swatch + name, ✓ on the active one) instead of a 2-way
+  toggle; each theme restyles the whole app and the terminal palette live, and the
+  choice persists.
+
 ## [0.1.8] — 2026-06-06
 
 Full GitHub **PR comments** — read & write — plus a reworked diff viewer.

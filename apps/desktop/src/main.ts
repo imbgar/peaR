@@ -58,10 +58,48 @@ const XTERM_THEMES: Record<string, Record<string, string>> = {
     brightBlack: "#4b5263", brightRed: "#ff8585", brightGreen: "#9af2a8", brightYellow: "#ffd789",
     brightBlue: "#8cc8ff", brightMagenta: "#e0c0ff", brightCyan: "#95efe6", brightWhite: "#ffffff",
   },
+  vscode: {
+    background: "#1e1e1e", foreground: "#d4d4d4", cursor: "#aeafad", cursorAccent: "#1e1e1e",
+    selectionBackground: "#264f78",
+    black: "#000000", red: "#f44747", green: "#6a9955", yellow: "#d7ba7d", blue: "#569cd6",
+    magenta: "#c586c0", cyan: "#4ec9b0", white: "#d4d4d4",
+    brightBlack: "#808080", brightRed: "#f44747", brightGreen: "#b5cea8", brightYellow: "#dcdcaa",
+    brightBlue: "#9cdcfe", brightMagenta: "#c586c0", brightCyan: "#4ec9b0", brightWhite: "#ffffff",
+  },
+  dark: {
+    background: "#0d1117", foreground: "#e6edf3", cursor: "#2f81f7", cursorAccent: "#0d1117",
+    selectionBackground: "#264166",
+    black: "#484f58", red: "#ff7b72", green: "#3fb950", yellow: "#d29922", blue: "#58a6ff",
+    magenta: "#bc8cff", cyan: "#39c5cf", white: "#b1bac4",
+    brightBlack: "#6e7681", brightRed: "#ffa198", brightGreen: "#56d364", brightYellow: "#e3b341",
+    brightBlue: "#79c0ff", brightMagenta: "#d2a8ff", brightCyan: "#56d4dd", brightWhite: "#f0f6fc",
+  },
+  "macos-dark": {
+    background: "#1d1d1f", foreground: "#f5f5f7", cursor: "#0a84ff", cursorAccent: "#1d1d1f",
+    selectionBackground: "#2a4a6e",
+    black: "#3a3a3e", red: "#ff453a", green: "#32d74b", yellow: "#ffd60a", blue: "#0a84ff",
+    magenta: "#bf5af2", cyan: "#64d2ff", white: "#f5f5f7",
+    brightBlack: "#6e6e73", brightRed: "#ff6961", brightGreen: "#66e06f", brightYellow: "#ffe04a",
+    brightBlue: "#409cff", brightMagenta: "#da8fff", brightCyan: "#8ce0ff", brightWhite: "#ffffff",
+  },
+  light: {
+    background: "#ffffff", foreground: "#1f2328", cursor: "#0969da", cursorAccent: "#ffffff",
+    selectionBackground: "#b6e3ff",
+    black: "#24292f", red: "#cf222e", green: "#1a7f37", yellow: "#9a6700", blue: "#0969da",
+    magenta: "#8250df", cyan: "#1b7c83", white: "#6e7781",
+    brightBlack: "#57606a", brightRed: "#a40e26", brightGreen: "#1a7f37", brightYellow: "#633c01",
+    brightBlue: "#218bff", brightMagenta: "#a475f9", brightCyan: "#3192aa", brightWhite: "#8c959f",
+  },
 };
+const MONO = '"IBM Plex Mono", ui-monospace, monospace';
+const JB = '"JetBrains Mono Variable", ui-monospace, monospace';
 const TERM_FONT: Record<string, string> = {
-  phosphor: '"IBM Plex Mono", ui-monospace, monospace',
-  instrument: '"JetBrains Mono Variable", ui-monospace, monospace',
+  phosphor: MONO,
+  instrument: JB,
+  vscode: JB,
+  dark: JB,
+  "macos-dark": '"SF Mono", ui-monospace, monospace',
+  light: MONO,
 };
 
 function currentTheme(): string {
@@ -728,11 +766,25 @@ function installSkills() {
 }
 
 // ── theming ─────────────────────────────────────────────────────────────────
+// Display name + a representative accent swatch for the picker.
+const THEMES: ReadonlyArray<{ id: string; label: string; swatch: string }> = [
+  { id: "phosphor", label: "Phosphor", swatch: "#ffb000" },
+  { id: "instrument", label: "Instrument", swatch: "#c6f24e" },
+  { id: "vscode", label: "VS Code", swatch: "#0a84ff" },
+  { id: "dark", label: "Dark", swatch: "#2f81f7" },
+  { id: "macos-dark", label: "macOS Dark", swatch: "#0a84ff" },
+  { id: "light", label: "Light", swatch: "#0969da" },
+];
+
 function applyTheme(name: string) {
+  if (!XTERM_THEMES[name]) name = "phosphor";
   document.documentElement.dataset.theme = name;
   localStorage.setItem("pear.theme", name);
+  const meta = THEMES.find((t) => t.id === name);
   const label = document.getElementById("theme-name");
-  if (label) label.textContent = name;
+  if (label) label.textContent = meta?.label ?? name;
+  const sw = document.querySelector<HTMLElement>("#theme-toggle .swatch");
+  if (sw && meta) sw.style.color = meta.swatch;
   const theme = XTERM_THEMES[name];
   const font = TERM_FONT[name];
   for (const v of tabs.values()) {
@@ -740,10 +792,39 @@ function applyTheme(name: string) {
     v.term.options.fontFamily = font;
     v.fit.fit();
   }
+  // Reflect the active row in the (possibly open) menu.
+  document
+    .querySelectorAll<HTMLElement>("#theme-menu .theme-opt")
+    .forEach((o) => o.classList.toggle("on", o.dataset.theme === name));
 }
 
-function toggleTheme() {
-  applyTheme(currentTheme() === "phosphor" ? "instrument" : "phosphor");
+/** Build the theme picker menu + wire the toggle to open/close it. */
+function initThemePicker() {
+  const menu = $("#theme-menu");
+  menu.innerHTML = "";
+  for (const t of THEMES) {
+    const opt = document.createElement("button");
+    opt.type = "button";
+    opt.className = "theme-opt" + (currentTheme() === t.id ? " on" : "");
+    opt.dataset.theme = t.id;
+    const dot = document.createElement("span");
+    dot.className = "theme-dot";
+    dot.style.background = t.swatch;
+    const name = document.createElement("span");
+    name.textContent = t.label;
+    opt.append(dot, name);
+    opt.addEventListener("click", (e) => {
+      e.stopPropagation();
+      applyTheme(t.id);
+      menu.classList.add("hidden");
+    });
+    menu.appendChild(opt);
+  }
+  $("#theme-toggle").addEventListener("click", (e) => {
+    e.stopPropagation();
+    menu.classList.toggle("hidden");
+  });
+  document.addEventListener("click", () => menu.classList.add("hidden"));
 }
 
 // ── insight panel ───────────────────────────────────────────────────────────
@@ -1428,14 +1509,14 @@ window.addEventListener("DOMContentLoaded", async () => {
     window.addEventListener("pointerup", onUp);
   });
 
-  // Theme — Phosphor (default) ↔ Instrument; persisted, restyles terminals live.
-  // Deep-link: #instrument / #phosphor forces a theme (handy for previews).
+  // Theme picker — 6 themes; persisted, restyles terminals live. Deep-link: a
+  // matching #<theme> in the URL hash forces it (handy for previews).
   const hashTheme = location.hash.slice(1);
-  const initialTheme = ["phosphor", "instrument"].includes(hashTheme)
+  const initialTheme = XTERM_THEMES[hashTheme]
     ? hashTheme
     : localStorage.getItem("pear.theme") || "phosphor";
+  initThemePicker();
   applyTheme(initialTheme);
-  $("#theme-toggle").addEventListener("click", toggleTheme);
 
   // Claude permission mode — auto (smart) by default; bypass = zero prompts.
   const permSelect = $<HTMLSelectElement>("#perm-select");

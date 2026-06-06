@@ -66,6 +66,114 @@
   --shadow-modal: 0 24px 60px rgba(0, 0, 0, 0.55);
 }
 
+/* ── VS CODE (Dark+) ───────────────────────────────────────────────────── */
+:root[data-theme="vscode"] {
+  --bg: #1e1e1e;
+  --panel: #252526;
+  --elev: #2d2d30;
+  --inp: #3c3c3c;
+  --term-bg: #1e1e1e;
+  --bd: #333333;
+  --bd2: #454545;
+  --tx: #d4d4d4;
+  --dim: #9d9d9d;
+  --faint: #6a6a6a;
+  --accent: #0a84ff;
+  --accent-d: #094771;
+  --on-accent: #ffffff;
+  --green: #4ec9b0;
+  --red: #f44747;
+  --blue: #569cd6;
+  --font-ui: -apple-system, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "SF Mono", ui-monospace, monospace;
+  --glow: none;
+  --glow-strong: none;
+  --letter: 0;
+  --case: none;
+  --shadow-modal: 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+
+/* ── DARK (neutral, GitHub-dark-ish) ───────────────────────────────────── */
+:root[data-theme="dark"] {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --elev: #21262d;
+  --inp: #0d1117;
+  --term-bg: #0d1117;
+  --bd: #30363d;
+  --bd2: #424a53;
+  --tx: #e6edf3;
+  --dim: #8b949e;
+  --faint: #6e7681;
+  --accent: #2f81f7;
+  --accent-d: #1f6feb;
+  --on-accent: #ffffff;
+  --green: #3fb950;
+  --red: #f85149;
+  --blue: #58a6ff;
+  --font-ui: -apple-system, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+  --glow: none;
+  --glow-strong: none;
+  --letter: 0;
+  --case: none;
+  --shadow-modal: 0 24px 60px rgba(0, 0, 0, 0.6);
+}
+
+/* ── macOS DARK (graphite + system blue) ───────────────────────────────── */
+:root[data-theme="macos-dark"] {
+  --bg: #1d1d1f;
+  --panel: #2a2a2d;
+  --elev: #323236;
+  --inp: #1a1a1c;
+  --term-bg: #1d1d1f;
+  --bd: #3a3a3e;
+  --bd2: #48484c;
+  --tx: #f5f5f7;
+  --dim: #a1a1a6;
+  --faint: #6e6e73;
+  --accent: #0a84ff;
+  --accent-d: #0060df;
+  --on-accent: #ffffff;
+  --green: #32d74b;
+  --red: #ff453a;
+  --blue: #64d2ff;
+  --font-ui: -apple-system, "SF Pro Text", system-ui, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, "JetBrains Mono Variable", monospace;
+  --glow: none;
+  --glow-strong: none;
+  --letter: 0;
+  --case: none;
+  --shadow-modal: 0 26px 70px rgba(0, 0, 0, 0.65);
+}
+
+/* ── LIGHT (clean, GitHub-light-ish) ───────────────────────────────────── */
+:root[data-theme="light"] {
+  --bg: #ffffff;
+  --panel: #f6f8fa;
+  --elev: #ffffff;
+  --inp: #f0f2f5;
+  --term-bg: #ffffff;
+  --bd: #d0d7de;
+  --bd2: #afb8c1;
+  --tx: #1f2328;
+  --dim: #57606a;
+  --faint: #8c959f;
+  --accent: #0969da;
+  --accent-d: #0550ae;
+  --on-accent: #ffffff;
+  --green: #1a7f37;
+  --red: #cf222e;
+  --blue: #0969da;
+  --font-ui: -apple-system, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --glow: none;
+  --glow-strong: none;
+  --letter: 0;
+  --case: none;
+  --shadow-modal: 0 24px 60px rgba(140, 149, 159, 0.4);
+}
+
 * { box-sizing: border-box; margin: 0; }
 
 html, body {
@@ -999,8 +1107,28 @@ button:disabled { opacity: 0.38; cursor: default; }
   letter-spacing: 1px;
   border-radius: 999px;
 }
+.theme-toggle { cursor: pointer; }
 .theme-toggle:hover { color: var(--accent); border-color: var(--accent-d); box-shadow: var(--glow); }
 .theme-toggle .swatch { color: var(--accent); text-shadow: var(--glow); }
+
+/* theme picker popover (opens upward from the status bar) */
+.theme-picker { position: relative; }
+.theme-menu {
+  position: absolute; bottom: calc(100% + 6px); right: 0; z-index: 50;
+  min-width: 150px; padding: 4px;
+  background: var(--elev); border: 1px solid var(--bd2); border-radius: var(--r);
+  box-shadow: var(--shadow-modal);
+}
+.theme-menu.hidden { display: none; }
+.theme-opt {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 6px 9px; background: transparent; border: none; border-radius: var(--r-sm);
+  color: var(--dim); font-family: var(--font-ui); font-size: 12px; cursor: pointer;
+}
+.theme-opt:hover { background: var(--inp); color: var(--tx); }
+.theme-opt.on { color: var(--accent); }
+.theme-opt.on::after { content: "✓"; margin-left: auto; font-size: 11px; }
+.theme-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; box-shadow: 0 0 0 1px var(--bd2); }
 
 /* ── copy modal ────────────────────────────────────────────────────────── */
 .modal {
