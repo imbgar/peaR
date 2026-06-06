@@ -760,8 +760,13 @@ window.addEventListener("pointerup", () => {
 // Selecting text in the code itself also offers the actions: map the text selection
 // to its whole-line range (the native highlight stays, so copy still works) and show
 // the action group anchored to the first line.
-document.addEventListener("mouseup", () => {
+document.addEventListener("mouseup", (e) => {
   if (dragging) return; // a gutter drag handles its own finish
+  // Releasing on the action group / composer is a click on the UI, not a new text
+  // selection — don't rebuild the group (that would yank the button out from under the
+  // click and swallow it).
+  const tgt = e.target as HTMLElement;
+  if (tgt.closest(".diff-actions") || tgt.closest(".diff-composer")) return;
   const s = window.getSelection();
   if (!s || s.isCollapsed || s.rangeCount === 0) return;
   const range = s.getRangeAt(0);
