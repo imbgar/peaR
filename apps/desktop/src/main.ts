@@ -456,35 +456,46 @@ const busiestSession = (r: PrRecord) =>
     null,
   );
 
-/** The effective search = committed chips (`histQuery`) + whatever's being typed now. */
-function activeQuery(): string {
-  const inp = document.getElementById("hist-search-input") as HTMLInputElement | null;
-  return `${histQuery} ${inp?.value ?? ""}`.trim();
-}
-
-/** Structured search: `repo:x org:y pr:123 cli:claude` tag filters + free text (all AND). */
-function matchFields(owner: string, repo: string, num: string, title: string, cli: string): boolean {
-  const raw = activeQuery();
-  if (!raw) return true;
+/** Test one PR against one query string. `exact` keyword matching for committed chips
+ *  (`repo:roboflow` is the roboflow repo, not roboflow-infra); `prefix` for the still-being-
+ *  typed text so it NARROWS live instead of emptying the list before you finish the value. */
+function matchOne(
+  fields: { owner: string; repo: string; num: string; title: string; cli: string },
+  raw: string,
+  exact: boolean,
+): boolean {
+  if (!raw.trim()) return true;
   const q = parseSearchQuery(raw, {
     keywords: ["repo", "org", "pr", "cli"],
     tokenize: true,
     alwaysArray: true,
   }) as SearchParserResult;
-  // Keyword tags match EXACTLY (case-insensitive) — `repo:roboflow` is the roboflow repo,
-  // not roboflow-infra. Use free text for fuzzy/substring matching.
-  const eq = (field: unknown, val: string) => {
+  const cmp = (field: unknown, val: string) => {
     if (!field) return true;
-    const arr = Array.isArray(field) ? field : [field];
-    return arr.some((f) => String(f).toLowerCase() === val.toLowerCase());
+    const arr = (Array.isArray(field) ? field : [field])
+      .map(String)
+      .filter((f) => f.trim() !== ""); // ignore an incomplete `repo:` (no value yet)
+    if (!arr.length) return true;
+    return arr.some((f) =>
+      exact ? val.toLowerCase() === f.toLowerCase() : val.toLowerCase().startsWith(f.toLowerCase()),
+    );
   };
-  if (!eq(q.org, owner) || !eq(q.repo, repo) || !eq(q.pr, num) || !eq(q.cli, cli)) return false;
+  if (!cmp(q.org, fields.owner) || !cmp(q.repo, fields.repo) || !cmp(q.pr, fields.num) || !cmp(q.cli, fields.cli))
+    return false;
   const text = Array.isArray(q.text) ? q.text : q.text ? [q.text] : [];
   if (text.length) {
-    const hay = `${owner}/${repo}#${num} ${title}`.toLowerCase();
+    const hay = `${fields.owner}/${fields.repo}#${fields.num} ${fields.title}`.toLowerCase();
     if (!text.every((t) => hay.includes(String(t).toLowerCase()))) return false;
   }
   return true;
+}
+
+/** Structured search: committed chips (`histQuery`, exact) AND the in-progress input
+ *  (`#hist-search-input`, prefix — live narrowing). Both must pass. */
+function matchFields(owner: string, repo: string, num: string, title: string, cli: string): boolean {
+  const f = { owner, repo, num, title, cli };
+  const pending = (document.getElementById("hist-search-input") as HTMLInputElement | null)?.value ?? "";
+  return matchOne(f, histQuery, true) && matchOne(f, pending, false);
 }
 const matchesRec = (r: PrRecord) =>
   matchFields(r.pr.owner, r.pr.repo, String(r.pr.number), r.title, r.cli);
@@ -512,6 +523,7 @@ function parsedFilters(raw: string): HistChip[] {
     const v = q[key];
     if (!v) continue;
     for (const val of Array.isArray(v) ? v : [v]) {
+      if (String(val).trim() === "") continue; // skip an incomplete `repo:` (no value yet)
       out.push({ label: `${key}: ${val}`, token: `${key}:${val}`, key: true });
     }
   }
@@ -1850,12 +1862,14 @@ window.addEventListener("DOMContentLoaded", async () => {
     promptHistAdd();
   });
   // Token-field search: committed qualifiers are chips inside the box; the input holds
-  // the in-progress term. Space/Enter commits it to a chip; Backspace on empty removes the
-  // last chip; typing live-filters using committed chips + the pending text.
+  // the in-progress term (which may contain spaces / several qualifiers). Typing live-
+  // filters using committed chips + the pending text; pressing Enter snapshots the pending
+  // text into chips; Backspace on an empty input removes the last chip. We deliberately do
+  // NOT commit on space — that would break a qualifier you're still typing (e.g. `repo:`).
   const searchEl = $<HTMLInputElement>("#hist-search-input");
   searchEl.addEventListener("input", () => renderHistory());
   searchEl.addEventListener("keydown", (e) => {
-    if ((e.key === " " || e.key === "Enter") && searchEl.value.trim()) {
+    if (e.key === "Enter" && searchEl.value.trim()) {
       e.preventDefault();
       commitPending();
     } else if (e.key === "Backspace" && searchEl.value === "" && searchEl.selectionStart === 0) {
