@@ -1232,6 +1232,7 @@ function buildPaneDom(node: PaneNode, w: Win): HTMLElement {
     if (!v) return document.createElement("div");
     v.el.classList.toggle("pane-focus", node.tab === w.focus && hasSibling(w.layout));
     v.el.style.flex = "1 1 0";
+    v.el.dataset.pane = String(node.tab);
     return v.el;
   }
   const split = document.createElement("div");
@@ -1249,6 +1250,24 @@ function hasSibling(node: PaneNode): boolean {
   return node.kind === "split";
 }
 
+/** Fit every terminal whose host lives within `root` (used for live resize during a drag). */
+function fitLeavesIn(root: HTMLElement) {
+  const hosts = root.classList.contains("terminal-host")
+    ? [root]
+    : Array.from(root.querySelectorAll<HTMLElement>(".terminal-host"));
+  for (const host of hosts) {
+    const id = Number(host.dataset.pane);
+    const v = tabs.get(id);
+    if (v) {
+      try {
+        v.fit.fit();
+      } catch {
+        /* mid-layout */
+      }
+    }
+  }
+}
+
 function makeGutter(node: Extract<PaneNode, { kind: "split" }>): HTMLElement {
   const g = document.createElement("div");
   g.className = `pane-gutter ${node.dir}`;
@@ -1260,6 +1279,17 @@ function makeGutter(node: Extract<PaneNode, { kind: "split" }>): HTMLElement {
     const horiz = node.dir === "row";
     const a = split.children[0] as HTMLElement;
     const b = split.children[2] as HTMLElement;
+    // Re-fit the panes live as the divider moves so terminal contents reflow during the
+    // drag (not just on release). Coalesce to one fit per animation frame to stay smooth.
+    let raf = 0;
+    const fitSoon = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        fitLeavesIn(a);
+        fitLeavesIn(b);
+      });
+    };
     const move = (ev: PointerEvent) => {
       const pos = horiz
         ? (ev.clientX - rect.left) / rect.width
@@ -1267,11 +1297,13 @@ function makeGutter(node: Extract<PaneNode, { kind: "split" }>): HTMLElement {
       node.ratio = Math.min(0.85, Math.max(0.15, pos));
       a.style.flex = `${node.ratio} 1 0`;
       b.style.flex = `${1 - node.ratio} 1 0`;
+      fitSoon();
     };
     const up = () => {
       document.removeEventListener("pointermove", move);
       document.removeEventListener("pointerup", up);
-      if (activeWin != null) refitWindow(activeWin);
+      if (raf) cancelAnimationFrame(raf);
+      if (activeWin != null) refitWindow(activeWin); // final exact fit
     };
     document.addEventListener("pointermove", move);
     document.addEventListener("pointerup", up);
