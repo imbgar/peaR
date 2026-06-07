@@ -143,6 +143,7 @@ interface Win {
   id: number;
   layout: PaneNode;
   focus: number; // the focused pane/session in this window
+  root: number; // the originating ("parent") session — drives the tabbar pill name (pinned)
 }
 const windows = new Map<number, Win>();
 const paneWin = new Map<number, number>(); // session id → window id
@@ -237,7 +238,9 @@ function renderTabBar() {
   tabbarEl.innerHTML = "";
   for (const w of windows.values()) {
     const paneCount = countLeaves(w.layout);
-    const t = tabs.get(w.focus) ?? tabs.get(firstLeaf(w.layout));
+    // The pill name is PINNED to the window's parent (root) session, not the focused pane,
+    // so clicking a subshell pane doesn't rename the tab.
+    const t = tabs.get(w.root) ?? tabs.get(firstLeaf(w.layout));
     if (!t) continue;
     const pill = document.createElement("div");
     pill.className = "tab" + (w.id === activeWin ? " active" : "");
@@ -1053,6 +1056,11 @@ function addFavRef(v: string) {
 function createTabView(id: number, title: string, cli: CliKind, pr: PrRef | null): TabView {
   const el = document.createElement("div");
   el.className = "terminal-host hidden";
+  // A very thin secondary-color title bar naming this pane (shown only when tiled, so a
+  // solo terminal stays clean). It overlays the host's top padding — see .pane-title CSS.
+  const titleBar = document.createElement("div");
+  titleBar.className = "pane-title";
+  el.appendChild(titleBar);
   // Focus this pane on click; right-click to split / close it.
   el.addEventListener("mousedown", () => focusPane(id), true);
   el.addEventListener("contextmenu", (e) => paneContextMenu(e, id));
@@ -1147,6 +1155,8 @@ function closeTabView(id: number) {
       } else {
         w.layout = layout;
         if (w.focus === id) w.focus = firstLeaf(layout);
+        // If the parent pane closed, re-pin the pill name to a surviving pane.
+        if (w.root === id) w.root = firstLeaf(layout);
         nextFocus = w.focus;
       }
     }
@@ -1173,7 +1183,7 @@ function closeTabView(id: number) {
 // ── pane tree: build / mutate / render ────────────────────────────────────────
 function newWindow(tab: number): number {
   const id = nextWinId++;
-  windows.set(id, { id, layout: { kind: "leaf", tab }, focus: tab });
+  windows.set(id, { id, layout: { kind: "leaf", tab }, focus: tab, root: tab });
   paneWin.set(tab, id);
   return id;
 }
@@ -1230,9 +1240,17 @@ function buildPaneDom(node: PaneNode, w: Win): HTMLElement {
   if (node.kind === "leaf") {
     const v = tabs.get(node.tab);
     if (!v) return document.createElement("div");
-    v.el.classList.toggle("pane-focus", node.tab === w.focus && hasSibling(w.layout));
+    const multi = hasSibling(w.layout);
+    v.el.classList.toggle("pane-focus", node.tab === w.focus && multi);
+    v.el.classList.toggle("show-title", multi);
     v.el.style.flex = "1 1 0";
     v.el.dataset.pane = String(node.tab);
+    // Thin title bar: only shown when tiled. Marks the parent (root) pane.
+    const title = v.el.querySelector<HTMLElement>(".pane-title");
+    if (title) {
+      title.textContent = v.title + (node.tab === w.root ? "  ·  parent" : "");
+      title.classList.toggle("is-root", node.tab === w.root);
+    }
     return v.el;
   }
   const split = document.createElement("div");

@@ -904,6 +904,18 @@ button:disabled { opacity: 0.38; cursor: default; }
 .terminal-host.pane-focus { box-shadow: inset 0 0 0 1px var(--accent-d); border-radius: var(--r-sm); }
 .tab-panes { font-size: 9px; color: var(--dim); margin-left: 5px; }
 .terminal-host .xterm { height: 100%; }
+/* thin per-pane title bar (only when tiled) — secondary/grey, overlays the top padding */
+.terminal-host.show-title { padding-top: 24px; }
+.pane-title {
+  position: absolute; top: 0; left: 0; right: 0; height: 21px; display: none;
+  align-items: center; padding: 0 10px; box-sizing: border-box;
+  font-family: var(--font-ui); font-size: 10.5px; letter-spacing: 0.3px;
+  color: var(--faint); background: var(--panel); border-bottom: 1px solid var(--bd);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; user-select: none;
+}
+.terminal-host.show-title .pane-title { display: flex; }
+.terminal-host.pane-focus .pane-title { color: var(--dim); border-bottom-color: var(--bd2); }
+.pane-title.is-root { color: var(--dim); }
 
 #panel {
   border-left: 1px solid var(--bd);
