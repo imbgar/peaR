@@ -3389,8 +3389,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   const commentsPanelEl = $<HTMLElement>("#comments-panel");
   const diffPanelEl = $<HTMLElement>("#panel");
 
-  // Resizable diff panel (drag the divider on its left). Free drag, but bounded so the
-  // terminal (and the other panel, if open) keep their minimum — no hard width cap.
+  // The divider between conversations and the diff panel. When BOTH are open it trades space
+  // between them — conversations grow as the diff shrinks (terminals stay put), which is what
+  // "drag the conversation↔file-tree divider to resize conversations" means. With only the diff
+  // open it falls back to resizing the diff vs the terminal.
   const savedPanelW = localStorage.getItem("pear.panelW");
   if (savedPanelW) stageEl.style.setProperty("--panel-w", savedPanelW);
   const resizer = $<HTMLElement>("#panel-resizer");
@@ -3398,22 +3400,33 @@ window.addEventListener("DOMContentLoaded", async () => {
     e.preventDefault();
     resizer.setPointerCapture(e.pointerId);
     stageEl.classList.add("resizing");
+    const bothOpen = stageEl.classList.contains("comments-open");
+    const rect = stageEl.getBoundingClientRect();
+    const convLeft = commentsPanelEl.getBoundingClientRect().left; // fixed (terminals don't move)
+    const pair =
+      commentsPanelEl.getBoundingClientRect().width + diffPanelEl.getBoundingClientRect().width;
     const onMove = (ev: PointerEvent) => {
-      const rect = stageEl.getBoundingClientRect();
-      const commentsW = stageEl.classList.contains("comments-open")
-        ? commentsPanelEl.getBoundingClientRect().width
-        : 0;
-      const maxDiff = rect.width - commentsW - 10 - TERMINAL_MIN;
-      const w = Math.min(Math.max(rect.right - ev.clientX, 300), maxDiff);
-      stageEl.style.setProperty("--panel-w", `${Math.round(w)}px`);
+      if (bothOpen) {
+        // Conversation's right edge follows the pointer; the diff panel gives up the space.
+        const hi = Math.max(240, pair - 280); // keep the diff panel ≥ 280
+        const cw = Math.min(Math.max(ev.clientX - convLeft, 240), hi);
+        stageEl.style.setProperty("--comments-w", `${Math.round(cw)}px`);
+        stageEl.style.setProperty("--panel-w", `${Math.round(pair - cw)}px`);
+      } else {
+        const maxDiff = rect.width - 10 - TERMINAL_MIN;
+        const w = Math.min(Math.max(rect.right - ev.clientX, 300), maxDiff);
+        stageEl.style.setProperty("--panel-w", `${Math.round(w)}px`);
+      }
       refitActive();
     };
     const onUp = () => {
       stageEl.classList.remove("resizing");
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
-      const w = stageEl.style.getPropertyValue("--panel-w");
-      if (w) localStorage.setItem("pear.panelW", w);
+      const pw = stageEl.style.getPropertyValue("--panel-w");
+      const cw = stageEl.style.getPropertyValue("--comments-w");
+      if (pw) localStorage.setItem("pear.panelW", pw);
+      if (bothOpen && cw) localStorage.setItem("pear.commentsW", cw);
       refitActive();
     };
     window.addEventListener("pointermove", onMove);
