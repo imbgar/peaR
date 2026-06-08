@@ -1957,7 +1957,7 @@ function refitActive() {
   else if (active !== null) tabs.get(active)?.fit.fit();
 }
 
-// ── per-pane zoom (⌘+ / ⌘- / ⌘0) ──────────────────────────────────────────────
+// ── zoom (⌘+ / ⌘- / ⌘0) — per terminal pane AND per panel surface ─────────────
 const BASE_FONT = 13;
 const MIN_FONT = 8;
 const MAX_FONT = 28;
@@ -1979,23 +1979,58 @@ function zoomPane(tab: number, delta: number | "reset") {
   setStatus(`pane zoom ${next}px${next === BASE_FONT ? " (reset)" : ""}`);
 }
 
-/** ⌘+ / ⌘- / ⌘0 zooms the focused pane. Capture phase so we beat the webview's own zoom and
- *  xterm's key handling; ignored when typing in a real input/textarea (not the xterm one). */
+// HTML panels (diff, file viewer, conversation) zoom via CSS `zoom` on their scroll body —
+// content scales and scrolls within the fixed-size panel. Each surface keeps its own level.
+const surfaceZoom = new WeakMap<HTMLElement, number>();
+function zoomSurface(el: HTMLElement, delta: number | "reset", label: string) {
+  const cur = surfaceZoom.get(el) ?? 1;
+  const next =
+    delta === "reset" ? 1 : Math.min(2.4, Math.max(0.6, Math.round((cur + (delta > 0 ? 0.1 : -0.1)) * 100) / 100));
+  if (next === cur) return;
+  surfaceZoom.set(el, next);
+  el.style.zoom = next === 1 ? "" : String(next);
+  setStatus(`${label} zoom ${Math.round(next * 100)}%${next === 1 ? " (reset)" : ""}`);
+}
+
+// Track the cursor so ⌘± zooms whatever surface it's hovering (terminal pane / diff / tree /
+// conversation), GitHub/editor-style, rather than always the focused terminal.
+let lastMouse = { x: 0, y: 0 };
+function trackMouse(e: MouseEvent) {
+  lastMouse = { x: e.clientX, y: e.clientY };
+}
+
+/** Route a zoom step to the surface under the cursor; falls back to the focused pane. */
+function applyZoom(delta: number | "reset") {
+  const el = document.elementFromPoint(lastMouse.x, lastMouse.y) as HTMLElement | null;
+  const host = el?.closest<HTMLElement>(".terminal-host");
+  if (host) return zoomPane(Number(host.dataset.pane), delta);
+  if (el?.closest("#diff-tree")) return zoomSurface($("#dtree-body"), delta, "file tree");
+  if (el?.closest("#panel")) return zoomSurface(panelBodyEl, delta, "diff");
+  if (el?.closest("#comments-panel")) return zoomSurface(commentsBodyEl, delta, "conversation");
+  if (active !== null) zoomPane(active, delta);
+}
+
+/** ⌘/Ctrl +/-/0 zooms the surface under the cursor. Capture phase so we beat the webview's
+ *  own zoom and xterm's key handling; ignored when typing in a real input/textarea. */
 function handleZoomKey(e: KeyboardEvent) {
-  if (!(e.metaKey || e.ctrlKey) || e.altKey || active === null) return;
-  const tgt = e.target as HTMLElement | null;
-  if (tgt && !tgt.closest(".xterm") && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA")) {
+  if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+  const tgt = e.target;
+  if (
+    tgt instanceof HTMLElement &&
+    !tgt.closest(".xterm") &&
+    (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA")
+  ) {
     return; // a real form field (e.g. the review popover) — let it type
   }
   if (e.key === "=" || e.key === "+") {
     e.preventDefault();
-    zoomPane(active, +1);
+    applyZoom(+1);
   } else if (e.key === "-" || e.key === "_") {
     e.preventDefault();
-    zoomPane(active, -1);
+    applyZoom(-1);
   } else if (e.key === "0") {
     e.preventDefault();
-    zoomPane(active, "reset");
+    applyZoom("reset");
   }
 }
 
@@ -3313,8 +3348,9 @@ window.addEventListener("DOMContentLoaded", async () => {
     else send({ type: "clear_layout" });
     setStatus(next ? "persist on — these tabs reopen next launch" : "persist off — saved layout cleared");
   });
-  // Per-pane zoom: ⌘/Ctrl + +/-/0 resizes the focused pane's terminal (capture phase so it
-  // beats the webview's built-in zoom).
+  // Zoom: ⌘/Ctrl + +/-/0 resizes whatever surface the cursor is over — a terminal pane or a
+  // panel (diff / file tree / conversation). Capture phase beats the webview's built-in zoom.
+  window.addEventListener("mousemove", trackMouse, true);
   window.addEventListener("keydown", handleZoomKey, true);
   // Best-effort capture of the latest cwd / focused tab before the window goes away.
   window.addEventListener("beforeunload", saveLayout);
@@ -3413,6 +3449,34 @@ window.addEventListener("DOMContentLoaded", async () => {
       const w = stageEl.style.getPropertyValue("--comments-w");
       if (w) localStorage.setItem("pear.commentsW", w);
       refitActive();
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  });
+
+  // Resizable file tree (drag the divider between the file tree and the diff body). The tree
+  // keeps a minimum so it can't be crushed; leave it where you like and it stays put.
+  const savedTreeW = localStorage.getItem("pear.dtreeW");
+  const diffTreeEl = $<HTMLElement>("#diff-tree");
+  if (savedTreeW) diffTreeEl.style.setProperty("--dtree-w", savedTreeW);
+  const tResizer = $<HTMLElement>("#dtree-resizer");
+  tResizer.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    tResizer.setPointerCapture(e.pointerId);
+    stageEl.classList.add("resizing-tree");
+    const onMove = (ev: PointerEvent) => {
+      const left = diffTreeEl.getBoundingClientRect().left;
+      const panelW = diffPanelEl.getBoundingClientRect().width;
+      const maxTree = Math.max(150, panelW - 200); // always leave room for the diff body
+      const w = Math.min(Math.max(ev.clientX - left, 150), maxTree);
+      diffTreeEl.style.setProperty("--dtree-w", `${Math.round(w)}px`);
+    };
+    const onUp = () => {
+      stageEl.classList.remove("resizing-tree");
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      const w = diffTreeEl.style.getPropertyValue("--dtree-w");
+      if (w) localStorage.setItem("pear.dtreeW", w);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
