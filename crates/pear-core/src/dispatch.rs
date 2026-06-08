@@ -25,6 +25,22 @@ fn code_review(effort: &str, pr: Option<&PrRef>) -> String {
     }
 }
 
+/// A codex review prompt, anchored to the PR via `gh` with a depth cue. Codex's bare
+/// `/review` slash command reviews the local worktree (not the PR), so we type a normal
+/// prompt that pins the exact pull request and tells codex to fetch it with `gh` — the
+/// same correctness fix the Claude/aider paths use.
+fn codex_review(depth: &str, pr: Option<&PrRef>) -> String {
+    match pr {
+        Some(p) => format!(
+            "Review pull request {}/{}#{}. Run `gh pr diff {}` for the exact diff and \
+             `gh pr view {}` for intent — do not diff the local branch against its base, it \
+             may be stale. {depth}\r",
+            p.owner, p.repo, p.number, p.number, p.number
+        ),
+        None => format!("Review this PR — use `gh pr diff` for the exact diff. {depth}\r"),
+    }
+}
+
 /// An aider `/ask` prompt, anchored to the PR (and `gh pr diff`) when we know it.
 fn aider_ask(prompt: &str, pr: Option<&PrRef>) -> String {
     match pr {
@@ -112,9 +128,19 @@ pub fn tier_keystrokes(tier: ReviewTier, cli: CliKind, pr: Option<&PrRef>) -> Op
             None => "deeply review this PR across a diverse set of agents\r".to_string(),
         },
 
-        (Codex, Light) => "/review\r".to_string(),
-        (Codex, Standard) => "/review deep\r".to_string(),
-        (Codex, Complex) => "/review deep\r".to_string(),
+        (Codex, Light) => codex_review(
+            "Give a focused review of only the most important, high-confidence issues.",
+            pr,
+        ),
+        (Codex, Standard) => codex_review(
+            "Review thoroughly: correctness, security, edge cases, and tests.",
+            pr,
+        ),
+        (Codex, Complex) => codex_review(
+            "Review exhaustively from multiple angles — correctness, security, performance, \
+             tests, and design — and surface anything subtle.",
+            pr,
+        ),
 
         (Aider, Light) => aider_ask("give a quick review — only the obvious issues.", pr),
         (Aider, Standard) => aider_ask("review thoroughly: correctness, security, tests.", pr),
