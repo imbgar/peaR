@@ -27,6 +27,7 @@ import {
   setPendingReview,
   setDiffCloseHandler,
   setApproveHandler,
+  jumpToThread,
   type TreeLevel,
 } from "./diff";
 import {
@@ -44,6 +45,7 @@ import {
   Queue,
   QueueItem,
   ReviewButton,
+  ReviewThread,
   ReviewTier,
   WinLayoutWire,
   PaneTreeWire,
@@ -1955,6 +1957,48 @@ function refitActive() {
   else if (active !== null) tabs.get(active)?.fit.fit();
 }
 
+// ── per-pane zoom (⌘+ / ⌘- / ⌘0) ──────────────────────────────────────────────
+const BASE_FONT = 13;
+const MIN_FONT = 8;
+const MAX_FONT = 28;
+/** Adjust the focused pane's terminal font size (a number delta, or "reset" to the base),
+ *  then refit so its rows/cols recompute. Each pane keeps its own zoom (xterm font size). */
+function zoomPane(tab: number, delta: number | "reset") {
+  const v = tabs.get(tab);
+  if (!v) return;
+  const cur = v.term.options.fontSize ?? BASE_FONT;
+  const next =
+    delta === "reset" ? BASE_FONT : Math.min(MAX_FONT, Math.max(MIN_FONT, cur + delta));
+  if (next === cur) return;
+  v.term.options.fontSize = next;
+  try {
+    v.fit.fit(); // recompute cols/rows for the new cell size (also emits a backend resize)
+  } catch {
+    /* host mid-layout */
+  }
+  setStatus(`pane zoom ${next}px${next === BASE_FONT ? " (reset)" : ""}`);
+}
+
+/** ⌘+ / ⌘- / ⌘0 zooms the focused pane. Capture phase so we beat the webview's own zoom and
+ *  xterm's key handling; ignored when typing in a real input/textarea (not the xterm one). */
+function handleZoomKey(e: KeyboardEvent) {
+  if (!(e.metaKey || e.ctrlKey) || e.altKey || active === null) return;
+  const tgt = e.target as HTMLElement | null;
+  if (tgt && !tgt.closest(".xterm") && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA")) {
+    return; // a real form field (e.g. the review popover) — let it type
+  }
+  if (e.key === "=" || e.key === "+") {
+    e.preventDefault();
+    zoomPane(active, +1);
+  } else if (e.key === "-" || e.key === "_") {
+    e.preventDefault();
+    zoomPane(active, -1);
+  } else if (e.key === "0") {
+    e.preventDefault();
+    zoomPane(active, "reset");
+  }
+}
+
 function setPanel(open: boolean) {
   stageEl.classList.toggle("panel-open", open);
   panelToggleBtn.textContent = open ? "Insight ◂" : "Insight ▸";
@@ -2146,11 +2190,16 @@ function renderTreeRail() {
     body.innerHTML = `<div class="dtree-empty">no files</div>`;
     return;
   }
-  body.appendChild(buildTree(files, stats, strip));
+  body.appendChild(buildTree(files, stats, strip, tab));
 }
 
 /** Build a nested folder/file tree, stripping `strip` (a dir prefix) from the displayed root. */
-function buildTree(files: string[], stats: Map<string, FStat>, strip: string): HTMLElement {
+function buildTree(
+  files: string[],
+  stats: Map<string, FStat>,
+  strip: string,
+  tab: number,
+): HTMLElement {
   const root: TNode = { name: "", full: "", children: new Map(), isFile: false, hasChange: false };
   for (const full of files) {
     const isCh = stats.has(full);
@@ -2178,11 +2227,16 @@ function buildTree(files: string[], stats: Map<string, FStat>, strip: string): H
   }
   const out = document.createElement("div");
   out.className = "dtree-list";
-  renderNodes(root, out, stats);
+  renderNodes(root, out, stats, tab);
   return out;
 }
 
-function renderNodes(node: TNode, container: HTMLElement, stats: Map<string, FStat>) {
+function renderNodes(
+  node: TNode,
+  container: HTMLElement,
+  stats: Map<string, FStat>,
+  tab: number,
+) {
   const kids = [...node.children.values()].sort((a, b) =>
     a.isFile === b.isFile ? a.name.localeCompare(b.name) : a.isFile ? 1 : -1,
   );
@@ -2201,9 +2255,15 @@ function renderNodes(node: TNode, container: HTMLElement, stats: Map<string, FSt
         const meta = document.createElement("span");
         meta.className = "dtree-fstat";
         if (st.comments) {
-          const c = document.createElement("span");
+          const c = document.createElement("button");
+          c.type = "button";
           c.className = "dtree-fc";
           c.textContent = `${st.comments}💬`;
+          c.title = "Show this file's comment threads";
+          c.addEventListener("click", (e) => {
+            e.stopPropagation(); // don't trigger the file jump
+            toggleFileThreads(c, tab, k.full);
+          });
           meta.appendChild(c);
         }
         if (st.adds) {
@@ -2249,7 +2309,7 @@ function renderNodes(node: TNode, container: HTMLElement, stats: Map<string, FSt
         head.classList.toggle("collapsed", c);
       });
       folder.append(head, childWrap);
-      renderNodes(k, childWrap, stats);
+      renderNodes(k, childWrap, stats, tab);
       container.appendChild(folder);
     }
   }
@@ -2324,7 +2384,7 @@ const REVIEW_EVENTS: { id: ReviewEvent; label: string; hint: string }[] = [
 /** Open the GitHub-style "Review changes" popup for the active PR tab. If the viewer has
  *  a pending review (queued inline comments) it's submitted with the chosen verdict;
  *  otherwise a fresh review is created + submitted in one shot. */
-function openReviewModal(defaultEvent: ReviewEvent = "APPROVE") {
+function openReviewModal(defaultEvent: ReviewEvent = "APPROVE", anchor?: HTMLElement) {
   if (active === null) return;
   const v = tabs.get(active);
   if (!v?.pr) {
@@ -2335,10 +2395,12 @@ function openReviewModal(defaultEvent: ReviewEvent = "APPROVE") {
   ensureComments(tab); // make sure we learn any pending-review id
   let chosen: ReviewEvent = defaultEvent;
 
-  const overlay = document.createElement("div");
-  overlay.className = "modal";
-  overlay.innerHTML = `
-    <div class="modal-card review-card">
+  // A small popover anchored to the Review button (GitHub-style), not a centered modal.
+  const scrim = document.createElement("div");
+  scrim.className = "pop-scrim";
+  scrim.innerHTML = `
+    <div class="pop-caret"></div>
+    <div class="modal-card review-card pop-card" role="dialog">
       <div class="modal-head">
         <span class="modal-title"></span>
         <button class="modal-x close-x" title="Close (Esc)">×</button>
@@ -2353,11 +2415,13 @@ function openReviewModal(defaultEvent: ReviewEvent = "APPROVE") {
         <button class="primary rv-submit"></button>
       </div>
     </div>`;
-  overlay.querySelector(".modal-title")!.textContent = `Review ${shortLabel(v.pr)}`;
-  const body = overlay.querySelector<HTMLTextAreaElement>(".rv-body")!;
-  const events = overlay.querySelector<HTMLElement>(".rv-events")!;
-  const hint = overlay.querySelector<HTMLElement>(".rv-hint")!;
-  const submit = overlay.querySelector<HTMLButtonElement>(".rv-submit")!;
+  const card = scrim.querySelector<HTMLElement>(".pop-card")!;
+  const caret = scrim.querySelector<HTMLElement>(".pop-caret")!;
+  scrim.querySelector(".modal-title")!.textContent = `Review ${shortLabel(v.pr)}`;
+  const body = scrim.querySelector<HTMLTextAreaElement>(".rv-body")!;
+  const events = scrim.querySelector<HTMLElement>(".rv-events")!;
+  const hint = scrim.querySelector<HTMLElement>(".rv-hint")!;
+  const submit = scrim.querySelector<HTMLButtonElement>(".rv-submit")!;
 
   const refresh = () => {
     events.querySelectorAll<HTMLButtonElement>(".rv-event").forEach((b) =>
@@ -2383,16 +2447,16 @@ function openReviewModal(defaultEvent: ReviewEvent = "APPROVE") {
   refresh();
 
   const close = () => {
-    overlay.remove();
+    scrim.remove();
     document.removeEventListener("keydown", onKey);
   };
   const onKey = (ev: KeyboardEvent) => {
     if (ev.key === "Escape") close();
   };
   document.addEventListener("keydown", onKey);
-  overlay.querySelector(".modal-x")!.addEventListener("click", close);
-  overlay.addEventListener("click", (ev) => {
-    if (ev.target === overlay) close();
+  scrim.querySelector(".modal-x")!.addEventListener("click", close);
+  scrim.addEventListener("click", (ev) => {
+    if (ev.target === scrim) close();
   });
   submit.addEventListener("click", () => {
     const text = body.value.trim();
@@ -2411,8 +2475,125 @@ function openReviewModal(defaultEvent: ReviewEvent = "APPROVE") {
     setStatus(`submitting review (${chosen.toLowerCase().replace(/_/g, " ")})…`);
     close();
   });
-  document.body.appendChild(overlay);
+  document.body.appendChild(scrim);
+  positionPopover(card, anchor, caret);
   body.focus();
+}
+
+/** Place a popover card (+ optional caret) anchored under (or above) `anchor`, right-aligned
+ *  and clamped to the viewport. With no anchor it falls back to top-centered. */
+function positionPopover(card: HTMLElement, anchor?: HTMLElement, caret?: HTMLElement | null) {
+  const m = 8;
+  const W = card.offsetWidth || 380;
+  const ch = card.offsetHeight;
+  if (!anchor) {
+    card.style.left = `${Math.round((window.innerWidth - W) / 2)}px`;
+    card.style.top = "84px";
+    if (caret) caret.style.display = "none";
+    return;
+  }
+  const r = anchor.getBoundingClientRect();
+  const left = Math.max(m, Math.min(Math.round(r.right - W), window.innerWidth - W - m));
+  let top = Math.round(r.bottom + 8);
+  let below = true;
+  if (top + ch > window.innerHeight - m) {
+    const above = Math.round(r.top - ch - 8);
+    if (above >= m) {
+      top = above;
+      below = false;
+    } else {
+      top = Math.max(m, window.innerHeight - ch - m);
+    }
+  }
+  card.style.left = `${left}px`;
+  card.style.top = `${top}px`;
+  if (caret) {
+    const caretX = Math.max(left + 12, Math.min(r.left + r.width / 2 - 6, left + W - 24));
+    caret.style.left = `${caretX}px`;
+    caret.style.top = `${below ? top - 6 : top + ch - 6}px`;
+    caret.classList.toggle("up", below);
+    caret.classList.toggle("down", !below);
+  }
+}
+
+// ── file-tree per-file thread pane ────────────────────────────────────────────
+// Clicking a file's 💬 count in the tree toggles a small pane listing that file's threads;
+// picking one jumps to it in the diff.
+let fileThreadsScrim: HTMLElement | null = null;
+let fileThreadsFor: HTMLElement | null = null;
+function closeFileThreads() {
+  fileThreadsScrim?.remove();
+  fileThreadsScrim = null;
+  fileThreadsFor = null;
+}
+function toggleFileThreads(anchor: HTMLElement, tab: number, path: string) {
+  if (fileThreadsFor === anchor) return closeFileThreads(); // same bubble → toggle off
+  closeFileThreads();
+  const threads: ReviewThread[] = (commentsCache.get(tab)?.threads ?? []).filter(
+    (t) => t.path === path,
+  );
+  if (!threads.length) return;
+
+  const scrim = document.createElement("div");
+  scrim.className = "pop-scrim";
+  const pane = document.createElement("div");
+  pane.className = "ftp-pane";
+  const head = document.createElement("div");
+  head.className = "ftp-head";
+  const title = document.createElement("span");
+  title.className = "ftp-title";
+  const base = path.split("/").pop() ?? path;
+  title.textContent = `${base} · ${threads.length} thread${threads.length === 1 ? "" : "s"}`;
+  const x = document.createElement("button");
+  x.className = "ftp-x close-x";
+  x.textContent = "×";
+  x.title = "Close";
+  x.addEventListener("click", closeFileThreads);
+  head.append(title, x);
+  pane.appendChild(head);
+
+  const list = document.createElement("div");
+  list.className = "ftp-list";
+  for (const t of threads) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "ftp-item" + (t.is_resolved ? " resolved" : "");
+    const loc = document.createElement("span");
+    loc.className = "ftp-loc";
+    loc.textContent = `L${t.line ?? t.original_line ?? "?"}`;
+    const first = t.comments[0];
+    const meta = document.createElement("span");
+    meta.className = "ftp-meta";
+    const snippet = (first?.body ?? "").replace(/\s+/g, " ").trim().slice(0, 64);
+    meta.textContent = first ? `${first.author}: ${snippet}` : "(empty thread)";
+    item.append(loc, meta);
+    if (t.is_resolved) {
+      const r = document.createElement("span");
+      r.className = "ftp-res";
+      r.textContent = "✓";
+      r.title = "resolved";
+      item.appendChild(r);
+    }
+    item.addEventListener("click", () => {
+      // Jump to the thread in the rendered diff; if it isn't anchored yet, ensure the diff
+      // is showing and retry once.
+      if (!jumpToThread(panelBodyEl, t.id)) {
+        syncDiffToActive();
+        setTimeout(() => jumpToThread(panelBodyEl, t.id), 140);
+      }
+      closeFileThreads();
+    });
+    list.appendChild(item);
+  }
+  pane.appendChild(list);
+  scrim.appendChild(pane);
+  scrim.addEventListener("click", (e) => {
+    if (e.target === scrim) closeFileThreads();
+  });
+  document.body.appendChild(scrim);
+  positionPopover(pane, anchor);
+  fileThreadsScrim = scrim;
+  fileThreadsFor = anchor;
 }
 
 function renderConversation(tab: number) {
@@ -3047,7 +3228,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#panel-load").addEventListener("click", loadPanel);
   $("#diff-btn").addEventListener("click", loadDiff);
   $("#comments-btn").addEventListener("click", loadComments);
-  $("#approve-btn").addEventListener("click", () => openReviewModal("APPROVE"));
+  $("#approve-btn").addEventListener("click", (e) =>
+    openReviewModal("APPROVE", e.currentTarget as HTMLElement),
+  );
   $("#comments-close").addEventListener("click", () => setComments(false));
   // The comment count toggles a pop-out navigator (jump to each conversation comment).
   commentsCountEl.addEventListener("click", () => {
@@ -3108,7 +3291,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#dtree-wider").addEventListener("click", () => setTreeLevel(WIDER[treeLevel]));
   $("#dtree-narrower").addEventListener("click", () => setTreeLevel(NARROWER[treeLevel]));
   $("#dtree-close").addEventListener("click", () => closeTree());
-  setApproveHandler(() => openReviewModal("APPROVE"));
+  setApproveHandler((anchor) => openReviewModal("APPROVE", anchor));
   // Insight is hard-coded off for now — hide its controls (the panel itself is reused
   // by the diff view, so it stays). Flip INSIGHT_ENABLED to bring these back.
   if (!INSIGHT_ENABLED) {
@@ -3130,6 +3313,9 @@ window.addEventListener("DOMContentLoaded", async () => {
     else send({ type: "clear_layout" });
     setStatus(next ? "persist on — these tabs reopen next launch" : "persist off — saved layout cleared");
   });
+  // Per-pane zoom: ⌘/Ctrl + +/-/0 resizes the focused pane's terminal (capture phase so it
+  // beats the webview's built-in zoom).
+  window.addEventListener("keydown", handleZoomKey, true);
   // Best-effort capture of the latest cwd / focused tab before the window goes away.
   window.addEventListener("beforeunload", saveLayout);
   document.addEventListener("visibilitychange", () => {
