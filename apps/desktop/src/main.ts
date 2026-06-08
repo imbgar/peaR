@@ -3432,6 +3432,14 @@ window.addEventListener("DOMContentLoaded", async () => {
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
   });
+  // Double-click resets the conversation panel to its standard width (drops the override →
+  // the CSS default 340px).
+  resizer.addEventListener("dblclick", () => {
+    stageEl.style.removeProperty("--comments-w");
+    localStorage.removeItem("pear.commentsW");
+    refitActive();
+    setStatus("conversation width reset");
+  });
 
   // Resizable conversation panel (drag the divider between the terminal and it).
   const savedCommentsW = localStorage.getItem("pear.commentsW");
@@ -3493,6 +3501,12 @@ window.addEventListener("DOMContentLoaded", async () => {
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+  });
+  // Double-click resets the file tree to its standard width (drops the override → 232px).
+  tResizer.addEventListener("dblclick", () => {
+    diffTreeEl.style.removeProperty("--dtree-w");
+    localStorage.removeItem("pear.dtreeW");
+    setStatus("file tree width reset");
   });
 
   // Theme picker — 6 themes; persisted, restyles terminals live. Deep-link: a
