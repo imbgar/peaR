@@ -152,6 +152,87 @@ let nextWinId = 1;
 // When a split is requested, the new session is inserted next to `source` once it opens.
 let pendingSplit: { source: number; dir: "row" | "col"; before: boolean } | null = null;
 
+// Drag-to-tile: what a drag is currently carrying. A tabbar pill drags a whole WINDOW
+// (its entire pane subtree); a pane's title bar drags that single PANE out. Dropping onto
+// another pane's edge grafts it in beside the target, splitting on the dropped side.
+type DragPayload = { kind: "win"; winId: number } | { kind: "pane"; tab: number; winId: number };
+let dragPayload: DragPayload | null = null;
+type DropZone = "left" | "right" | "top" | "bottom";
+
+/** The nearest edge of `el` to the cursor → the side to dock onto. */
+function zoneFor(el: HTMLElement, x: number, y: number): DropZone {
+  const r = el.getBoundingClientRect();
+  const fx = (x - r.left) / r.width;
+  const fy = (y - r.top) / r.height;
+  const d: Record<DropZone, number> = { left: fx, right: 1 - fx, top: fy, bottom: 1 - fy };
+  return (Object.keys(d) as DropZone[]).reduce((a, b) => (d[b] < d[a] ? b : a));
+}
+function showDropHint(el: HTMLElement, zone: DropZone) {
+  const hint = el.querySelector<HTMLElement>(".drop-hint");
+  if (hint) hint.className = `drop-hint show ${zone}`;
+}
+function clearDropHint(el: HTMLElement) {
+  el.querySelector<HTMLElement>(".drop-hint")?.classList.remove("show");
+}
+function clearAllDropHints() {
+  document.querySelectorAll<HTMLElement>(".drop-hint.show").forEach((h) => h.classList.remove("show"));
+}
+
+/** Graft the current drag payload (a window or a single pane) into the target window,
+ *  splitting beside `targetTab` on the dropped edge. Source is detached/emptied. */
+function dropOnPane(targetTab: number, zone: DropZone) {
+  const targetWinId = paneWin.get(targetTab);
+  if (targetWinId == null || !dragPayload) return;
+  const tgt = windows.get(targetWinId);
+  if (!tgt) return;
+
+  let movedLayout: PaneNode;
+  const movedLeaves: number[] = [];
+  let focusAfter: number;
+
+  if (dragPayload.kind === "win") {
+    if (dragPayload.winId === targetWinId) return; // a window dropped onto itself
+    const src = windows.get(dragPayload.winId);
+    if (!src) return;
+    movedLayout = src.layout;
+    focusAfter = src.focus;
+    windows.delete(dragPayload.winId);
+  } else {
+    if (dragPayload.tab === targetTab) return; // a pane onto itself
+    const src = windows.get(dragPayload.winId);
+    if (!src) return;
+    movedLayout = { kind: "leaf", tab: dragPayload.tab };
+    focusAfter = dragPayload.tab;
+    // Detach the pane from its source window first (so a same-window re-dock works on the
+    // already-updated tree). If that empties the source window, drop it.
+    const rest = removeLeaf(src.layout, dragPayload.tab);
+    if (!rest) {
+      windows.delete(dragPayload.winId);
+    } else {
+      src.layout = rest;
+      if (src.focus === dragPayload.tab) src.focus = firstLeaf(rest);
+      if (src.root === dragPayload.tab) src.root = firstLeaf(rest);
+    }
+  }
+  forEachLeaf(movedLayout, (t) => movedLeaves.push(t));
+
+  const dir: "row" | "col" = zone === "left" || zone === "right" ? "row" : "col";
+  const before = zone === "left" || zone === "top";
+  tgt.layout = replaceLeaf(tgt.layout, targetTab, (leaf) => ({
+    kind: "split",
+    dir,
+    ratio: 0.5,
+    a: before ? movedLayout : leaf,
+    b: before ? leaf : movedLayout,
+  }));
+  for (const t of movedLeaves) paneWin.set(t, targetWinId);
+  tgt.focus = focusAfter;
+  dragPayload = null;
+  clearAllDropHints();
+  setActive(focusAfter); // renders the target window, refits, rebuilds the tabbar
+  saveLayout();
+}
+
 const persistOn = () => localStorage.getItem("pear.persist") !== "0"; // default ON
 function saveLayout() {
   if (persistOn()) send({ type: "save_layout", active });
@@ -274,6 +355,19 @@ function renderTabBar() {
     pill.appendChild(close);
 
     pill.onclick = () => setActive(w.focus);
+    // Drag the pill to tile this whole window into another pane (see dropOnPane).
+    pill.draggable = true;
+    pill.addEventListener("dragstart", (e) => {
+      dragPayload = { kind: "win", winId: w.id };
+      pill.classList.add("dragging");
+      e.dataTransfer?.setData("text/plain", `win:${w.id}`);
+      if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+    });
+    pill.addEventListener("dragend", () => {
+      pill.classList.remove("dragging");
+      dragPayload = null;
+      clearAllDropHints();
+    });
     tabbarEl.appendChild(pill);
   }
   if (windows.size === 0) {
@@ -1060,10 +1154,47 @@ function createTabView(id: number, title: string, cli: CliKind, pr: PrRef | null
   // solo terminal stays clean). It overlays the host's top padding — see .pane-title CSS.
   const titleBar = document.createElement("div");
   titleBar.className = "pane-title";
+  // Drag the title bar to pull this single pane out into another pane (or window).
+  titleBar.draggable = true;
+  titleBar.addEventListener("dragstart", (e) => {
+    e.stopPropagation();
+    const winId = paneWin.get(id);
+    if (winId == null) return;
+    dragPayload = { kind: "pane", tab: id, winId };
+    el.classList.add("dragging");
+    e.dataTransfer?.setData("text/plain", `pane:${id}`);
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+  });
+  titleBar.addEventListener("dragend", () => {
+    el.classList.remove("dragging");
+    dragPayload = null;
+    clearAllDropHints();
+  });
   el.appendChild(titleBar);
+  // A translucent edge highlight shown while a drag hovers this pane (the drop target).
+  const dropHint = document.createElement("div");
+  dropHint.className = "drop-hint";
+  el.appendChild(dropHint);
   // Focus this pane on click; right-click to split / close it.
   el.addEventListener("mousedown", () => focusPane(id), true);
   el.addEventListener("contextmenu", (e) => paneContextMenu(e, id));
+  // Drop target: accept a dragged window/pane, previewing the dock edge under the cursor.
+  el.addEventListener("dragover", (e) => {
+    if (!dragPayload) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    showDropHint(el, zoneFor(el, e.clientX, e.clientY));
+  });
+  el.addEventListener("dragleave", (e) => {
+    if (!el.contains(e.relatedTarget as Node)) clearDropHint(el);
+  });
+  el.addEventListener("drop", (e) => {
+    if (!dragPayload) return;
+    e.preventDefault();
+    const zone = zoneFor(el, e.clientX, e.clientY);
+    clearDropHint(el);
+    dropOnPane(id, zone);
+  });
   terminalsEl.appendChild(el);
 
   const term = new Terminal({

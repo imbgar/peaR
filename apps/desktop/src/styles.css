@@ -914,8 +914,28 @@ button:disabled { opacity: 0.38; cursor: default; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; user-select: none;
 }
 .terminal-host.show-title .pane-title { display: flex; }
+.terminal-host.show-title .pane-title { cursor: grab; }
+.terminal-host.show-title .pane-title:active { cursor: grabbing; }
 .terminal-host.pane-focus .pane-title { color: var(--dim); border-bottom-color: var(--bd2); }
 .pane-title.is-root { color: var(--dim); }
+.terminal-host.dragging { opacity: 0.5; }
+
+/* Drag-to-tile: translucent edge preview shown on the pane under the cursor mid-drag. */
+.drop-hint {
+  position: absolute; inset: 0; z-index: 40; pointer-events: none;
+  opacity: 0; transition: opacity 0.08s ease;
+}
+.drop-hint.show { opacity: 1; }
+.drop-hint::after {
+  content: ""; position: absolute; border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+.drop-hint.left::after { inset: 4px 50% 4px 4px; }
+.drop-hint.right::after { inset: 4px 4px 4px 50%; }
+.drop-hint.top::after { inset: 4px 4px 50% 4px; }
+.drop-hint.bottom::after { inset: 50% 4px 4px 4px; }
+.tab.dragging { opacity: 0.55; }
 
 #panel {
   border-left: 1px solid var(--bd);
