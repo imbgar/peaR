@@ -297,12 +297,42 @@ pub struct LayoutEntry {
     pub title: String,
 }
 
-/// The persisted window layout: the ordered open tabs + which one was focused.
+/// A serialized pane tree for tile persistence. A `Leaf` references a tab: on the wire
+/// FROM the frontend (`SaveLayout`) the number is a live `TabId`, which the engine remaps
+/// to an index into `Layout.entries`; on disk / on restore it is that entry index.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PaneTree {
+    Leaf {
+        i: u64,
+    },
+    Split {
+        dir: String, // "row" | "col"
+        ratio: f64,
+        a: Box<PaneTree>,
+        b: Box<PaneTree>,
+    },
+}
+
+/// One persisted window (a tabbar pill): its pane tree plus the focused pane and the
+/// `root` (parent) pane that pins the pill's name. `focus`/`root` follow the same
+/// TabId-on-save / entry-index-on-restore convention as `PaneTree::Leaf::i`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WinLayout {
+    pub tree: PaneTree,
+    pub focus: u64,
+    pub root: u64,
+}
+
+/// The persisted window layout: the ordered open tabs + which one was focused + the tile
+/// structure (`windows`). `windows` empty = a flat/legacy layout (one window per tab).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Layout {
     pub entries: Vec<LayoutEntry>,
     #[serde(default)]
     pub active: Option<usize>,
+    #[serde(default)]
+    pub windows: Vec<WinLayout>,
 }
 
 /// Commands a frontend sends into the engine.
@@ -492,6 +522,10 @@ pub enum Command {
     SaveLayout {
         #[serde(default)]
         active: Option<TabId>,
+        /// The frontend's tile structure (leaves = live TabIds). `None` = no tile info
+        /// (a flat write); the engine remaps TabIds → entry indices before storing.
+        #[serde(default)]
+        windows: Option<Vec<WinLayout>>,
     },
     /// Restore the persisted layout. The engine opens the saved tabs itself, and only on a
     /// fresh start — a reload against a live engine re-syncs existing tabs instead of
@@ -508,6 +542,14 @@ pub enum Command {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
+    /// Emitted at the start of a layout restore — BEFORE the burst of restored `TabOpened`s —
+    /// carrying the saved tile structure (entry-index based). The frontend maps the Nth
+    /// restored tab to entry index N to rebuild its windows/panes. Empty `windows` = flat.
+    LayoutRestore {
+        windows: Vec<WinLayout>,
+        #[serde(default)]
+        active: Option<usize>,
+    },
     /// A tab was created and its terminal is live.
     TabOpened {
         tab: TabId,

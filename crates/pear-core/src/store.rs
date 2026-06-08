@@ -397,4 +397,63 @@ mod tests {
         assert!(p.exists());
         assert_eq!(fs::read_to_string(p).unwrap(), "# notes");
     }
+
+    #[test]
+    fn layout_round_trips_tile_structure() {
+        use crate::protocol::{LayoutEntry, PaneTree, WinLayout};
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Store::at(tmp.path()).unwrap();
+        let entry = |t: &str| LayoutEntry {
+            pr: None,
+            cli: CliKind::Shell,
+            session_id: None,
+            cwd: None,
+            title: t.into(),
+        };
+        let layout = Layout {
+            entries: vec![entry("a"), entry("b")],
+            active: Some(1),
+            windows: vec![WinLayout {
+                tree: PaneTree::Split {
+                    dir: "row".into(),
+                    ratio: 0.7,
+                    a: Box::new(PaneTree::Leaf { i: 0 }),
+                    b: Box::new(PaneTree::Leaf { i: 1 }),
+                },
+                focus: 1,
+                root: 0,
+            }],
+        };
+        s.write_layout(&layout).unwrap();
+        let got = s.read_layout();
+        assert_eq!(got.entries.len(), 2);
+        assert_eq!(got.active, Some(1));
+        assert_eq!(got.windows.len(), 1);
+        match &got.windows[0].tree {
+            PaneTree::Split { dir, ratio, a, b } => {
+                assert_eq!(dir, "row");
+                assert!((ratio - 0.7).abs() < 1e-9);
+                assert!(matches!(**a, PaneTree::Leaf { i: 0 }));
+                assert!(matches!(**b, PaneTree::Leaf { i: 1 }));
+            }
+            _ => panic!("expected a split at the window root"),
+        }
+        assert_eq!(got.windows[0].focus, 1);
+        assert_eq!(got.windows[0].root, 0);
+    }
+
+    #[test]
+    fn legacy_flat_layout_reads_with_empty_windows() {
+        // A pre-tiling layout.json (no `windows` key) must still deserialize.
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Store::at(tmp.path()).unwrap();
+        fs::write(
+            s.layout_path(),
+            br#"{"entries":[{"pr":null,"cli":"shell","title":"x"}],"active":0}"#,
+        )
+        .unwrap();
+        let got = s.read_layout();
+        assert_eq!(got.entries.len(), 1);
+        assert!(got.windows.is_empty(), "missing windows → flat restore");
+    }
 }

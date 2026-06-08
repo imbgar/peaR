@@ -19,8 +19,8 @@ use crate::dispatch;
 use crate::error::Result;
 use crate::github::GitHub;
 use crate::protocol::{
-    CliKind, Command, Event, Layout, LayoutEntry, PanelPayload, PrRef, ReviewButton, ReviewTier,
-    TabId,
+    CliKind, Command, Event, Layout, LayoutEntry, PaneTree, PanelPayload, PrRef, ReviewButton,
+    ReviewTier, TabId, WinLayout,
 };
 use crate::session::{EventSink, Session};
 use crate::store::Store;
@@ -244,7 +244,7 @@ impl Engine {
             Command::LoadRepoTree { tab } => self.load_repo_tree(tab),
             Command::WatchBrain { tab } => self.watch_brain(tab),
             Command::StopBrain { tab } => self.stop_brain(tab),
-            Command::SaveLayout { active } => self.persist_layout(active),
+            Command::SaveLayout { active, windows } => self.persist_layout_with(active, windows),
             Command::LoadLayout { restore } => self.load_layout(restore),
             Command::ClearLayout => {
                 let _ = self.store.clear_layout();
@@ -619,7 +619,67 @@ impl Engine {
                 .filter(|id| self.tabs.contains_key(id))
                 .position(|&id| id == a)
         });
-        let _ = self.store.write_layout(&Layout { entries, active });
+        let _ = self.store.write_layout(&Layout {
+            entries,
+            active,
+            windows: vec![],
+        });
+    }
+
+    /// Persist the layout WITH the frontend's tile structure. The trees arrive with live
+    /// `TabId`s as leaves; we order the entries by the trees' flattened leaf order, remap the
+    /// trees to entry indices, and store both. A `None` tree falls back to the flat write.
+    fn persist_layout_with(&self, active: Option<TabId>, windows: Option<Vec<WinLayout>>) {
+        let Some(wins) = windows else {
+            return self.persist_layout(active);
+        };
+        // Flattened leaf order across windows (left-to-right), keeping only live tabs.
+        let mut order: Vec<TabId> = Vec::new();
+        for w in &wins {
+            collect_leaves(&w.tree, &mut order);
+        }
+        order.retain(|id| self.tabs.contains_key(id));
+        // Safety net: append any live tab the trees forgot (shouldn't happen) so no session is lost.
+        for id in &self.order {
+            if self.tabs.contains_key(id) && !order.contains(id) {
+                order.push(*id);
+            }
+        }
+        let index_of: std::collections::HashMap<TabId, u64> = order
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (*id, i as u64))
+            .collect();
+        let entries: Vec<LayoutEntry> = order
+            .iter()
+            .filter_map(|id| self.tabs.get(id))
+            .map(|t| LayoutEntry {
+                pr: t.pr.clone(),
+                cli: t.cli,
+                session_id: t.session_id.clone(),
+                cwd: self.live_cwd(t),
+                title: t.title.clone(),
+            })
+            .collect();
+        // Remap each window's tree from TabIds → entry indices, dropping any leaf whose tab died
+        // (collapsing its split, mirroring the frontend's removeLeaf).
+        let windows: Vec<WinLayout> = wins
+            .iter()
+            .filter_map(|w| {
+                let tree = remap_tree(&w.tree, &index_of)?;
+                Some(WinLayout {
+                    tree,
+                    focus: index_of.get(&w.focus).copied().unwrap_or(0),
+                    root: index_of.get(&w.root).copied().unwrap_or(0),
+                })
+            })
+            .collect();
+        let active = active.and_then(|a| index_of.get(&a).map(|i| *i as usize));
+        let _ = self.store.write_layout(&Layout {
+            entries,
+            active,
+            windows,
+        });
     }
 
     /// Restore the persisted layout — but only on a FRESH engine. If tabs are already open
@@ -648,7 +708,18 @@ impl Engine {
             return;
         }
         if restore {
-            for e in self.store.read_layout().entries {
+            let layout = self.store.read_layout();
+            // Hand the frontend the saved tile structure BEFORE the TabOpened burst, so it can
+            // rebuild windows/panes by mapping the Nth restored tab to entry index N. We open
+            // entries in their stored order (which is the trees' flattened leaf order), so that
+            // mapping holds. Empty `windows` → the frontend falls back to one window per tab.
+            if !layout.windows.is_empty() {
+                self.emit(Event::LayoutRestore {
+                    windows: layout.windows.clone(),
+                    active: layout.active,
+                });
+            }
+            for e in layout.entries {
                 self.open(e.pr, e.cli, e.cwd, false, e.session_id);
             }
         }
@@ -1079,4 +1150,39 @@ fn now_file_stamp() -> String {
     OffsetDateTime::now_utc()
         .format(&fmt)
         .unwrap_or_else(|_| "review".into())
+}
+
+/// Collect a pane tree's leaf ids (left-to-right) — used to order entries by tile layout.
+fn collect_leaves(tree: &PaneTree, out: &mut Vec<TabId>) {
+    match tree {
+        PaneTree::Leaf { i } => out.push(*i),
+        PaneTree::Split { a, b, .. } => {
+            collect_leaves(a, out);
+            collect_leaves(b, out);
+        }
+    }
+}
+
+/// Remap a TabId-keyed pane tree to entry indices via `index_of`. Leaves whose tab is gone
+/// drop out, collapsing their split (mirrors the frontend's `removeLeaf`); a whole-tree miss
+/// returns `None`.
+fn remap_tree(
+    tree: &PaneTree,
+    index_of: &std::collections::HashMap<TabId, u64>,
+) -> Option<PaneTree> {
+    match tree {
+        PaneTree::Leaf { i } => index_of.get(i).map(|&idx| PaneTree::Leaf { i: idx }),
+        PaneTree::Split { dir, ratio, a, b } => {
+            match (remap_tree(a, index_of), remap_tree(b, index_of)) {
+                (Some(a), Some(b)) => Some(PaneTree::Split {
+                    dir: dir.clone(),
+                    ratio: *ratio,
+                    a: Box::new(a),
+                    b: Box::new(b),
+                }),
+                (Some(n), None) | (None, Some(n)) => Some(n),
+                (None, None) => None,
+            }
+        }
+    }
 }

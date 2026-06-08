@@ -45,6 +45,8 @@ import {
   QueueItem,
   ReviewButton,
   ReviewTier,
+  WinLayoutWire,
+  PaneTreeWire,
   parsePrRef,
   shortLabel,
 } from "./protocol";
@@ -234,8 +236,70 @@ function dropOnPane(targetTab: number, zone: DropZone) {
 }
 
 const persistOn = () => localStorage.getItem("pear.persist") !== "0"; // default ON
+function serializeTree(n: PaneNode): PaneTreeWire {
+  return n.kind === "leaf"
+    ? { kind: "leaf", i: n.tab }
+    : { kind: "split", dir: n.dir, ratio: n.ratio, a: serializeTree(n.a), b: serializeTree(n.b) };
+}
 function saveLayout() {
-  if (persistOn()) send({ type: "save_layout", active });
+  if (!persistOn()) return;
+  // Ship the tile structure (leaves = live TabIds) so panes/splits/ratios survive a relaunch.
+  // The engine remaps TabIds → entry indices and orders the saved sessions to match.
+  const wins: WinLayoutWire[] = [...windows.values()].map((w) => ({
+    tree: serializeTree(w.layout),
+    focus: w.focus,
+    root: w.root,
+  }));
+  send({ type: "save_layout", active, windows: wins });
+}
+
+// ── tile restore ──────────────────────────────────────────────────────────────
+// On launch the engine emits `layout_restore` (the saved trees, entry-index based) then
+// re-opens the sessions in entry order. We map the Nth restored `tab_opened` to entry index
+// N, and once every tree leaf has landed, rebuild the windows/panes. Empty trees → flat.
+let restoreState: {
+  windows: WinLayoutWire[];
+  active: number | null;
+  total: number;
+  slots: number[]; // restored TabIds, indexed by entry order
+} | null = null;
+
+function countLeavesWire(n: PaneTreeWire): number {
+  return n.kind === "leaf" ? 1 : countLeavesWire(n.a) + countLeavesWire(n.b);
+}
+/** Rebuild a PaneNode from a saved (index-based) tree, mapping leaf index → restored TabId.
+ *  A missing leaf collapses its split (mirrors removeLeaf); a fully-missing tree returns null. */
+function rebuildTree(n: PaneTreeWire, slots: number[]): PaneNode | null {
+  if (n.kind === "leaf") {
+    const tab = slots[n.i];
+    return tab == null ? null : { kind: "leaf", tab };
+  }
+  const a = rebuildTree(n.a, slots);
+  const b = rebuildTree(n.b, slots);
+  if (!a || !b) return a ?? b;
+  return { kind: "split", dir: n.dir, ratio: n.ratio, a, b };
+}
+function assembleRestore() {
+  const rs = restoreState;
+  restoreState = null;
+  if (!rs) return;
+  for (const w of rs.windows) {
+    const layout = rebuildTree(w.tree, rs.slots);
+    if (!layout) continue;
+    const id = nextWinId++;
+    windows.set(id, {
+      id,
+      layout,
+      focus: rs.slots[w.focus] ?? firstLeaf(layout),
+      root: rs.slots[w.root] ?? firstLeaf(layout),
+    });
+    forEachLeaf(layout, (tab) => paneWin.set(tab, id));
+  }
+  // Any restored tab the trees didn't place (e.g. a safety-appended entry) gets its own window.
+  for (const tab of rs.slots) if (!paneWin.has(tab)) newWindow(tab);
+  const activeTab = (rs.active != null ? rs.slots[rs.active] : undefined) ?? rs.slots[0];
+  if (activeTab != null) setActive(activeTab);
+  renderTabBar();
 }
 
 // Feature flag: the saved-review "Insight" panel (markdown render of a stored review) is
@@ -1309,6 +1373,7 @@ function closeTabView(id: number) {
   }
   renderTabBar();
   renderToolbar();
+  saveLayout(); // a pane/window closed — re-capture the tile structure
 }
 
 // ── pane tree: build / mutate / render ────────────────────────────────────────
@@ -1453,6 +1518,7 @@ function makeGutter(node: Extract<PaneNode, { kind: "split" }>): HTMLElement {
       document.removeEventListener("pointerup", up);
       if (raf) cancelAnimationFrame(raf);
       if (activeWin != null) refitWindow(activeWin); // final exact fit
+      saveLayout(); // persist the new split ratio
     };
     document.addEventListener("pointermove", move);
     document.addEventListener("pointerup", up);
@@ -1538,8 +1604,20 @@ function terminalText(term: Terminal): string {
 // ── event handling ──────────────────────────────────────────────────────────
 function handle(ev: CoreEvent) {
   switch (ev.type) {
+    case "layout_restore": {
+      const total = ev.windows.reduce((n, w) => n + countLeavesWire(w.tree), 0);
+      restoreState = total > 0 ? { windows: ev.windows, active: ev.active, total, slots: [] } : null;
+      break;
+    }
     case "tab_opened": {
       createTabView(ev.tab, ev.title, ev.cli, ev.pr);
+      // Restore in progress: collect this session into its entry slot; rebuild the tile tree
+      // once every saved leaf has landed (no per-tab window/setActive churn).
+      if (restoreState) {
+        restoreState.slots.push(ev.tab);
+        if (restoreState.slots.length >= restoreState.total) assembleRestore();
+        break;
+      }
       // A pending split inserts this session as a pane beside its source; otherwise it's
       // a new top-level window (tabbar pill).
       const ps = pendingSplit;
@@ -1552,6 +1630,7 @@ function handle(ev: CoreEvent) {
         newWindow(ev.tab);
       }
       setActive(ev.tab);
+      saveLayout(); // capture the new tile structure (split / new window)
       setStatus(`opened ${ev.title}`);
       // Auto-review on open (PR tabs only, never a plain shell). We don't fire on a
       // fixed delay (that can race ahead of a not-yet-ready CLI) — instead we wait for

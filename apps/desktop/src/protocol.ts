@@ -170,11 +170,23 @@ export type Command =
   | { type: "load_repo_tree"; tab: number }
   | { type: "watch_brain"; tab: number }
   | { type: "stop_brain"; tab: number }
-  | { type: "save_layout"; active?: number | null }
+  | { type: "save_layout"; active?: number | null; windows?: WinLayoutWire[] }
   | { type: "load_layout"; restore: boolean }
   | { type: "clear_layout" };
 
+/** Serialized pane tree for tile persistence. Leaves carry live TabIds on save (the engine
+ *  remaps them to entry indices); on a restore event they are entry indices. */
+export type PaneTreeWire =
+  | { kind: "leaf"; i: number }
+  | { kind: "split"; dir: "row" | "col"; ratio: number; a: PaneTreeWire; b: PaneTreeWire };
+export interface WinLayoutWire {
+  tree: PaneTreeWire;
+  focus: number;
+  root: number;
+}
+
 export type Event =
+  | { type: "layout_restore"; windows: WinLayoutWire[]; active: number | null }
   | { type: "tab_opened"; tab: number; title: string; pr: PrRef | null; cli: CliKind }
   | { type: "pr_meta"; tab: number; meta: PrMeta }
   | { type: "output"; tab: number; bytes: number[] }
