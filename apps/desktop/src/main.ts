@@ -439,6 +439,7 @@ function assembleRestore() {
   const activeTab = (rs.active != null ? rs.slots[rs.active] : undefined) ?? rs.slots[0];
   if (activeTab != null) setActive(activeTab);
   renderTabBar();
+  saveLayout(); // re-persist the rebuilt tree (the engine's restore opens wrote a flat layout)
 }
 
 // Feature flag: the saved-review "Insight" panel (markdown render of a stored review) is
@@ -2169,6 +2170,14 @@ function handle(ev: CoreEvent) {
     case "layout_restore": {
       const total = ev.windows.reduce((n, w) => n + countLeavesWire(w.tree), 0);
       restoreState = total > 0 ? { windows: ev.windows, active: ev.active, total, slots: [] } : null;
+      // Safety net: if some entry fails to open (fewer tab_opened than expected), assemble with
+      // what arrived after a grace period so the layout never gets stuck mid-restore.
+      if (restoreState) {
+        const rs = restoreState;
+        setTimeout(() => {
+          if (restoreState === rs && rs.slots.length > 0) assembleRestore();
+        }, 5000);
+      }
       break;
     }
     case "tab_opened": {

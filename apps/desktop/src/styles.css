@@ -950,21 +950,20 @@ button:disabled { opacity: 0.38; cursor: default; }
 .pane-split { display: flex; flex: 1 1 0; min-width: 0; min-height: 0; }
 .pane-split.row { flex-direction: row; }
 .pane-split.col { flex-direction: column; }
+/* Invisible divider: an 8px grab strip that straddles the pane boundary but nets ZERO layout
+   space (negative margins cancel its size), so panes sit flush. Only a faint 1px line appears
+   on hover/drag — an overlay, so it never occupies real estate. */
 .pane-gutter {
-  flex: 0 0 6px; background: var(--bd); transition: background 0.12s;
-  position: relative; z-index: 5; touch-action: none; /* reliable pointer-drag in the webview */
+  flex: none; background: transparent; position: relative; z-index: 5; touch-action: none;
 }
-.pane-gutter.row { cursor: col-resize; }
-.pane-gutter.col { cursor: row-resize; }
-.pane-gutter:hover, .pane-gutter.dragging { background: var(--accent-d); }
-/* a subtle grip so the divider is discoverable */
+.pane-gutter.row { width: 8px; margin: 0 -4px; cursor: col-resize; }
+.pane-gutter.col { height: 8px; margin: -4px 0; cursor: row-resize; }
 .pane-gutter::after {
-  content: ""; position: absolute; background: color-mix(in srgb, var(--accent) 55%, transparent);
-  border-radius: 999px; opacity: 0; transition: opacity 0.12s;
+  content: ""; position: absolute; background: var(--accent-d); opacity: 0; transition: opacity 0.12s;
 }
+.pane-gutter.row::after { top: 0; bottom: 0; left: 50%; width: 1px; transform: translateX(-50%); }
+.pane-gutter.col::after { left: 0; right: 0; top: 50%; height: 1px; transform: translateY(-50%); }
 .pane-gutter:hover::after, .pane-gutter.dragging::after { opacity: 1; }
-.pane-gutter.row::after { top: 50%; left: 1px; right: 1px; height: 22px; transform: translateY(-50%); }
-.pane-gutter.col::after { left: 50%; top: 1px; bottom: 1px; width: 22px; transform: translateX(-50%); }
 /* focus ring on the active pane (only when there's more than one) */
 .terminal-host.pane-focus { box-shadow: inset 0 0 0 1px var(--accent-d); border-radius: var(--r-sm); }
 .tab-panes { font-size: 9px; color: var(--dim); margin-left: 5px; }
