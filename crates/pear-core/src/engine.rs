@@ -397,6 +397,14 @@ impl Engine {
                     message: format!("queue move: {e}"),
                 }),
             },
+            Command::QueueSetPriority { pr, on } => {
+                let _ = self.store.queue_set_priority(&pr, on);
+                self.emit_history();
+            }
+            Command::QueueSetFavorite { pr, on } => {
+                let _ = self.store.queue_set_favorite(&pr, on);
+                self.emit_history();
+            }
         }
     }
 

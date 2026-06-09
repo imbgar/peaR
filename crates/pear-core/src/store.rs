@@ -183,7 +183,27 @@ impl Store {
             title: title.to_string(),
             status: "queued".into(),
             added: now.to_string(),
+            priority: false,
+            favorite: false,
         });
+        self.write_queue(&q)
+    }
+
+    /// Toggle a queued PR's priority flag.
+    pub fn queue_set_priority(&self, pr: &PrRef, on: bool) -> Result<()> {
+        let mut q = self.queue();
+        if let Some(item) = q.items.iter_mut().find(|i| &i.pr == pr) {
+            item.priority = on;
+        }
+        self.write_queue(&q)
+    }
+
+    /// Toggle a queued PR's favorite flag.
+    pub fn queue_set_favorite(&self, pr: &PrRef, on: bool) -> Result<()> {
+        let mut q = self.queue();
+        if let Some(item) = q.items.iter_mut().find(|i| &i.pr == pr) {
+            item.favorite = on;
+        }
         self.write_queue(&q)
     }
 

@@ -488,6 +488,14 @@ button:disabled { opacity: 0.38; cursor: default; }
 }
 .queue-item:hover { background: var(--elev); border-color: var(--bd); }
 .queue-status { background: transparent; border: none; cursor: pointer; font-size: 13px; line-height: 1; flex: none; padding: 0; }
+.queue-mark {
+  background: transparent; border: none; cursor: pointer; flex: none; padding: 0 1px;
+  font-size: 11px; line-height: 1; color: var(--faint); opacity: 0.5;
+}
+.queue-mark:hover { opacity: 1; }
+.queue-mark.on { opacity: 1; }
+.queue-mark.on.pri { color: var(--accent); text-shadow: var(--glow); }
+.queue-mark.on.fav { color: var(--accent); }
 .queue-main { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; cursor: pointer; }
 .queue-ref { font-family: var(--font-mono); font-size: 12px; color: var(--accent); text-shadow: var(--glow); }
 .queue-title { color: var(--dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

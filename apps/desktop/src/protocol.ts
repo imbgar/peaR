@@ -109,6 +109,8 @@ export interface QueueItem {
   title: string;
   status: string; // "queued" | "active" | "done"
   added: string;
+  priority?: boolean;
+  favorite?: boolean;
 }
 
 export interface Queue {
@@ -162,6 +164,8 @@ export type Command =
   | { type: "queue_set_status"; pr: PrRef; status: string }
   | { type: "queue_remove"; pr: PrRef }
   | { type: "queue_move"; pr: PrRef; dir: number }
+  | { type: "queue_set_priority"; pr: PrRef; on: boolean }
+  | { type: "queue_set_favorite"; pr: PrRef; on: boolean }
   | { type: "check_skills" }
   | { type: "install_skills" }
   | { type: "load_diff"; tab: number }

@@ -296,6 +296,11 @@ pub struct QueueItem {
     pub status: String,
     #[serde(default)]
     pub added: String, // RFC3339
+    /// Auto-sort rank: priority items float to the top, then favorites, then the rest.
+    #[serde(default)]
+    pub priority: bool,
+    #[serde(default)]
+    pub favorite: bool,
 }
 
 /// The review queue, persisted in the data dir. Order = priority (top = next up).
@@ -473,6 +478,10 @@ pub enum Command {
     QueueRemove { pr: PrRef },
     /// Reorder a queued PR by `dir` (-1 = up/higher priority, +1 = down).
     QueueMove { pr: PrRef, dir: i64 },
+    /// Toggle a queued PR's priority flag (priority floats above favorites in auto-sort).
+    QueueSetPriority { pr: PrRef, on: bool },
+    /// Toggle a queued PR's favorite flag.
+    QueueSetFavorite { pr: PrRef, on: bool },
     /// Report whether the bundled `/pr-*` review skills are installed in
     /// `~/.claude/skills` (replied via `Event::SkillsStatus`).
     CheckSkills,

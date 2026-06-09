@@ -1417,12 +1417,16 @@ const QUEUE_STATUS: Record<string, { icon: string; label: string; cls: string }>
   done: { icon: "✓", label: "done", cls: "q-done" },
 };
 
+// Auto-sort rank: priority floats above favorites floats above the rest. Stable within a
+// rank, so manual ↑/↓ order is preserved among equals.
+const queueRank = (i: QueueItem) => (i.priority ? 2 : 0) + (i.favorite ? 1 : 0);
 function renderQueue() {
   if (queue.items.length === 0) {
     emptyRow("queue is empty — right-click a PR → “Add to queue”");
     return;
   }
-  for (const item of queue.items) historyEl.appendChild(queueItemEl(item));
+  const sorted = [...queue.items].sort((a, b) => queueRank(b) - queueRank(a));
+  for (const item of sorted) historyEl.appendChild(queueItemEl(item));
 }
 
 function cycleQueueStatus(item: QueueItem) {
@@ -1444,6 +1448,26 @@ function queueItemEl(item: QueueItem): HTMLElement {
   dot.onclick = (e) => {
     e.stopPropagation();
     cycleQueueStatus(item);
+  };
+
+  // Click-to-reorg marks: ⚡ priority (floats to top), ★ favorite (above the rest).
+  const pri = document.createElement("button");
+  pri.type = "button";
+  pri.className = "queue-mark" + (item.priority ? " on pri" : "");
+  pri.textContent = "⚡";
+  pri.title = item.priority ? "Priority — click to unset" : "Mark priority";
+  pri.onclick = (e) => {
+    e.stopPropagation();
+    send({ type: "queue_set_priority", pr: item.pr, on: !item.priority });
+  };
+  const favBtn = document.createElement("button");
+  favBtn.type = "button";
+  favBtn.className = "queue-mark" + (item.favorite ? " on fav" : "");
+  favBtn.textContent = "★";
+  favBtn.title = item.favorite ? "Favorite — click to unset" : "Mark favorite";
+  favBtn.onclick = (e) => {
+    e.stopPropagation();
+    send({ type: "queue_set_favorite", pr: item.pr, on: !item.favorite });
   };
 
   const main = document.createElement("div");
@@ -1469,7 +1493,7 @@ function queueItemEl(item: QueueItem): HTMLElement {
   rm.classList.add("hicon-danger");
   actions.appendChild(rm);
 
-  li.append(dot, main, actions);
+  li.append(dot, pri, favBtn, main, actions);
   li.oncontextmenu = (e) => queueContextMenu(e, item);
   return li;
 }
@@ -1477,16 +1501,22 @@ function queueItemEl(item: QueueItem): HTMLElement {
 function queueContextMenu(e: MouseEvent, item: QueueItem) {
   e.preventDefault();
   e.stopPropagation();
-  const fav = isPrFav(item.pr);
   const set = (status: string): CtxItem["on"] => () => send({ type: "queue_set_status", pr: item.pr, status });
   openHistCtx(e.clientX, e.clientY, [
+    {
+      label: item.priority ? "⚡ Unset priority" : "⚡ Mark priority",
+      on: () => send({ type: "queue_set_priority", pr: item.pr, on: !item.priority }),
+    },
+    {
+      label: item.favorite ? "★ Unfavorite" : "☆ Mark favorite",
+      on: () => send({ type: "queue_set_favorite", pr: item.pr, on: !item.favorite }),
+    },
     { label: "👀 Mark in progress", on: set("active") },
     { label: "✓ Mark done", on: set("done") },
     { label: "📋 Mark queued", on: set("queued") },
     { label: "↑ Move up", on: () => send({ type: "queue_move", pr: item.pr, dir: -1 }) },
     { label: "↓ Move down", on: () => send({ type: "queue_move", pr: item.pr, dir: 1 }) },
     { label: "⟲ Open / resume", on: () => openPr(item.pr, "claude") },
-    { label: fav ? "★ Unfavorite" : "☆ Favorite", on: () => favPr(item.pr, !fav) },
     { label: "× Remove from queue", danger: true, on: () => send({ type: "queue_remove", pr: item.pr }) },
   ]);
 }
