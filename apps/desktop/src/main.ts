@@ -27,6 +27,7 @@ import {
   setPendingReview,
   setDiffCloseHandler,
   setApproveHandler,
+  jumpToThread,
   type TreeLevel,
 } from "./diff";
 import {
@@ -44,7 +45,10 @@ import {
   Queue,
   QueueItem,
   ReviewButton,
+  ReviewThread,
   ReviewTier,
+  WinLayoutWire,
+  PaneTreeWire,
   parsePrRef,
   shortLabel,
 } from "./protocol";
@@ -131,9 +135,173 @@ interface TabView {
 const tabs = new Map<number, TabView>();
 let active: number | null = null;
 
+// ── tiling / pane layout ──────────────────────────────────────────────────────
+// A tabbar "tab" is a WINDOW holding a binary tree of panes; each leaf is a session
+// (TabView). A single-leaf window behaves exactly like the old one-terminal-per-tab.
+// Right-click a pane to split it (into a new session via a quick-launch picker); drag a
+// gutter to resize. `active` stays the focused pane/session id.
+type PaneNode =
+  | { kind: "leaf"; tab: number }
+  | { kind: "split"; dir: "row" | "col"; ratio: number; a: PaneNode; b: PaneNode };
+interface Win {
+  id: number;
+  layout: PaneNode;
+  focus: number; // the focused pane/session in this window
+  root: number; // the originating ("parent") session — drives the tabbar pill name (pinned)
+}
+const windows = new Map<number, Win>();
+const paneWin = new Map<number, number>(); // session id → window id
+let activeWin: number | null = null;
+let nextWinId = 1;
+// When a split is requested, the new session is inserted next to `source` once it opens.
+let pendingSplit: { source: number; dir: "row" | "col"; before: boolean } | null = null;
+
+// Drag-to-tile: what a drag is currently carrying. A tabbar pill drags a whole WINDOW
+// (its entire pane subtree); a pane's title bar drags that single PANE out. Dropping onto
+// another pane's edge grafts it in beside the target, splitting on the dropped side.
+type DragPayload = { kind: "win"; winId: number } | { kind: "pane"; tab: number; winId: number };
+let dragPayload: DragPayload | null = null;
+type DropZone = "left" | "right" | "top" | "bottom";
+
+/** The nearest edge of `el` to the cursor → the side to dock onto. */
+function zoneFor(el: HTMLElement, x: number, y: number): DropZone {
+  const r = el.getBoundingClientRect();
+  const fx = (x - r.left) / r.width;
+  const fy = (y - r.top) / r.height;
+  const d: Record<DropZone, number> = { left: fx, right: 1 - fx, top: fy, bottom: 1 - fy };
+  return (Object.keys(d) as DropZone[]).reduce((a, b) => (d[b] < d[a] ? b : a));
+}
+function showDropHint(el: HTMLElement, zone: DropZone) {
+  const hint = el.querySelector<HTMLElement>(".drop-hint");
+  if (hint) hint.className = `drop-hint show ${zone}`;
+}
+function clearDropHint(el: HTMLElement) {
+  el.querySelector<HTMLElement>(".drop-hint")?.classList.remove("show");
+}
+function clearAllDropHints() {
+  document.querySelectorAll<HTMLElement>(".drop-hint.show").forEach((h) => h.classList.remove("show"));
+}
+
+/** Graft the current drag payload (a window or a single pane) into the target window,
+ *  splitting beside `targetTab` on the dropped edge. Source is detached/emptied. */
+function dropOnPane(targetTab: number, zone: DropZone) {
+  const targetWinId = paneWin.get(targetTab);
+  if (targetWinId == null || !dragPayload) return;
+  const tgt = windows.get(targetWinId);
+  if (!tgt) return;
+
+  let movedLayout: PaneNode;
+  const movedLeaves: number[] = [];
+  let focusAfter: number;
+
+  if (dragPayload.kind === "win") {
+    if (dragPayload.winId === targetWinId) return; // a window dropped onto itself
+    const src = windows.get(dragPayload.winId);
+    if (!src) return;
+    movedLayout = src.layout;
+    focusAfter = src.focus;
+    windows.delete(dragPayload.winId);
+  } else {
+    if (dragPayload.tab === targetTab) return; // a pane onto itself
+    const src = windows.get(dragPayload.winId);
+    if (!src) return;
+    movedLayout = { kind: "leaf", tab: dragPayload.tab };
+    focusAfter = dragPayload.tab;
+    // Detach the pane from its source window first (so a same-window re-dock works on the
+    // already-updated tree). If that empties the source window, drop it.
+    const rest = removeLeaf(src.layout, dragPayload.tab);
+    if (!rest) {
+      windows.delete(dragPayload.winId);
+    } else {
+      src.layout = rest;
+      if (src.focus === dragPayload.tab) src.focus = firstLeaf(rest);
+      if (src.root === dragPayload.tab) src.root = firstLeaf(rest);
+    }
+  }
+  forEachLeaf(movedLayout, (t) => movedLeaves.push(t));
+
+  const dir: "row" | "col" = zone === "left" || zone === "right" ? "row" : "col";
+  const before = zone === "left" || zone === "top";
+  tgt.layout = replaceLeaf(tgt.layout, targetTab, (leaf) => ({
+    kind: "split",
+    dir,
+    ratio: 0.5,
+    a: before ? movedLayout : leaf,
+    b: before ? leaf : movedLayout,
+  }));
+  for (const t of movedLeaves) paneWin.set(t, targetWinId);
+  tgt.focus = focusAfter;
+  dragPayload = null;
+  clearAllDropHints();
+  setActive(focusAfter); // renders the target window, refits, rebuilds the tabbar
+  saveLayout();
+}
+
 const persistOn = () => localStorage.getItem("pear.persist") !== "0"; // default ON
+function serializeTree(n: PaneNode): PaneTreeWire {
+  return n.kind === "leaf"
+    ? { kind: "leaf", i: n.tab }
+    : { kind: "split", dir: n.dir, ratio: n.ratio, a: serializeTree(n.a), b: serializeTree(n.b) };
+}
 function saveLayout() {
-  if (persistOn()) send({ type: "save_layout", active });
+  if (!persistOn()) return;
+  // Ship the tile structure (leaves = live TabIds) so panes/splits/ratios survive a relaunch.
+  // The engine remaps TabIds → entry indices and orders the saved sessions to match.
+  const wins: WinLayoutWire[] = [...windows.values()].map((w) => ({
+    tree: serializeTree(w.layout),
+    focus: w.focus,
+    root: w.root,
+  }));
+  send({ type: "save_layout", active, windows: wins });
+}
+
+// ── tile restore ──────────────────────────────────────────────────────────────
+// On launch the engine emits `layout_restore` (the saved trees, entry-index based) then
+// re-opens the sessions in entry order. We map the Nth restored `tab_opened` to entry index
+// N, and once every tree leaf has landed, rebuild the windows/panes. Empty trees → flat.
+let restoreState: {
+  windows: WinLayoutWire[];
+  active: number | null;
+  total: number;
+  slots: number[]; // restored TabIds, indexed by entry order
+} | null = null;
+
+function countLeavesWire(n: PaneTreeWire): number {
+  return n.kind === "leaf" ? 1 : countLeavesWire(n.a) + countLeavesWire(n.b);
+}
+/** Rebuild a PaneNode from a saved (index-based) tree, mapping leaf index → restored TabId.
+ *  A missing leaf collapses its split (mirrors removeLeaf); a fully-missing tree returns null. */
+function rebuildTree(n: PaneTreeWire, slots: number[]): PaneNode | null {
+  if (n.kind === "leaf") {
+    const tab = slots[n.i];
+    return tab == null ? null : { kind: "leaf", tab };
+  }
+  const a = rebuildTree(n.a, slots);
+  const b = rebuildTree(n.b, slots);
+  if (!a || !b) return a ?? b;
+  return { kind: "split", dir: n.dir, ratio: n.ratio, a, b };
+}
+function assembleRestore() {
+  const rs = restoreState;
+  restoreState = null;
+  if (!rs) return;
+  for (const w of rs.windows) {
+    const layout = rebuildTree(w.tree, rs.slots);
+    if (!layout) continue;
+    const id = nextWinId++;
+    windows.set(id, {
+      id,
+      layout,
+      focus: rs.slots[w.focus] ?? firstLeaf(layout),
+      root: rs.slots[w.root] ?? firstLeaf(layout),
+    });
+    forEachLeaf(layout, (tab) => paneWin.set(tab, id));
+  }
+  // Any restored tab the trees didn't place (e.g. a safety-appended entry) gets its own window.
+  for (const tab of rs.slots) if (!paneWin.has(tab)) newWindow(tab);
+  const activeTab = (rs.active != null ? rs.slots[rs.active] : undefined) ?? rs.slots[0];
+  if (activeTab != null) setActive(activeTab);
+  renderTabBar();
 }
 
 // Feature flag: the saved-review "Insight" panel (markdown render of a stored review) is
@@ -215,9 +383,14 @@ function setStatus(msg: string, warn = false) {
 
 function renderTabBar() {
   tabbarEl.innerHTML = "";
-  for (const t of tabs.values()) {
+  for (const w of windows.values()) {
+    const paneCount = countLeaves(w.layout);
+    // The pill name is PINNED to the window's parent (root) session, not the focused pane,
+    // so clicking a subshell pane doesn't rename the tab.
+    const t = tabs.get(w.root) ?? tabs.get(firstLeaf(w.layout));
+    if (!t) continue;
     const pill = document.createElement("div");
-    pill.className = "tab" + (t.id === active ? " active" : "");
+    pill.className = "tab" + (w.id === activeWin ? " active" : "");
     pill.title = t.subtitle || t.title;
 
     const dot = document.createElement("span");
@@ -229,19 +402,41 @@ function renderTabBar() {
     label.textContent = t.title;
     pill.appendChild(label);
 
+    if (paneCount > 1) {
+      const badge = document.createElement("span");
+      badge.className = "tab-panes";
+      badge.textContent = `⊞${paneCount}`;
+      badge.title = `${paneCount} panes`;
+      pill.appendChild(badge);
+    }
+
     const close = document.createElement("button");
     close.className = "tab-close";
     close.textContent = "×";
     close.onclick = (e) => {
       e.stopPropagation();
-      send({ type: "close_tab", tab: t.id });
+      // Close the whole window (every pane in it).
+      forEachLeaf(w.layout, (tab) => send({ type: "close_tab", tab }));
     };
     pill.appendChild(close);
 
-    pill.onclick = () => setActive(t.id);
+    pill.onclick = () => setActive(w.focus);
+    // Drag the pill to tile this whole window into another pane (see dropOnPane).
+    pill.draggable = true;
+    pill.addEventListener("dragstart", (e) => {
+      dragPayload = { kind: "win", winId: w.id };
+      pill.classList.add("dragging");
+      e.dataTransfer?.setData("text/plain", `win:${w.id}`);
+      if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+    });
+    pill.addEventListener("dragend", () => {
+      pill.classList.remove("dragging");
+      dragPayload = null;
+      clearAllDropHints();
+    });
     tabbarEl.appendChild(pill);
   }
-  if (tabs.size === 0) {
+  if (windows.size === 0) {
     const empty = document.createElement("div");
     empty.className = "tab-empty";
     empty.textContent = "no open tabs — open a PR or a shell from the left";
@@ -921,10 +1116,14 @@ function openHistCtx(x: number, y: number, items: CtxItem[]) {
     b.type = "button";
     b.className = "hist-ctx-item" + (it.danger ? " danger" : "");
     b.textContent = it.label;
-    b.onclick = () => {
+    // stopPropagation so this click doesn't reach the document close-handler — important for
+    // two-step menus (split → quick-launch) that rebuild #hist-ctx in place: the handler would
+    // otherwise see the now-detached button as "outside" and close the freshly-opened menu.
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
       closeHistCtx();
       it.on();
-    };
+    });
     ctx.appendChild(b);
   }
   ctx.classList.remove("hidden");
@@ -1017,6 +1216,51 @@ function addFavRef(v: string) {
 function createTabView(id: number, title: string, cli: CliKind, pr: PrRef | null): TabView {
   const el = document.createElement("div");
   el.className = "terminal-host hidden";
+  // A very thin secondary-color title bar naming this pane (shown only when tiled, so a
+  // solo terminal stays clean). It overlays the host's top padding — see .pane-title CSS.
+  const titleBar = document.createElement("div");
+  titleBar.className = "pane-title";
+  // Drag the title bar to pull this single pane out into another pane (or window).
+  titleBar.draggable = true;
+  titleBar.addEventListener("dragstart", (e) => {
+    e.stopPropagation();
+    const winId = paneWin.get(id);
+    if (winId == null) return;
+    dragPayload = { kind: "pane", tab: id, winId };
+    el.classList.add("dragging");
+    e.dataTransfer?.setData("text/plain", `pane:${id}`);
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+  });
+  titleBar.addEventListener("dragend", () => {
+    el.classList.remove("dragging");
+    dragPayload = null;
+    clearAllDropHints();
+  });
+  el.appendChild(titleBar);
+  // A translucent edge highlight shown while a drag hovers this pane (the drop target).
+  const dropHint = document.createElement("div");
+  dropHint.className = "drop-hint";
+  el.appendChild(dropHint);
+  // Focus this pane on click; right-click to split / close it.
+  el.addEventListener("mousedown", () => focusPane(id), true);
+  el.addEventListener("contextmenu", (e) => paneContextMenu(e, id));
+  // Drop target: accept a dragged window/pane, previewing the dock edge under the cursor.
+  el.addEventListener("dragover", (e) => {
+    if (!dragPayload) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    showDropHint(el, zoneFor(el, e.clientX, e.clientY));
+  });
+  el.addEventListener("dragleave", (e) => {
+    if (!el.contains(e.relatedTarget as Node)) clearDropHint(el);
+  });
+  el.addEventListener("drop", (e) => {
+    if (!dragPayload) return;
+    e.preventDefault();
+    const zone = zoneFor(el, e.clientX, e.clientY);
+    clearDropHint(el);
+    dropOnPane(id, zone);
+  });
   terminalsEl.appendChild(el);
 
   const term = new Terminal({
@@ -1056,8 +1300,13 @@ function createTabView(id: number, title: string, cli: CliKind, pr: PrRef | null
 
 function setActive(id: number) {
   active = id;
-  for (const t of tabs.values()) {
-    t.el.classList.toggle("hidden", t.id !== id);
+  // Render the window this pane belongs to (its full split tree); other windows hide.
+  const winId = paneWin.get(id);
+  if (winId != null) {
+    activeWin = winId;
+    const w = windows.get(winId);
+    if (w) w.focus = id;
+    renderWindow(winId);
   }
   const v = tabs.get(id);
   if (v) {
@@ -1089,13 +1338,257 @@ function closeTabView(id: number) {
     v.el.remove();
     tabs.delete(id);
   }
+  // Remove the pane from its window's layout (collapsing the split). If the window is now
+  // empty, drop it; otherwise focus a surviving pane in it.
+  const winId = paneWin.get(id);
+  paneWin.delete(id);
+  let nextFocus: number | null = null;
+  if (winId != null) {
+    const w = windows.get(winId);
+    if (w) {
+      const layout = removeLeaf(w.layout, id);
+      if (!layout) {
+        windows.delete(winId);
+      } else {
+        w.layout = layout;
+        if (w.focus === id) w.focus = firstLeaf(layout);
+        // If the parent pane closed, re-pin the pill name to a surviving pane.
+        if (w.root === id) w.root = firstLeaf(layout);
+        nextFocus = w.focus;
+      }
+    }
+  }
   if (active === id) {
     active = null;
-    const next = tabs.keys().next();
-    if (!next.done) setActive(next.value);
+    // Prefer another pane in the same window, else any other window's focus.
+    if (nextFocus != null) setActive(nextFocus);
+    else {
+      const otherWin = windows.values().next();
+      if (!otherWin.done) setActive(otherWin.value.focus);
+      else {
+        activeWin = null;
+        terminalsEl.replaceChildren();
+      }
+    }
+  } else if (winId === activeWin) {
+    renderWindow(winId); // a non-focused pane in the active window closed → re-tile
   }
   renderTabBar();
   renderToolbar();
+  saveLayout(); // a pane/window closed — re-capture the tile structure
+}
+
+// ── pane tree: build / mutate / render ────────────────────────────────────────
+function newWindow(tab: number): number {
+  const id = nextWinId++;
+  windows.set(id, { id, layout: { kind: "leaf", tab }, focus: tab, root: tab });
+  paneWin.set(tab, id);
+  return id;
+}
+
+function forEachLeaf(node: PaneNode, fn: (tab: number) => void) {
+  if (node.kind === "leaf") fn(node.tab);
+  else {
+    forEachLeaf(node.a, fn);
+    forEachLeaf(node.b, fn);
+  }
+}
+function firstLeaf(node: PaneNode): number {
+  return node.kind === "leaf" ? node.tab : firstLeaf(node.a);
+}
+function countLeaves(node: PaneNode): number {
+  return node.kind === "leaf" ? 1 : countLeaves(node.a) + countLeaves(node.b);
+}
+function replaceLeaf(node: PaneNode, tab: number, fn: (leaf: PaneNode) => PaneNode): PaneNode {
+  if (node.kind === "leaf") return node.tab === tab ? fn(node) : node;
+  return { ...node, a: replaceLeaf(node.a, tab, fn), b: replaceLeaf(node.b, tab, fn) };
+}
+function removeLeaf(node: PaneNode, tab: number): PaneNode | null {
+  if (node.kind === "leaf") return node.tab === tab ? null : node;
+  const a = removeLeaf(node.a, tab);
+  const b = removeLeaf(node.b, tab);
+  if (!a) return b;
+  if (!b) return a;
+  return { ...node, a, b };
+}
+
+/** Insert `newTab` next to `source` in its window, splitting along `dir`. */
+function insertPane(win: Win, source: number, newTab: number, dir: "row" | "col", before: boolean) {
+  win.layout = replaceLeaf(win.layout, source, (leaf) => {
+    const sib: PaneNode = { kind: "leaf", tab: newTab };
+    return { kind: "split", dir, ratio: 0.5, a: before ? sib : leaf, b: before ? leaf : sib };
+  });
+  paneWin.set(newTab, win.id);
+}
+
+/** Re-render the active window's pane tree into #terminals (hosts are moved, not recreated). */
+function renderWindow(winId: number) {
+  const w = windows.get(winId);
+  if (!w) {
+    terminalsEl.replaceChildren();
+    return;
+  }
+  for (const t of tabs.values()) t.el.classList.add("hidden");
+  terminalsEl.replaceChildren(buildPaneDom(w.layout, w));
+  forEachLeaf(w.layout, (tab) => tabs.get(tab)?.el.classList.remove("hidden"));
+  requestAnimationFrame(() => refitWindow(winId));
+}
+
+function buildPaneDom(node: PaneNode, w: Win): HTMLElement {
+  if (node.kind === "leaf") {
+    const v = tabs.get(node.tab);
+    if (!v) return document.createElement("div");
+    const multi = hasSibling(w.layout);
+    v.el.classList.toggle("pane-focus", node.tab === w.focus && multi);
+    v.el.classList.toggle("show-title", multi);
+    v.el.style.flex = "1 1 0";
+    v.el.dataset.pane = String(node.tab);
+    // Thin title bar: only shown when tiled. Marks the parent (root) pane.
+    const title = v.el.querySelector<HTMLElement>(".pane-title");
+    if (title) {
+      title.textContent = v.title + (node.tab === w.root ? "  ·  parent" : "");
+      title.classList.toggle("is-root", node.tab === w.root);
+    }
+    return v.el;
+  }
+  const split = document.createElement("div");
+  split.className = `pane-split ${node.dir}`;
+  const a = buildPaneDom(node.a, w);
+  const b = buildPaneDom(node.b, w);
+  a.style.flex = `${node.ratio} 1 0`;
+  b.style.flex = `${1 - node.ratio} 1 0`;
+  split.append(a, makeGutter(node), b);
+  return split;
+}
+
+/** Whether the layout has more than one pane (drives the focus ring — hidden when solo). */
+function hasSibling(node: PaneNode): boolean {
+  return node.kind === "split";
+}
+
+/** Fit every terminal whose host lives within `root` (used for live resize during a drag). */
+function fitLeavesIn(root: HTMLElement) {
+  const hosts = root.classList.contains("terminal-host")
+    ? [root]
+    : Array.from(root.querySelectorAll<HTMLElement>(".terminal-host"));
+  for (const host of hosts) {
+    const id = Number(host.dataset.pane);
+    const v = tabs.get(id);
+    if (v) {
+      try {
+        v.fit.fit();
+      } catch {
+        /* mid-layout */
+      }
+    }
+  }
+}
+
+function makeGutter(node: Extract<PaneNode, { kind: "split" }>): HTMLElement {
+  const g = document.createElement("div");
+  g.className = `pane-gutter ${node.dir}`;
+  g.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    const split = g.parentElement;
+    if (!split) return;
+    const rect = split.getBoundingClientRect();
+    const horiz = node.dir === "row";
+    const a = split.children[0] as HTMLElement;
+    const b = split.children[2] as HTMLElement;
+    // Re-fit the panes live as the divider moves so terminal contents reflow during the
+    // drag (not just on release). Coalesce to one fit per animation frame to stay smooth.
+    let raf = 0;
+    const fitSoon = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        fitLeavesIn(a);
+        fitLeavesIn(b);
+      });
+    };
+    const move = (ev: PointerEvent) => {
+      const pos = horiz
+        ? (ev.clientX - rect.left) / rect.width
+        : (ev.clientY - rect.top) / rect.height;
+      node.ratio = Math.min(0.85, Math.max(0.15, pos));
+      a.style.flex = `${node.ratio} 1 0`;
+      b.style.flex = `${1 - node.ratio} 1 0`;
+      fitSoon();
+    };
+    const up = () => {
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", up);
+      if (raf) cancelAnimationFrame(raf);
+      if (activeWin != null) refitWindow(activeWin); // final exact fit
+      saveLayout(); // persist the new split ratio
+    };
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", up);
+  });
+  return g;
+}
+
+function refitWindow(winId: number) {
+  const w = windows.get(winId);
+  if (!w) return;
+  forEachLeaf(w.layout, (tab) => {
+    const v = tabs.get(tab);
+    if (v) {
+      try {
+        v.fit.fit();
+      } catch {
+        /* host not yet laid out */
+      }
+    }
+  });
+}
+
+/** Focus a pane (lightweight — just the ring + xterm focus, no full window rebuild). */
+function focusPane(tab: number) {
+  if (active === tab) return;
+  setActive(tab);
+}
+
+// ── pane context menu + quick-launch picker ───────────────────────────────────
+const PANE_LAUNCH: { label: string; cli: CliKind }[] = [
+  { label: "＋ New shell", cli: "shell" },
+  { label: "✦ Claude", cli: "claude" },
+  { label: "◆ Codex", cli: "codex" },
+  { label: "⬡ Aider", cli: "aider" },
+];
+
+function paneContextMenu(e: MouseEvent, tab: number) {
+  e.preventDefault();
+  e.stopPropagation();
+  const x = e.clientX;
+  const y = e.clientY;
+  const split = (dir: "row" | "col", before: boolean) => () =>
+    openQuickLaunch(x, y, (cli) => {
+      pendingSplit = { source: tab, dir, before };
+      send({ type: "open_scratch", cli, cwd: null });
+    });
+  const items: CtxItem[] = [
+    { label: "⊟ Split right", on: split("row", false) },
+    { label: "⊟ Split left", on: split("row", true) },
+    { label: "⊟ Split down", on: split("col", false) },
+    { label: "⊟ Split up", on: split("col", true) },
+  ];
+  // Only offer "Close pane" when this is one of several panes (a solo window closes via the tab).
+  const winId = paneWin.get(tab);
+  const w = winId != null ? windows.get(winId) : null;
+  if (w && hasSibling(w.layout)) {
+    items.push({ label: "× Close pane", danger: true, on: () => send({ type: "close_tab", tab }) });
+  }
+  openHistCtx(x, y, items);
+}
+
+/** A small picker of what to launch into a new split (reuses the floating ctx menu). */
+function openQuickLaunch(x: number, y: number, onPick: (cli: CliKind) => void) {
+  openHistCtx(
+    x,
+    y,
+    PANE_LAUNCH.map((l) => ({ label: l.label, on: () => onPick(l.cli) })),
+  );
 }
 
 /** Selection if any, else the full scrollback — used as the saved review artifact. */
@@ -1113,9 +1606,33 @@ function terminalText(term: Terminal): string {
 // ── event handling ──────────────────────────────────────────────────────────
 function handle(ev: CoreEvent) {
   switch (ev.type) {
+    case "layout_restore": {
+      const total = ev.windows.reduce((n, w) => n + countLeavesWire(w.tree), 0);
+      restoreState = total > 0 ? { windows: ev.windows, active: ev.active, total, slots: [] } : null;
+      break;
+    }
     case "tab_opened": {
       createTabView(ev.tab, ev.title, ev.cli, ev.pr);
+      // Restore in progress: collect this session into its entry slot; rebuild the tile tree
+      // once every saved leaf has landed (no per-tab window/setActive churn).
+      if (restoreState) {
+        restoreState.slots.push(ev.tab);
+        if (restoreState.slots.length >= restoreState.total) assembleRestore();
+        break;
+      }
+      // A pending split inserts this session as a pane beside its source; otherwise it's
+      // a new top-level window (tabbar pill).
+      const ps = pendingSplit;
+      const srcWin = ps ? windows.get(paneWin.get(ps.source) ?? -1) : null;
+      if (ps && srcWin) {
+        pendingSplit = null;
+        insertPane(srcWin, ps.source, ev.tab, ps.dir, ps.before);
+      } else {
+        pendingSplit = null;
+        newWindow(ev.tab);
+      }
       setActive(ev.tab);
+      saveLayout(); // capture the new tile structure (split / new window)
       setStatus(`opened ${ev.title}`);
       // Auto-review on open (PR tabs only, never a plain shell). We don't fire on a
       // fixed delay (that can race ahead of a not-yet-ready CLI) — instead we wait for
@@ -1436,7 +1953,85 @@ function initThemePicker() {
 
 // ── insight panel ───────────────────────────────────────────────────────────
 function refitActive() {
-  if (active !== null) tabs.get(active)?.fit.fit();
+  if (activeWin !== null) refitWindow(activeWin);
+  else if (active !== null) tabs.get(active)?.fit.fit();
+}
+
+// ── zoom (⌘+ / ⌘- / ⌘0) — per terminal pane AND per panel surface ─────────────
+const BASE_FONT = 13;
+const MIN_FONT = 8;
+const MAX_FONT = 28;
+/** Adjust the focused pane's terminal font size (a number delta, or "reset" to the base),
+ *  then refit so its rows/cols recompute. Each pane keeps its own zoom (xterm font size). */
+function zoomPane(tab: number, delta: number | "reset") {
+  const v = tabs.get(tab);
+  if (!v) return;
+  const cur = v.term.options.fontSize ?? BASE_FONT;
+  const next =
+    delta === "reset" ? BASE_FONT : Math.min(MAX_FONT, Math.max(MIN_FONT, cur + delta));
+  if (next === cur) return;
+  v.term.options.fontSize = next;
+  try {
+    v.fit.fit(); // recompute cols/rows for the new cell size (also emits a backend resize)
+  } catch {
+    /* host mid-layout */
+  }
+  setStatus(`pane zoom ${next}px${next === BASE_FONT ? " (reset)" : ""}`);
+}
+
+// HTML panels (diff, file viewer, conversation) zoom via CSS `zoom` on their scroll body —
+// content scales and scrolls within the fixed-size panel. Each surface keeps its own level.
+const surfaceZoom = new WeakMap<HTMLElement, number>();
+function zoomSurface(el: HTMLElement, delta: number | "reset", label: string) {
+  const cur = surfaceZoom.get(el) ?? 1;
+  const next =
+    delta === "reset" ? 1 : Math.min(2.4, Math.max(0.6, Math.round((cur + (delta > 0 ? 0.1 : -0.1)) * 100) / 100));
+  if (next === cur) return;
+  surfaceZoom.set(el, next);
+  el.style.zoom = next === 1 ? "" : String(next);
+  setStatus(`${label} zoom ${Math.round(next * 100)}%${next === 1 ? " (reset)" : ""}`);
+}
+
+// Track the cursor so ⌘± zooms whatever surface it's hovering (terminal pane / diff / tree /
+// conversation), GitHub/editor-style, rather than always the focused terminal.
+let lastMouse = { x: 0, y: 0 };
+function trackMouse(e: MouseEvent) {
+  lastMouse = { x: e.clientX, y: e.clientY };
+}
+
+/** Route a zoom step to the surface under the cursor; falls back to the focused pane. */
+function applyZoom(delta: number | "reset") {
+  const el = document.elementFromPoint(lastMouse.x, lastMouse.y) as HTMLElement | null;
+  const host = el?.closest<HTMLElement>(".terminal-host");
+  if (host) return zoomPane(Number(host.dataset.pane), delta);
+  if (el?.closest("#diff-tree")) return zoomSurface($("#dtree-body"), delta, "file tree");
+  if (el?.closest("#panel")) return zoomSurface(panelBodyEl, delta, "diff");
+  if (el?.closest("#comments-panel")) return zoomSurface(commentsBodyEl, delta, "conversation");
+  if (active !== null) zoomPane(active, delta);
+}
+
+/** ⌘/Ctrl +/-/0 zooms the surface under the cursor. Capture phase so we beat the webview's
+ *  own zoom and xterm's key handling; ignored when typing in a real input/textarea. */
+function handleZoomKey(e: KeyboardEvent) {
+  if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+  const tgt = e.target;
+  if (
+    tgt instanceof HTMLElement &&
+    !tgt.closest(".xterm") &&
+    (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA")
+  ) {
+    return; // a real form field (e.g. the review popover) — let it type
+  }
+  if (e.key === "=" || e.key === "+") {
+    e.preventDefault();
+    applyZoom(+1);
+  } else if (e.key === "-" || e.key === "_") {
+    e.preventDefault();
+    applyZoom(-1);
+  } else if (e.key === "0") {
+    e.preventDefault();
+    applyZoom("reset");
+  }
 }
 
 function setPanel(open: boolean) {
@@ -1630,11 +2225,16 @@ function renderTreeRail() {
     body.innerHTML = `<div class="dtree-empty">no files</div>`;
     return;
   }
-  body.appendChild(buildTree(files, stats, strip));
+  body.appendChild(buildTree(files, stats, strip, tab));
 }
 
 /** Build a nested folder/file tree, stripping `strip` (a dir prefix) from the displayed root. */
-function buildTree(files: string[], stats: Map<string, FStat>, strip: string): HTMLElement {
+function buildTree(
+  files: string[],
+  stats: Map<string, FStat>,
+  strip: string,
+  tab: number,
+): HTMLElement {
   const root: TNode = { name: "", full: "", children: new Map(), isFile: false, hasChange: false };
   for (const full of files) {
     const isCh = stats.has(full);
@@ -1662,11 +2262,16 @@ function buildTree(files: string[], stats: Map<string, FStat>, strip: string): H
   }
   const out = document.createElement("div");
   out.className = "dtree-list";
-  renderNodes(root, out, stats);
+  renderNodes(root, out, stats, tab);
   return out;
 }
 
-function renderNodes(node: TNode, container: HTMLElement, stats: Map<string, FStat>) {
+function renderNodes(
+  node: TNode,
+  container: HTMLElement,
+  stats: Map<string, FStat>,
+  tab: number,
+) {
   const kids = [...node.children.values()].sort((a, b) =>
     a.isFile === b.isFile ? a.name.localeCompare(b.name) : a.isFile ? 1 : -1,
   );
@@ -1685,9 +2290,15 @@ function renderNodes(node: TNode, container: HTMLElement, stats: Map<string, FSt
         const meta = document.createElement("span");
         meta.className = "dtree-fstat";
         if (st.comments) {
-          const c = document.createElement("span");
+          const c = document.createElement("button");
+          c.type = "button";
           c.className = "dtree-fc";
           c.textContent = `${st.comments}💬`;
+          c.title = "Show this file's comment threads";
+          c.addEventListener("click", (e) => {
+            e.stopPropagation(); // don't trigger the file jump
+            toggleFileThreads(c, tab, k.full);
+          });
           meta.appendChild(c);
         }
         if (st.adds) {
@@ -1733,7 +2344,7 @@ function renderNodes(node: TNode, container: HTMLElement, stats: Map<string, FSt
         head.classList.toggle("collapsed", c);
       });
       folder.append(head, childWrap);
-      renderNodes(k, childWrap, stats);
+      renderNodes(k, childWrap, stats, tab);
       container.appendChild(folder);
     }
   }
@@ -1808,7 +2419,7 @@ const REVIEW_EVENTS: { id: ReviewEvent; label: string; hint: string }[] = [
 /** Open the GitHub-style "Review changes" popup for the active PR tab. If the viewer has
  *  a pending review (queued inline comments) it's submitted with the chosen verdict;
  *  otherwise a fresh review is created + submitted in one shot. */
-function openReviewModal(defaultEvent: ReviewEvent = "APPROVE") {
+function openReviewModal(defaultEvent: ReviewEvent = "APPROVE", anchor?: HTMLElement) {
   if (active === null) return;
   const v = tabs.get(active);
   if (!v?.pr) {
@@ -1819,10 +2430,12 @@ function openReviewModal(defaultEvent: ReviewEvent = "APPROVE") {
   ensureComments(tab); // make sure we learn any pending-review id
   let chosen: ReviewEvent = defaultEvent;
 
-  const overlay = document.createElement("div");
-  overlay.className = "modal";
-  overlay.innerHTML = `
-    <div class="modal-card review-card">
+  // A small popover anchored to the Review button (GitHub-style), not a centered modal.
+  const scrim = document.createElement("div");
+  scrim.className = "pop-scrim";
+  scrim.innerHTML = `
+    <div class="pop-caret"></div>
+    <div class="modal-card review-card pop-card" role="dialog">
       <div class="modal-head">
         <span class="modal-title"></span>
         <button class="modal-x close-x" title="Close (Esc)">×</button>
@@ -1837,11 +2450,13 @@ function openReviewModal(defaultEvent: ReviewEvent = "APPROVE") {
         <button class="primary rv-submit"></button>
       </div>
     </div>`;
-  overlay.querySelector(".modal-title")!.textContent = `Review ${shortLabel(v.pr)}`;
-  const body = overlay.querySelector<HTMLTextAreaElement>(".rv-body")!;
-  const events = overlay.querySelector<HTMLElement>(".rv-events")!;
-  const hint = overlay.querySelector<HTMLElement>(".rv-hint")!;
-  const submit = overlay.querySelector<HTMLButtonElement>(".rv-submit")!;
+  const card = scrim.querySelector<HTMLElement>(".pop-card")!;
+  const caret = scrim.querySelector<HTMLElement>(".pop-caret")!;
+  scrim.querySelector(".modal-title")!.textContent = `Review ${shortLabel(v.pr)}`;
+  const body = scrim.querySelector<HTMLTextAreaElement>(".rv-body")!;
+  const events = scrim.querySelector<HTMLElement>(".rv-events")!;
+  const hint = scrim.querySelector<HTMLElement>(".rv-hint")!;
+  const submit = scrim.querySelector<HTMLButtonElement>(".rv-submit")!;
 
   const refresh = () => {
     events.querySelectorAll<HTMLButtonElement>(".rv-event").forEach((b) =>
@@ -1867,16 +2482,16 @@ function openReviewModal(defaultEvent: ReviewEvent = "APPROVE") {
   refresh();
 
   const close = () => {
-    overlay.remove();
+    scrim.remove();
     document.removeEventListener("keydown", onKey);
   };
   const onKey = (ev: KeyboardEvent) => {
     if (ev.key === "Escape") close();
   };
   document.addEventListener("keydown", onKey);
-  overlay.querySelector(".modal-x")!.addEventListener("click", close);
-  overlay.addEventListener("click", (ev) => {
-    if (ev.target === overlay) close();
+  scrim.querySelector(".modal-x")!.addEventListener("click", close);
+  scrim.addEventListener("click", (ev) => {
+    if (ev.target === scrim) close();
   });
   submit.addEventListener("click", () => {
     const text = body.value.trim();
@@ -1895,8 +2510,125 @@ function openReviewModal(defaultEvent: ReviewEvent = "APPROVE") {
     setStatus(`submitting review (${chosen.toLowerCase().replace(/_/g, " ")})…`);
     close();
   });
-  document.body.appendChild(overlay);
+  document.body.appendChild(scrim);
+  positionPopover(card, anchor, caret);
   body.focus();
+}
+
+/** Place a popover card (+ optional caret) anchored under (or above) `anchor`, right-aligned
+ *  and clamped to the viewport. With no anchor it falls back to top-centered. */
+function positionPopover(card: HTMLElement, anchor?: HTMLElement, caret?: HTMLElement | null) {
+  const m = 8;
+  const W = card.offsetWidth || 380;
+  const ch = card.offsetHeight;
+  if (!anchor) {
+    card.style.left = `${Math.round((window.innerWidth - W) / 2)}px`;
+    card.style.top = "84px";
+    if (caret) caret.style.display = "none";
+    return;
+  }
+  const r = anchor.getBoundingClientRect();
+  const left = Math.max(m, Math.min(Math.round(r.right - W), window.innerWidth - W - m));
+  let top = Math.round(r.bottom + 8);
+  let below = true;
+  if (top + ch > window.innerHeight - m) {
+    const above = Math.round(r.top - ch - 8);
+    if (above >= m) {
+      top = above;
+      below = false;
+    } else {
+      top = Math.max(m, window.innerHeight - ch - m);
+    }
+  }
+  card.style.left = `${left}px`;
+  card.style.top = `${top}px`;
+  if (caret) {
+    const caretX = Math.max(left + 12, Math.min(r.left + r.width / 2 - 6, left + W - 24));
+    caret.style.left = `${caretX}px`;
+    caret.style.top = `${below ? top - 6 : top + ch - 6}px`;
+    caret.classList.toggle("up", below);
+    caret.classList.toggle("down", !below);
+  }
+}
+
+// ── file-tree per-file thread pane ────────────────────────────────────────────
+// Clicking a file's 💬 count in the tree toggles a small pane listing that file's threads;
+// picking one jumps to it in the diff.
+let fileThreadsScrim: HTMLElement | null = null;
+let fileThreadsFor: HTMLElement | null = null;
+function closeFileThreads() {
+  fileThreadsScrim?.remove();
+  fileThreadsScrim = null;
+  fileThreadsFor = null;
+}
+function toggleFileThreads(anchor: HTMLElement, tab: number, path: string) {
+  if (fileThreadsFor === anchor) return closeFileThreads(); // same bubble → toggle off
+  closeFileThreads();
+  const threads: ReviewThread[] = (commentsCache.get(tab)?.threads ?? []).filter(
+    (t) => t.path === path,
+  );
+  if (!threads.length) return;
+
+  const scrim = document.createElement("div");
+  scrim.className = "pop-scrim";
+  const pane = document.createElement("div");
+  pane.className = "ftp-pane";
+  const head = document.createElement("div");
+  head.className = "ftp-head";
+  const title = document.createElement("span");
+  title.className = "ftp-title";
+  const base = path.split("/").pop() ?? path;
+  title.textContent = `${base} · ${threads.length} thread${threads.length === 1 ? "" : "s"}`;
+  const x = document.createElement("button");
+  x.className = "ftp-x close-x";
+  x.textContent = "×";
+  x.title = "Close";
+  x.addEventListener("click", closeFileThreads);
+  head.append(title, x);
+  pane.appendChild(head);
+
+  const list = document.createElement("div");
+  list.className = "ftp-list";
+  for (const t of threads) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "ftp-item" + (t.is_resolved ? " resolved" : "");
+    const loc = document.createElement("span");
+    loc.className = "ftp-loc";
+    loc.textContent = `L${t.line ?? t.original_line ?? "?"}`;
+    const first = t.comments[0];
+    const meta = document.createElement("span");
+    meta.className = "ftp-meta";
+    const snippet = (first?.body ?? "").replace(/\s+/g, " ").trim().slice(0, 64);
+    meta.textContent = first ? `${first.author}: ${snippet}` : "(empty thread)";
+    item.append(loc, meta);
+    if (t.is_resolved) {
+      const r = document.createElement("span");
+      r.className = "ftp-res";
+      r.textContent = "✓";
+      r.title = "resolved";
+      item.appendChild(r);
+    }
+    item.addEventListener("click", () => {
+      // Jump to the thread in the rendered diff; if it isn't anchored yet, ensure the diff
+      // is showing and retry once.
+      if (!jumpToThread(panelBodyEl, t.id)) {
+        syncDiffToActive();
+        setTimeout(() => jumpToThread(panelBodyEl, t.id), 140);
+      }
+      closeFileThreads();
+    });
+    list.appendChild(item);
+  }
+  pane.appendChild(list);
+  scrim.appendChild(pane);
+  scrim.addEventListener("click", (e) => {
+    if (e.target === scrim) closeFileThreads();
+  });
+  document.body.appendChild(scrim);
+  positionPopover(pane, anchor);
+  fileThreadsScrim = scrim;
+  fileThreadsFor = anchor;
 }
 
 function renderConversation(tab: number) {
@@ -2531,7 +3263,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#panel-load").addEventListener("click", loadPanel);
   $("#diff-btn").addEventListener("click", loadDiff);
   $("#comments-btn").addEventListener("click", loadComments);
-  $("#approve-btn").addEventListener("click", () => openReviewModal("APPROVE"));
+  $("#approve-btn").addEventListener("click", (e) =>
+    openReviewModal("APPROVE", e.currentTarget as HTMLElement),
+  );
   $("#comments-close").addEventListener("click", () => setComments(false));
   // The comment count toggles a pop-out navigator (jump to each conversation comment).
   commentsCountEl.addEventListener("click", () => {
@@ -2592,7 +3326,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#dtree-wider").addEventListener("click", () => setTreeLevel(WIDER[treeLevel]));
   $("#dtree-narrower").addEventListener("click", () => setTreeLevel(NARROWER[treeLevel]));
   $("#dtree-close").addEventListener("click", () => closeTree());
-  setApproveHandler(() => openReviewModal("APPROVE"));
+  setApproveHandler((anchor) => openReviewModal("APPROVE", anchor));
   // Insight is hard-coded off for now — hide its controls (the panel itself is reused
   // by the diff view, so it stays). Flip INSIGHT_ENABLED to bring these back.
   if (!INSIGHT_ENABLED) {
@@ -2614,6 +3348,10 @@ window.addEventListener("DOMContentLoaded", async () => {
     else send({ type: "clear_layout" });
     setStatus(next ? "persist on — these tabs reopen next launch" : "persist off — saved layout cleared");
   });
+  // Zoom: ⌘/Ctrl + +/-/0 resizes whatever surface the cursor is over — a terminal pane or a
+  // panel (diff / file tree / conversation). Capture phase beats the webview's built-in zoom.
+  window.addEventListener("mousemove", trackMouse, true);
+  window.addEventListener("keydown", handleZoomKey, true);
   // Best-effort capture of the latest cwd / focused tab before the window goes away.
   window.addEventListener("beforeunload", saveLayout);
   document.addEventListener("visibilitychange", () => {
@@ -2651,8 +3389,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   const commentsPanelEl = $<HTMLElement>("#comments-panel");
   const diffPanelEl = $<HTMLElement>("#panel");
 
-  // Resizable diff panel (drag the divider on its left). Free drag, but bounded so the
-  // terminal (and the other panel, if open) keep their minimum — no hard width cap.
+  // The divider between conversations and the diff panel. When BOTH are open it trades space
+  // between them — conversations grow as the diff shrinks (terminals stay put), which is what
+  // "drag the conversation↔file-tree divider to resize conversations" means. With only the diff
+  // open it falls back to resizing the diff vs the terminal.
   const savedPanelW = localStorage.getItem("pear.panelW");
   if (savedPanelW) stageEl.style.setProperty("--panel-w", savedPanelW);
   const resizer = $<HTMLElement>("#panel-resizer");
@@ -2660,26 +3400,45 @@ window.addEventListener("DOMContentLoaded", async () => {
     e.preventDefault();
     resizer.setPointerCapture(e.pointerId);
     stageEl.classList.add("resizing");
+    const bothOpen = stageEl.classList.contains("comments-open");
+    const rect = stageEl.getBoundingClientRect();
+    const convLeft = commentsPanelEl.getBoundingClientRect().left; // fixed (terminals don't move)
+    const pair =
+      commentsPanelEl.getBoundingClientRect().width + diffPanelEl.getBoundingClientRect().width;
     const onMove = (ev: PointerEvent) => {
-      const rect = stageEl.getBoundingClientRect();
-      const commentsW = stageEl.classList.contains("comments-open")
-        ? commentsPanelEl.getBoundingClientRect().width
-        : 0;
-      const maxDiff = rect.width - commentsW - 10 - TERMINAL_MIN;
-      const w = Math.min(Math.max(rect.right - ev.clientX, 300), maxDiff);
-      stageEl.style.setProperty("--panel-w", `${Math.round(w)}px`);
+      if (bothOpen) {
+        // Conversation's right edge follows the pointer; the diff panel gives up the space.
+        const hi = Math.max(240, pair - 280); // keep the diff panel ≥ 280
+        const cw = Math.min(Math.max(ev.clientX - convLeft, 240), hi);
+        stageEl.style.setProperty("--comments-w", `${Math.round(cw)}px`);
+        stageEl.style.setProperty("--panel-w", `${Math.round(pair - cw)}px`);
+      } else {
+        const maxDiff = rect.width - 10 - TERMINAL_MIN;
+        const w = Math.min(Math.max(rect.right - ev.clientX, 300), maxDiff);
+        stageEl.style.setProperty("--panel-w", `${Math.round(w)}px`);
+      }
       refitActive();
     };
     const onUp = () => {
       stageEl.classList.remove("resizing");
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
-      const w = stageEl.style.getPropertyValue("--panel-w");
-      if (w) localStorage.setItem("pear.panelW", w);
+      const pw = stageEl.style.getPropertyValue("--panel-w");
+      const cw = stageEl.style.getPropertyValue("--comments-w");
+      if (pw) localStorage.setItem("pear.panelW", pw);
+      if (bothOpen && cw) localStorage.setItem("pear.commentsW", cw);
       refitActive();
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+  });
+  // Double-click resets the conversation panel to its standard width (drops the override →
+  // the CSS default 340px).
+  resizer.addEventListener("dblclick", () => {
+    stageEl.style.removeProperty("--comments-w");
+    localStorage.removeItem("pear.commentsW");
+    refitActive();
+    setStatus("conversation width reset");
   });
 
   // Resizable conversation panel (drag the divider between the terminal and it).
@@ -2714,6 +3473,40 @@ window.addEventListener("DOMContentLoaded", async () => {
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+  });
+
+  // Resizable file tree (drag the divider between the file tree and the diff body). The tree
+  // keeps a minimum so it can't be crushed; leave it where you like and it stays put.
+  const savedTreeW = localStorage.getItem("pear.dtreeW");
+  const diffTreeEl = $<HTMLElement>("#diff-tree");
+  if (savedTreeW) diffTreeEl.style.setProperty("--dtree-w", savedTreeW);
+  const tResizer = $<HTMLElement>("#dtree-resizer");
+  tResizer.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    tResizer.setPointerCapture(e.pointerId);
+    stageEl.classList.add("resizing-tree");
+    const onMove = (ev: PointerEvent) => {
+      const left = diffTreeEl.getBoundingClientRect().left;
+      const panelW = diffPanelEl.getBoundingClientRect().width;
+      const maxTree = Math.max(150, panelW - 200); // always leave room for the diff body
+      const w = Math.min(Math.max(ev.clientX - left, 150), maxTree);
+      diffTreeEl.style.setProperty("--dtree-w", `${Math.round(w)}px`);
+    };
+    const onUp = () => {
+      stageEl.classList.remove("resizing-tree");
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      const w = diffTreeEl.style.getPropertyValue("--dtree-w");
+      if (w) localStorage.setItem("pear.dtreeW", w);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  });
+  // Double-click resets the file tree to its standard width (drops the override → 232px).
+  tResizer.addEventListener("dblclick", () => {
+    diffTreeEl.style.removeProperty("--dtree-w");
+    localStorage.removeItem("pear.dtreeW");
+    setStatus("file tree width reset");
   });
 
   // Theme picker — 6 themes; persisted, restyles terminals live. Deep-link: a

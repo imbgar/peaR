@@ -138,9 +138,10 @@ let onDiffClose: (() => void) | null = null;
 export function setDiffCloseHandler(fn: () => void) {
   onDiffClose = fn;
 }
-let onApprove: (() => void) | null = null;
-/** Wire the diff toolbar's "Review" (approve / request changes) button. */
-export function setApproveHandler(fn: () => void) {
+let onApprove: ((anchor: HTMLElement) => void) | null = null;
+/** Wire the diff toolbar's "Review" (approve / request changes) button. The handler
+ *  receives the button element so the review popover can anchor to it. */
+export function setApproveHandler(fn: (anchor: HTMLElement) => void) {
   onApprove = fn;
 }
 
@@ -187,9 +188,6 @@ function buildThreadList(container: HTMLElement, threads: ReviewThread[]): HTMLE
   head.append(title, close);
   list.appendChild(head);
 
-  const findByThread = (sel: string, id: string) =>
-    [...container.querySelectorAll<HTMLElement>(sel)].find((e) => e.dataset.threadId === id);
-
   for (const t of threads) {
     const item = document.createElement("button");
     item.type = "button";
@@ -204,18 +202,26 @@ function buildThreadList(container: HTMLElement, threads: ReviewThread[]): HTMLE
     const snippet = (first?.body ?? "").replace(/\s+/g, " ").trim().slice(0, 70);
     meta.textContent = first ? `${first.author}: ${snippet}` : "";
     item.append(loc, meta);
-    item.addEventListener("click", () => {
-      const block = findByThread(".diff-thread", t.id);
-      if (!block) return;
-      block.closest(".diff-file")?.classList.remove("collapsed");
-      if (block.classList.contains("hidden")) findByThread(".diff-bubble", t.id)?.click();
-      block.scrollIntoView({ behavior: "smooth", block: "center" });
-      block.classList.add("flash");
-      setTimeout(() => block.classList.remove("flash"), 1100);
-    });
+    item.addEventListener("click", () => jumpToThread(container, t.id));
     list.appendChild(item);
   }
   return list;
+}
+
+/** Scroll a specific inline thread into view within a rendered diff `container`, expanding
+ *  its file + bubble and flashing it. Exported so the file-tree's per-file thread pane can
+ *  jump straight to a thread. No-op if the thread isn't anchored in the current diff. */
+export function jumpToThread(container: HTMLElement, threadId: string): boolean {
+  const find = (sel: string) =>
+    [...container.querySelectorAll<HTMLElement>(sel)].find((e) => e.dataset.threadId === threadId);
+  const block = find(".diff-thread");
+  if (!block) return false;
+  block.closest(".diff-file")?.classList.remove("collapsed");
+  if (block.classList.contains("hidden")) find(".diff-bubble")?.click();
+  block.scrollIntoView({ behavior: "smooth", block: "center" });
+  block.classList.add("flash");
+  setTimeout(() => block.classList.remove("flash"), 1100);
+  return true;
 }
 
 /** The sticky diff toolbar: stats · collapse-all · sort · show +/− · close. */
@@ -320,7 +326,7 @@ function buildDiffToolbar(
     review.className = "dt-review";
     review.textContent = "✓ Review";
     review.title = "Review changes — Approve / Request changes / Comment";
-    review.addEventListener("click", () => onApprove?.());
+    review.addEventListener("click", () => onApprove?.(review));
     bar.appendChild(review);
   }
 
