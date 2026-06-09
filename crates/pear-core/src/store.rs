@@ -16,11 +16,20 @@ pub struct Store {
 
 impl Store {
     /// Resolve the data dir: `PEAR_DATA_DIR` override, else the OS data dir.
+    ///
+    /// Dev builds (`cargo run` / `tauri dev`) use a SEPARATE `pear-dev` dir so a running dev
+    /// copy never clobbers the installed app's session/history/layout (and vice-versa). The
+    /// release DMG (no `debug_assertions`) uses the canonical `pear` dir.
     pub fn discover() -> Result<Store> {
         let root = if let Ok(custom) = std::env::var("PEAR_DATA_DIR") {
             PathBuf::from(custom)
         } else {
-            let dirs = directories::ProjectDirs::from("dev", "pear", "pear")
+            let app = if cfg!(debug_assertions) {
+                "pear-dev"
+            } else {
+                "pear"
+            };
+            let dirs = directories::ProjectDirs::from("dev", "pear", app)
                 .ok_or_else(|| CoreError::Storage("cannot resolve OS data dir".into()))?;
             dirs.data_dir().to_path_buf()
         };
