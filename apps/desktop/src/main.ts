@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Terminal } from "@xterm/xterm";
@@ -3809,6 +3810,13 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   renderTabBar();
   renderToolbar();
+  // Show the running app version in the sidebar brand.
+  getVersion()
+    .then((v) => {
+      const el = document.getElementById("app-version");
+      if (el) el.textContent = `v${v}`;
+    })
+    .catch(() => {});
   send({ type: "load_history" });
   if (historyView === "teams") refreshTeams(); // restore the Teams view on launch
   send({ type: "check_skills" }); // → skills_status; consent modal if /pr-* missing

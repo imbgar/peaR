@@ -313,6 +313,11 @@ html, body {
 }
 [data-theme="instrument"] .brand-mark { filter: none; }
 .brand-name { font-weight: 700; font-size: 16px; letter-spacing: var(--letter); text-shadow: var(--glow); }
+.brand-ver {
+  grid-column: 2; grid-row: 1; justify-self: end; align-self: center;
+  font-family: var(--font-mono); font-size: 9.5px; color: var(--faint);
+  border: 1px solid var(--bd2); border-radius: 999px; padding: 0 6px; line-height: 1.7;
+}
 .brand-sub {
   grid-column: 2;
   color: var(--faint);
