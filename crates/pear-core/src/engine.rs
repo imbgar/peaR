@@ -19,8 +19,8 @@ use crate::dispatch;
 use crate::error::Result;
 use crate::github::GitHub;
 use crate::protocol::{
-    CliKind, Command, Event, Layout, LayoutEntry, PaneTree, PanelPayload, PrRef, ReviewButton,
-    ReviewTier, TabId, WinLayout,
+    CliKind, Command, Event, Layout, LayoutEntry, PaneTree, PanelPayload, PrRef, PrStatus,
+    ReviewButton, ReviewTier, TabId, WinLayout,
 };
 use crate::session::{EventSink, Session};
 use crate::store::Store;
@@ -249,6 +249,23 @@ impl Engine {
             Command::ClearLayout => {
                 let _ = self.store.clear_layout();
             }
+            Command::LoadPrStatuses { prs } => self.load_pr_statuses(prs),
+            Command::LoadWatches => self.emit(Event::Watches {
+                watches: self.store.watches(),
+            }),
+            Command::WatchUser { login, on } => {
+                let _ = self.store.toggle_watch_user(&login, on);
+                self.emit(Event::Watches {
+                    watches: self.store.watches(),
+                });
+            }
+            Command::WatchTeam { org, team, on } => {
+                let _ = self.store.toggle_watch_team(&org, &team, on);
+                self.emit(Event::Watches {
+                    watches: self.store.watches(),
+                });
+            }
+            Command::LoadTeamPrs => self.load_team_prs(),
             Command::CheckSkills => self.emit(Event::SkillsStatus {
                 installed: crate::skills_install::skills_installed(),
             }),
@@ -964,6 +981,58 @@ impl Engine {
         std::thread::spawn(move || {
             let files = git_ls_files(&cwd).unwrap_or_default();
             sink(Event::RepoTree { tab, files });
+        });
+    }
+
+    /// Fetch review/merge status for a batch of PRs on a worker thread (drives the tree
+    /// status widgets). A missing token or fetch error degrades to no badges.
+    fn load_pr_statuses(&mut self, prs: Vec<PrRef>) {
+        if prs.is_empty() {
+            return;
+        }
+        let Some(gh) = self.github() else { return };
+        let sink = self.sink.clone();
+        std::thread::spawn(move || match gh.pr_statuses(&prs) {
+            Ok(statuses) => sink(Event::PrStatuses { statuses }),
+            Err(e) => sink(Event::Notice {
+                tab: None,
+                message: format!("pr status: {e}"),
+            }),
+        });
+    }
+
+    /// Fetch open PRs from every watched user (+ expanded team members) on a worker thread,
+    /// each with status. One search per user (keeps under the search query-length cap).
+    fn load_team_prs(&mut self) {
+        let watches = self.store.watches();
+        let Some(gh) = self.github() else {
+            self.emit(Event::Notice {
+                tab: None,
+                message: "no GitHub token — teams unavailable (run `gh auth login`)".into(),
+            });
+            return;
+        };
+        let sink = self.sink.clone();
+        std::thread::spawn(move || {
+            let mut users = watches.users.clone();
+            for slug in &watches.teams {
+                if let Some((org, team)) = slug.split_once('/') {
+                    if let Ok(members) = gh.team_members(org, team) {
+                        users.extend(members);
+                    }
+                }
+            }
+            users.sort_by_key(|u| u.to_lowercase());
+            users.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+
+            let mut prs: Vec<PrStatus> = Vec::new();
+            for u in &users {
+                let q = format!("is:pr is:open archived:false sort:updated-desc author:{u}");
+                if let Ok(mut found) = gh.search_prs(&q, 30) {
+                    prs.append(&mut found);
+                }
+            }
+            sink(Event::TeamPrs { prs });
         });
     }
 

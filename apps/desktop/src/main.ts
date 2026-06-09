@@ -42,11 +42,13 @@ import {
   PrMeta,
   PrRecord,
   PrRef,
+  PrStatus,
   Queue,
   QueueItem,
   ReviewButton,
   ReviewThread,
   ReviewTier,
+  Watches,
   WinLayoutWire,
   PaneTreeWire,
   parsePrRef,
@@ -643,12 +645,165 @@ function toggleSessionPop(rec: PrRecord, anchor: HTMLElement) {
 let historyEntries: PrRecord[] = [];
 let favorites: Favorites = { repos: [], prs: [] };
 let queue: Queue = { items: [] };
-type HistView = "list" | "tree" | "queue";
+type HistView = "list" | "tree" | "queue" | "teams";
 const savedView = localStorage.getItem("pear.histView");
 let historyView: HistView =
-  savedView === "tree" || savedView === "queue" ? savedView : "list";
+  savedView === "tree" || savedView === "queue" || savedView === "teams" ? savedView : "list";
 let favOnly = localStorage.getItem("pear.favOnly") === "1";
 let histQuery = "";
+
+// ── PR review/merge status (badges in the tree + teams views) ─────────────────
+// Cache live status by "owner/repo#number". Each PR is fetched at most once per session
+// (tracked in `statusRequested`) so re-renders don't loop.
+const prStatusCache = new Map<string, PrStatus>();
+const statusRequested = new Set<string>();
+// Teams view state: watched users/teams + the PRs they authored.
+let watches: Watches = { users: [], teams: [] };
+let teamPrs: PrStatus[] = [];
+const prKey = (pr: PrRef) => `${pr.owner}/${pr.repo}#${pr.number}`;
+function requestStatuses(prs: PrRef[]) {
+  const missing = prs.filter((p) => !statusRequested.has(prKey(p)));
+  if (!missing.length) return;
+  missing.forEach((p) => statusRequested.add(prKey(p)));
+  send({ type: "load_pr_statuses", prs: missing });
+}
+/** Map a PR's status to its tree badge (label · class · tooltip). Covers the user-requested
+ *  states: merged · closed · approved · changes requested · commented (+ draft/open/review). */
+function prStatusBadge(s: PrStatus): { text: string; cls: string; title: string } {
+  if (s.state === "merged") return { text: "merged", cls: "st-merged", title: "Merged" };
+  if (s.state === "closed") return { text: "closed", cls: "st-closed", title: "Closed" };
+  if (s.draft) return { text: "draft", cls: "st-draft", title: "Draft" };
+  if (s.review_decision === "APPROVED")
+    return { text: "approved", cls: "st-approved", title: "Approved" };
+  if (s.review_decision === "CHANGES_REQUESTED")
+    return { text: "changes", cls: "st-changes", title: "Changes requested" };
+  if (s.comments > 0)
+    return { text: `💬${s.comments}`, cls: "st-commented", title: `${s.comments} comment(s)` };
+  if (s.review_decision === "REVIEW_REQUIRED")
+    return { text: "review", cls: "st-review", title: "Review required" };
+  return { text: "open", cls: "st-open", title: "Open" };
+}
+/** Append the live status badge for `pr` to a tree row, if we have it cached. */
+function appendPrStatus(row: HTMLElement, pr: PrRef) {
+  const s = prStatusCache.get(prKey(pr));
+  if (!s) return;
+  const b = prStatusBadge(s);
+  const el = document.createElement("span");
+  el.className = `pr-status ${b.cls}`;
+  el.textContent = b.text;
+  el.title = b.title;
+  row.appendChild(el);
+}
+
+// ── teams view: watched users/teams → USER→REPO→PR ────────────────────────────
+function watchChip(label: string, onRemove: () => void): HTMLElement {
+  const c = document.createElement("span");
+  c.className = "teams-chip";
+  const t = document.createElement("span");
+  t.textContent = label;
+  const x = document.createElement("button");
+  x.type = "button";
+  x.className = "teams-chip-x";
+  x.textContent = "×";
+  x.title = "Unwatch";
+  x.onclick = (e) => {
+    e.stopPropagation();
+    onRemove();
+  };
+  c.append(t, x);
+  return c;
+}
+function teamPrNode(s: PrStatus): HTMLElement {
+  const li = document.createElement("li");
+  li.className = "tree-pr";
+  const row = document.createElement("div");
+  row.className = "tree-row tree-leaf";
+  const name = document.createElement("span");
+  name.className = "tree-name";
+  name.textContent = `#${s.pr.number} · ${s.title}`;
+  row.appendChild(name);
+  appendPrStatus(row, s.pr);
+  row.onclick = (e) => {
+    e.stopPropagation();
+    openPr(s.pr, "claude");
+  };
+  row.oncontextmenu = (e) => prContextMenu(e, s.pr, null);
+  li.appendChild(row);
+  return li;
+}
+function renderTeams() {
+  // Watch-management bar: add a user / org-team, plus removable chips for current watches.
+  const bar = document.createElement("div");
+  bar.className = "teams-bar";
+  const input = document.createElement("input");
+  input.className = "teams-add";
+  input.placeholder = "watch a github user — or org/team …";
+  input.onkeydown = (e) => {
+    if (e.key !== "Enter") return;
+    const v = input.value.trim().replace(/^@/, "");
+    input.value = "";
+    if (!v) return;
+    if (v.includes("/")) {
+      const [org, team] = v.split("/");
+      if (org && team) send({ type: "watch_team", org, team, on: true });
+    } else {
+      send({ type: "watch_user", login: v, on: true });
+    }
+  };
+  bar.appendChild(input);
+  const chips = document.createElement("div");
+  chips.className = "teams-chips";
+  for (const u of watches.users)
+    chips.appendChild(watchChip(`@${u}`, () => send({ type: "watch_user", login: u, on: false })));
+  for (const t of watches.teams)
+    chips.appendChild(
+      watchChip(`⛣ ${t}`, () => {
+        const [org, team] = t.split("/");
+        send({ type: "watch_team", org, team, on: false });
+      }),
+    );
+  bar.appendChild(chips);
+  historyEl.appendChild(bar);
+
+  if (!watches.users.length && !watches.teams.length) {
+    emptyRow("add a github user (or org/team) to watch their open PRs");
+    return;
+  }
+  // Group the watched PRs: USER → owner/repo → PRs.
+  const byUser = new Map<string, Map<string, PrStatus[]>>();
+  for (const s of teamPrs) {
+    const u = byUser.get(s.author) ?? byUser.set(s.author, new Map()).get(s.author)!;
+    const rk = `${s.pr.owner}/${s.pr.repo}`;
+    (u.get(rk) ?? u.set(rk, []).get(rk)!).push(s);
+  }
+  if (byUser.size === 0) {
+    emptyRow("no open PRs from watched users yet");
+    return;
+  }
+  for (const user of [...byUser.keys()].sort((a, b) => a.localeCompare(b))) {
+    const un = treeNode("user", `@${user}`, "");
+    const repos = byUser.get(user)!;
+    for (const rk of [...repos.keys()].sort((a, b) => a.localeCompare(b))) {
+      const repoNode = treeNode("repo", rk, "");
+      for (const s of repos.get(rk)!.sort((a, b) => b.pr.number - a.pr.number))
+        repoNode.children.appendChild(teamPrNode(s));
+      un.children.appendChild(repoNode.el);
+    }
+    historyEl.appendChild(un.el);
+  }
+}
+
+/** (Re)fetch the watch list + the watched users' open PRs for the Teams view. */
+function refreshTeams() {
+  send({ type: "load_watches" });
+  send({ type: "load_team_prs" });
+}
+
+// Notifications hook — armed by the notifications feature; diffs incoming statuses against
+// the last-seen snapshot to surface new comments / commits / review-ready / your-turn.
+function maybeNotifyFromStatuses(_statuses: PrStatus[]) {
+  /* no-op until the notifications feature is enabled */
+}
 
 const samePr = (a: PrRef, b: PrRef) =>
   a.owner === b.owner && a.repo === b.repo && a.number === b.number;
@@ -809,20 +964,27 @@ function renderHistory() {
   $("#view-list").classList.toggle("on", historyView === "list");
   $("#view-tree").classList.toggle("on", historyView === "tree");
   $("#view-queue").classList.toggle("on", historyView === "queue");
+  $("#view-teams")?.classList.toggle("on", historyView === "teams");
   $("#fav-only").classList.toggle("on", favOnly);
   // Queue tab badge: number of items not yet done.
   const pending = queue.items.filter((i) => i.status !== "done").length;
   const qc = $("#queue-count");
   qc.textContent = pending ? String(pending) : "";
   qc.classList.toggle("hidden", pending === 0);
-  // Search + favorites filters apply to history/tree only, not the queue.
-  $("#hist-search").classList.toggle("hidden", historyView === "queue");
-  $("#fav-only").classList.toggle("hidden", historyView === "queue");
-  historyEl.classList.toggle("tree-mode", historyView === "tree");
+  // Search + favorites filters apply to history/tree only, not queue/teams.
+  const noFilter = historyView === "queue" || historyView === "teams";
+  $("#hist-search").classList.toggle("hidden", noFilter);
+  $("#fav-only").classList.toggle("hidden", noFilter);
+  historyEl.classList.toggle("tree-mode", historyView === "tree" || historyView === "teams");
   historyEl.classList.toggle("queue-mode", historyView === "queue");
+  historyEl.classList.toggle("teams-mode", historyView === "teams");
   historyEl.innerHTML = "";
   if (historyView === "queue") {
     renderQueue();
+    return;
+  }
+  if (historyView === "teams") {
+    renderTeams();
     return;
   }
   const entries = visibleEntries();
@@ -1049,10 +1211,12 @@ function renderHistTree(entries: PrRecord[]) {
     }
     historyEl.appendChild(org.el);
   }
+  // Fetch live review/merge status for every PR shown (batched, once per session).
+  requestStatuses(entries.map((r) => r.pr));
 }
 
 function treeNode(
-  kind: "org" | "repo",
+  kind: "org" | "repo" | "user",
   label: string,
   mark: string,
 ): { el: HTMLElement; rowBtn: HTMLElement; children: HTMLElement } {
@@ -1105,6 +1269,7 @@ function treePrNode({ pr, rec }: PrCell): HTMLElement {
     badge.title = `${rec.sessions.length} session(s), ${msgs} messages`;
     row.appendChild(badge);
   }
+  appendPrStatus(row, pr); // live review/merge status badge
   row.onclick = (e) => {
     e.stopPropagation();
     if (rec) toggleSessionPop(rec, li);
@@ -1769,6 +1934,24 @@ function handle(ev: CoreEvent) {
       favorites = ev.favorites ?? { repos: [], prs: [] };
       queue = ev.queue ?? { items: [] };
       renderHistory();
+      break;
+    }
+    case "pr_statuses": {
+      for (const s of ev.statuses) prStatusCache.set(prKey(s.pr), s);
+      maybeNotifyFromStatuses(ev.statuses); // notification diffing (no-op until armed)
+      if (historyView === "tree" || historyView === "teams") renderHistory();
+      break;
+    }
+    case "watches": {
+      watches = ev.watches ?? { users: [], teams: [] };
+      if (historyView === "teams") renderHistory();
+      break;
+    }
+    case "team_prs": {
+      teamPrs = ev.prs;
+      for (const s of ev.prs) prStatusCache.set(prKey(s.pr), s);
+      maybeNotifyFromStatuses(ev.prs);
+      if (historyView === "teams") renderHistory();
       break;
     }
     case "skills_status": {
@@ -3264,11 +3447,13 @@ window.addEventListener("DOMContentLoaded", async () => {
   const setHistView = (v: HistView) => {
     historyView = v;
     localStorage.setItem("pear.histView", v);
+    if (v === "teams") refreshTeams();
     renderHistory();
   };
   $("#view-list").addEventListener("click", () => setHistView("list"));
   $("#view-tree").addEventListener("click", () => setHistView("tree"));
   $("#view-queue").addEventListener("click", () => setHistView("queue"));
+  $("#view-teams")?.addEventListener("click", () => setHistView("teams"));
   $("#fav-only").addEventListener("click", () => {
     favOnly = !favOnly;
     localStorage.setItem("pear.favOnly", favOnly ? "1" : "0");
@@ -3625,6 +3810,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   renderTabBar();
   renderToolbar();
   send({ type: "load_history" });
+  if (historyView === "teams") refreshTeams(); // restore the Teams view on launch
   send({ type: "check_skills" }); // → skills_status; consent modal if /pr-* missing
   // Always sync the engine's tabs into this (possibly reloaded) frontend; the engine only
   // *restores* the saved layout on a genuinely fresh start, so a reload never duplicates.

@@ -8,7 +8,9 @@
 use std::process::Command;
 
 use crate::error::{CoreError, Result};
-use crate::protocol::{Comment, DiffComment, PrComments, PrMeta, PrRef, Reaction, ReviewThread};
+use crate::protocol::{
+    Comment, DiffComment, PrComments, PrMeta, PrRef, PrStatus, Reaction, ReviewThread,
+};
 
 const API: &str = "https://api.github.com";
 const UA: &str = concat!("pear/", env!("CARGO_PKG_VERSION"));
@@ -173,10 +175,11 @@ impl GitHub {
             .unwrap_or_default())
     }
 
-    /// POST a GraphQL query (GitHub's REST surface can't express review-thread
-    /// resolved state or per-comment reaction rollups). Returns the `data` object,
-    /// surfacing transport and GraphQL-level errors.
-    fn graphql(&self, query: &str, variables: serde_json::Value) -> Result<serde_json::Value> {
+    /// POST a GraphQL query and return the raw response (`{ data, errors }`). GitHub's REST
+    /// surface can't express review-thread resolved state or per-comment reaction rollups, so
+    /// several methods go through GraphQL. Errors only on transport / non-2xx HTTP —
+    /// GraphQL-level `errors` are left for the caller (`graphql` vs `graphql_partial`) to decide.
+    fn gql_raw(&self, query: &str, variables: serde_json::Value) -> Result<serde_json::Value> {
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .http_status_as_error(false)
             .build()
@@ -201,6 +204,12 @@ impl GitHub {
                 v.to_string().chars().take(200).collect::<String>()
             )));
         }
+        Ok(v)
+    }
+
+    /// Strict GraphQL: any GraphQL-level error fails the call. Returns the `data` object.
+    fn graphql(&self, query: &str, variables: serde_json::Value) -> Result<serde_json::Value> {
+        let v = self.gql_raw(query, variables)?;
         if let Some(errs) = v.get("errors").and_then(|e| e.as_array()) {
             if !errs.is_empty() {
                 return Err(CoreError::GitHub(format!(
@@ -215,6 +224,17 @@ impl GitHub {
                 )));
             }
         }
+        Ok(v.get("data").cloned().unwrap_or(serde_json::Value::Null))
+    }
+
+    /// Lenient GraphQL: returns whatever `data` came back even if some fields errored (e.g. a
+    /// single inaccessible PR in an aliased batch). Used by `pr_statuses`.
+    fn graphql_partial(
+        &self,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let v = self.gql_raw(query, variables)?;
         Ok(v.get("data").cloned().unwrap_or(serde_json::Value::Null))
     }
 
@@ -438,6 +458,95 @@ impl GitHub {
             })
             .collect())
     }
+
+    /// Review/merge status for a batch of specific PRs, via one aliased GraphQL query per
+    /// chunk. Lenient: an inaccessible PR (deleted/private) is skipped, not fatal.
+    pub fn pr_statuses(&self, prs: &[PrRef]) -> Result<Vec<PrStatus>> {
+        let mut out = Vec::new();
+        for chunk in prs.chunks(40) {
+            let mut q = String::from("query{\n");
+            for (i, pr) in chunk.iter().enumerate() {
+                q.push_str(&format!(
+                    "  p{i}: repository(owner:\"{}\",name:\"{}\"){{ pullRequest(number:{}){{ {} }} }}\n",
+                    gql_str(&pr.owner),
+                    gql_str(&pr.repo),
+                    pr.number,
+                    PR_STATUS_FIELDS
+                ));
+            }
+            q.push('}');
+            let data = self.graphql_partial(&q, serde_json::json!({}))?;
+            for i in 0..chunk.len() {
+                if let Some(s) = parse_pr_status(&data[format!("p{i}")]["pullRequest"]) {
+                    out.push(s);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Search PRs (GitHub search syntax, e.g. `is:pr is:open author:octocat`), returning
+    /// status records. Used by the Teams view to pull watched users' open PRs.
+    pub fn search_prs(&self, query: &str, limit: u32) -> Result<Vec<PrStatus>> {
+        let q = format!(
+            "query($q:String!,$n:Int!){{ search(query:$q,type:ISSUE,first:$n){{ \
+             nodes{{ ... on PullRequest {{ {PR_STATUS_FIELDS} }} }} }} }}"
+        );
+        let data = self.graphql(&q, serde_json::json!({ "q": query, "n": limit }))?;
+        Ok(nodes(&data["search"])
+            .iter()
+            .filter_map(parse_pr_status)
+            .collect())
+    }
+
+    /// Member logins of an org team (`/orgs/{org}/teams/{team}/members`). Needs org read.
+    pub fn team_members(&self, org: &str, team: &str) -> Result<Vec<String>> {
+        let v = self.get(&format!("/orgs/{org}/teams/{team}/members?per_page=100"))?;
+        Ok(v.as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| m["login"].as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+}
+
+/// GraphQL field set shared by `pr_statuses` (aliased) and `search_prs` (search nodes).
+const PR_STATUS_FIELDS: &str = "number title url state isDraft reviewDecision updatedAt \
+     headRefOid author{login} comments{totalCount} commits{totalCount} \
+     repository{owner{login} name}";
+
+/// Sanitize a string for safe inline embedding in a GraphQL string literal (owner/repo are
+/// already restricted to `[A-Za-z0-9._-]`, but belt-and-suspenders against injection).
+fn gql_str(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        .collect()
+}
+
+/// Parse a GraphQL PullRequest node into a `PrStatus` (None if it isn't a real PR node).
+fn parse_pr_status(node: &serde_json::Value) -> Option<PrStatus> {
+    let number = node["number"].as_u64()?;
+    let owner = node["repository"]["owner"]["login"].as_str()?.to_string();
+    let repo = node["repository"]["name"].as_str()?.to_string();
+    Some(PrStatus {
+        pr: PrRef {
+            owner,
+            repo,
+            number,
+        },
+        title: node["title"].as_str().unwrap_or("").to_string(),
+        author: node["author"]["login"].as_str().unwrap_or("").to_string(),
+        state: node["state"].as_str().unwrap_or("OPEN").to_lowercase(),
+        draft: node["isDraft"].as_bool().unwrap_or(false),
+        review_decision: node["reviewDecision"].as_str().map(String::from),
+        comments: node["comments"]["totalCount"].as_u64().unwrap_or(0),
+        commits: node["commits"]["totalCount"].as_u64().unwrap_or(0),
+        updated_at: node["updatedAt"].as_str().unwrap_or("").to_string(),
+        url: node["url"].as_str().unwrap_or("").to_string(),
+        head_oid: node["headRefOid"].as_str().map(String::from),
+    })
 }
 
 /// One GraphQL query for everything the comments panel needs: PR conversation

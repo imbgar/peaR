@@ -115,6 +115,25 @@ export interface Queue {
   items: QueueItem[];
 }
 
+export interface PrStatus {
+  pr: PrRef;
+  title: string;
+  author: string;
+  state: string; // "open" | "closed" | "merged"
+  draft: boolean;
+  review_decision: string | null; // "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null
+  comments: number;
+  commits: number;
+  updated_at: string;
+  url: string;
+  head_oid: string | null;
+}
+
+export interface Watches {
+  users: string[];
+  teams: string[]; // "org/team" slugs
+}
+
 export type Command =
   | {
       type: "open_pr";
@@ -172,7 +191,12 @@ export type Command =
   | { type: "stop_brain"; tab: number }
   | { type: "save_layout"; active?: number | null; windows?: WinLayoutWire[] }
   | { type: "load_layout"; restore: boolean }
-  | { type: "clear_layout" };
+  | { type: "clear_layout" }
+  | { type: "load_pr_statuses"; prs: PrRef[] }
+  | { type: "load_watches" }
+  | { type: "watch_user"; login: string; on: boolean }
+  | { type: "watch_team"; org: string; team: string; on: boolean }
+  | { type: "load_team_prs" };
 
 /** Serialized pane tree for tile persistence. Leaves carry live TabIds on save (the engine
  *  remaps them to entry indices); on a restore event they are entry indices. */
@@ -200,6 +224,9 @@ export type Event =
   | { type: "insight"; tab: number; id: string; kind: string; text: string }
   | { type: "history"; entries: PrRecord[]; favorites: Favorites; queue: Queue }
   | { type: "skills_status"; installed: boolean }
+  | { type: "pr_statuses"; statuses: PrStatus[] }
+  | { type: "watches"; watches: Watches }
+  | { type: "team_prs"; prs: PrStatus[] }
   | { type: "notice"; tab: number | null; message: string }
   | { type: "error"; tab: number | null; message: string };
 
