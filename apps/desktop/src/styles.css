@@ -312,7 +312,7 @@ html, body {
 [data-theme="instrument"] .brand-mark { filter: none; }
 .brand-name { flex: none; font-weight: 700; font-size: 14px; letter-spacing: var(--letter); text-shadow: var(--glow); }
 .brand-ver {
-  flex: none;
+  flex: none; margin-left: auto;
   font-family: var(--font-mono); font-size: 9px; color: var(--faint);
   border: 1px solid var(--bd2); border-radius: 999px; padding: 0 5px; line-height: 1.6;
 }
