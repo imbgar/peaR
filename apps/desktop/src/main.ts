@@ -442,6 +442,19 @@ function renderTabBar() {
     empty.textContent = "no open tabs — open a PR or a shell from the left";
     tabbarEl.appendChild(empty);
   }
+  // Reopen recently-closed tabs (browser-style), right-aligned at the end of the strip.
+  if (closedTabs.length) {
+    const reopen = document.createElement("button");
+    reopen.className = "tab-reopen";
+    reopen.textContent = "↩";
+    reopen.title = `Recently closed (${closedTabs.length}) — ⌘⇧T reopens the last`;
+    reopen.onclick = (e) => {
+      e.stopPropagation();
+      const r = reopen.getBoundingClientRect();
+      openClosedTabsMenu(r.right - 200, r.bottom + 4);
+    };
+    tabbarEl.appendChild(reopen);
+  }
 }
 
 function renderToolbar() {
@@ -1334,6 +1347,7 @@ function setActive(id: number) {
 function closeTabView(id: number) {
   const v = tabs.get(id);
   if (v) {
+    recordClosedTab(v); // remember it so it can be reopened
     v.term.dispose();
     v.el.remove();
     tabs.delete(id);
@@ -1376,6 +1390,45 @@ function closeTabView(id: number) {
   renderTabBar();
   renderToolbar();
   saveLayout(); // a pane/window closed — re-capture the tile structure
+}
+
+// ── recently closed tabs (reopen via the ↩ tab-bar button or ⌘⇧T) ──────────────
+interface ClosedTab {
+  pr: PrRef | null;
+  cli: CliKind;
+  title: string;
+}
+const closedTabs: ClosedTab[] = [];
+const MAX_CLOSED = 25;
+function closedKey(c: ClosedTab): string {
+  return c.pr ? `${c.pr.owner}/${c.pr.repo}#${c.pr.number}` : `shell:${c.title}`;
+}
+function recordClosedTab(v: TabView) {
+  const entry: ClosedTab = { pr: v.pr, cli: v.cli, title: v.title };
+  const key = closedKey(entry);
+  const i = closedTabs.findIndex((c) => closedKey(c) === key);
+  if (i >= 0) closedTabs.splice(i, 1); // de-dupe, bump to front
+  closedTabs.unshift(entry);
+  if (closedTabs.length > MAX_CLOSED) closedTabs.pop();
+}
+function reopenClosed(c: ClosedTab) {
+  const i = closedTabs.indexOf(c);
+  if (i >= 0) closedTabs.splice(i, 1);
+  if (c.pr) openPr(c.pr, c.cli);
+  else send({ type: "open_scratch", cli: c.cli, cwd: null });
+  renderTabBar();
+}
+function reopenLastClosed() {
+  if (closedTabs.length) reopenClosed(closedTabs[0]);
+}
+function openClosedTabsMenu(x: number, y: number) {
+  const items: CtxItem[] = closedTabs.length
+    ? closedTabs.map((c) => ({
+        label: `${c.pr ? `⎇ ${c.title}` : `› ${c.title}`}  ·  ${c.cli}`,
+        on: () => reopenClosed(c),
+      }))
+    : [{ label: "no recently closed tabs", on: () => {} }];
+  openHistCtx(x, y, items);
 }
 
 // ── pane tree: build / mutate / render ────────────────────────────────────────
@@ -2021,6 +2074,12 @@ function handleZoomKey(e: KeyboardEvent) {
     (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA")
   ) {
     return; // a real form field (e.g. the review popover) — let it type
+  }
+  // ⌘⇧T reopens the most recently closed tab (browser-style).
+  if (e.shiftKey && (e.key === "T" || e.key === "t")) {
+    e.preventDefault();
+    reopenLastClosed();
+    return;
   }
   if (e.key === "=" || e.key === "+") {
     e.preventDefault();

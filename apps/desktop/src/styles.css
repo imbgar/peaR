@@ -804,6 +804,14 @@ button:disabled { opacity: 0.38; cursor: default; }
 .tab-close { background: transparent; border: none; color: var(--faint); padding: 0 2px; font-size: 15px; line-height: 1; }
 .tab-close:hover { color: var(--red); }
 .tab-empty { color: var(--faint); padding: 10px 4px; font-style: italic; align-self: center; }
+/* Reopen recently-closed tabs — right-aligned at the end of the strip. */
+.tab-reopen {
+  margin-left: auto; align-self: center; flex: none; cursor: pointer;
+  background: transparent; color: var(--dim); font-size: 14px; line-height: 1;
+  padding: 3px 8px; border-radius: var(--r-sm);
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
+}
+.tab-reopen:hover { color: var(--accent); border-color: var(--accent-d); }
 
 #toolbar {
   display: flex;
