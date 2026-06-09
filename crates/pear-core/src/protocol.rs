@@ -228,6 +228,46 @@ pub struct PrMeta {
     pub changed_files: u64,
 }
 
+/// PR review + merge status that drives the tree status widgets (and the teams view, and
+/// notification diffing). Fetched in batches via one GraphQL query. `state` is
+/// "open" | "closed" | "merged"; `review_decision` is GitHub's rollup
+/// ("APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED") or None.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrStatus {
+    pub pr: PrRef,
+    pub title: String,
+    pub author: String,
+    pub state: String,
+    pub draft: bool,
+    #[serde(default)]
+    pub review_decision: Option<String>,
+    pub comments: u64,
+    pub commits: u64,
+    pub updated_at: String,
+    pub url: String,
+    /// Head commit oid — lets notifications detect a new push since last seen.
+    #[serde(default)]
+    pub head_oid: Option<String>,
+}
+
+/// A one-line Haiku-generated summary of a single changed file in a PR diff.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileSummary {
+    pub path: String,
+    pub summary: String,
+}
+
+/// The user's "teams" watch list: GitHub logins and org teams whose members' PRs show up in
+/// the Teams view (USER → REPO → PR). Persisted in the data dir.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Watches {
+    #[serde(default)]
+    pub users: Vec<String>,
+    /// "org/team" slugs; expanded to member logins when loading team PRs.
+    #[serde(default)]
+    pub teams: Vec<String>,
+}
+
 /// One resumable Claude session for a PR (`claude --resume <id>`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionRec {
@@ -263,6 +303,11 @@ pub struct QueueItem {
     pub status: String,
     #[serde(default)]
     pub added: String, // RFC3339
+    /// Auto-sort rank: priority items float to the top, then favorites, then the rest.
+    #[serde(default)]
+    pub priority: bool,
+    #[serde(default)]
+    pub favorite: bool,
 }
 
 /// The review queue, persisted in the data dir. Order = priority (top = next up).
@@ -393,6 +438,21 @@ pub enum Command {
     /// `"full"` (bypass — no prompts), `"edits"` (auto-accept edits, default),
     /// `"ask"` (default prompts), `"plan"` (read-only). Applies to future opens.
     SetClaudePermission { mode: String },
+    /// Per-engine launch knobs applied to future opens: model (`--model`/`-m`), Codex reasoning
+    /// effort + approval policy + sandbox. Empty/None means "engine default". Sent wholesale on
+    /// any change. `""` is treated as None.
+    SetLaunchConfig {
+        #[serde(default)]
+        claude_model: Option<String>,
+        #[serde(default)]
+        codex_model: Option<String>,
+        #[serde(default)]
+        codex_effort: Option<String>,
+        #[serde(default)]
+        codex_approval: Option<String>,
+        #[serde(default)]
+        codex_sandbox: Option<String>,
+    },
     /// Ask for the history list (replied via `Event::History`).
     LoadHistory,
     /// Clear the history (backed up first; restorable across runs).
@@ -425,6 +485,10 @@ pub enum Command {
     QueueRemove { pr: PrRef },
     /// Reorder a queued PR by `dir` (-1 = up/higher priority, +1 = down).
     QueueMove { pr: PrRef, dir: i64 },
+    /// Toggle a queued PR's priority flag (priority floats above favorites in auto-sort).
+    QueueSetPriority { pr: PrRef, on: bool },
+    /// Toggle a queued PR's favorite flag.
+    QueueSetFavorite { pr: PrRef, on: bool },
     /// Report whether the bundled `/pr-*` review skills are installed in
     /// `~/.claude/skills` (replied via `Event::SkillsStatus`).
     CheckSkills,
@@ -536,6 +600,21 @@ pub enum Command {
     },
     /// Forget the persisted layout (persist toggled off).
     ClearLayout,
+    /// Fetch review/merge status for a batch of PRs (one GraphQL call). Replied via
+    /// `Event::PrStatuses`. Drives the tree status widgets.
+    LoadPrStatuses { prs: Vec<PrRef> },
+    /// Send the current watch list (users/teams) back via `Event::Watches`.
+    LoadWatches,
+    /// Add (`on:true`) or remove a watched GitHub user. Re-emits `Event::Watches`.
+    WatchUser { login: String, on: bool },
+    /// Add or remove a watched org team (`org/team` slug). Re-emits `Event::Watches`.
+    WatchTeam { org: String, team: String, on: bool },
+    /// Fetch open PRs authored by every watched user (+ expanded team members), with status.
+    /// Replied via `Event::TeamPrs`.
+    LoadTeamPrs,
+    /// Generate a one-line Haiku summary per changed file in the tab's PR diff. Replied via
+    /// `Event::DiffSummaries`.
+    SummarizeDiff { tab: TabId },
 }
 
 /// Events the engine emits to the frontend.
@@ -610,6 +689,18 @@ pub enum Event {
     /// Whether the bundled `/pr-*` skills are installed (reply to `CheckSkills`,
     /// also emitted after `InstallSkills`).
     SkillsStatus { installed: bool },
+    /// Review/merge status for a batch of PRs (reply to `LoadPrStatuses`) — drives the
+    /// tree status widgets.
+    PrStatuses { statuses: Vec<PrStatus> },
+    /// The current watch list (reply to `LoadWatches` / `WatchUser` / `WatchTeam`).
+    Watches { watches: Watches },
+    /// Open PRs from watched users/teams (reply to `LoadTeamPrs`) — drives the Teams view.
+    TeamPrs { prs: Vec<PrStatus> },
+    /// One-line per-file Haiku summaries for the tab's diff (reply to `SummarizeDiff`).
+    DiffSummaries {
+        tab: TabId,
+        summaries: Vec<FileSummary>,
+    },
     /// A non-fatal problem the UI should surface (toast).
     Notice { tab: Option<TabId>, message: String },
     /// A fatal-for-this-command error.

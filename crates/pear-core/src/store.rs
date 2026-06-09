@@ -4,7 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{CoreError, Result};
-use crate::protocol::{CliKind, Favorites, Layout, PrRecord, PrRef, Queue, QueueItem, SessionRec};
+use crate::protocol::{
+    CliKind, Favorites, Layout, PrRecord, PrRef, Queue, QueueItem, SessionRec, Watches,
+};
 
 /// Owns the `<data-dir>/pear/` tree.
 #[derive(Debug, Clone)]
@@ -113,6 +115,45 @@ impl Store {
         self.write_favorites(&f)
     }
 
+    fn watches_path(&self) -> PathBuf {
+        self.root.join("watches.json")
+    }
+
+    /// Load the teams watch list (watched users + org teams). Missing/corrupt -> empty.
+    pub fn watches(&self) -> Watches {
+        fs::read(self.watches_path())
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    fn write_watches(&self, w: &Watches) -> Result<()> {
+        let json = serde_json::to_vec_pretty(w).map_err(|e| CoreError::Storage(e.to_string()))?;
+        fs::write(self.watches_path(), json).map_err(|e| CoreError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Watch / unwatch a GitHub user (login). Idempotent, case-insensitive de-dupe.
+    pub fn toggle_watch_user(&self, login: &str, on: bool) -> Result<()> {
+        let mut w = self.watches();
+        w.users.retain(|u| !u.eq_ignore_ascii_case(login));
+        if on && !login.is_empty() {
+            w.users.push(login.to_string());
+        }
+        self.write_watches(&w)
+    }
+
+    /// Watch / unwatch an org team (`org/team`). Idempotent.
+    pub fn toggle_watch_team(&self, org: &str, team: &str, on: bool) -> Result<()> {
+        let key = format!("{org}/{team}");
+        let mut w = self.watches();
+        w.teams.retain(|t| !t.eq_ignore_ascii_case(&key));
+        if on && !org.is_empty() && !team.is_empty() {
+            w.teams.push(key);
+        }
+        self.write_watches(&w)
+    }
+
     fn queue_path(&self) -> PathBuf {
         self.root.join("queue.json")
     }
@@ -142,7 +183,27 @@ impl Store {
             title: title.to_string(),
             status: "queued".into(),
             added: now.to_string(),
+            priority: false,
+            favorite: false,
         });
+        self.write_queue(&q)
+    }
+
+    /// Toggle a queued PR's priority flag.
+    pub fn queue_set_priority(&self, pr: &PrRef, on: bool) -> Result<()> {
+        let mut q = self.queue();
+        if let Some(item) = q.items.iter_mut().find(|i| &i.pr == pr) {
+            item.priority = on;
+        }
+        self.write_queue(&q)
+    }
+
+    /// Toggle a queued PR's favorite flag.
+    pub fn queue_set_favorite(&self, pr: &PrRef, on: bool) -> Result<()> {
+        let mut q = self.queue();
+        if let Some(item) = q.items.iter_mut().find(|i| &i.pr == pr) {
+            item.favorite = on;
+        }
         self.write_queue(&q)
     }
 

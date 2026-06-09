@@ -19,8 +19,8 @@ use crate::dispatch;
 use crate::error::Result;
 use crate::github::GitHub;
 use crate::protocol::{
-    CliKind, Command, Event, Layout, LayoutEntry, PaneTree, PanelPayload, PrRef, ReviewButton,
-    ReviewTier, TabId, WinLayout,
+    CliKind, Command, Event, Layout, LayoutEntry, PaneTree, PanelPayload, PrRef, PrStatus,
+    ReviewButton, ReviewTier, TabId, WinLayout,
 };
 use crate::session::{EventSink, Session};
 use crate::store::Store;
@@ -47,12 +47,24 @@ pub struct Engine {
     order: Vec<TabId>,
     /// Claude `--permission-mode` for launches (see `CLAUDE_PERM_MODES`).
     claude_perm: String,
+    /// Per-engine launch knobs (model / Codex effort / approval / sandbox).
+    launch: LaunchCfg,
     /// A session's wait-thread sends its `TabId` here when its process exits, so the
     /// engine can drop the dead tab (drained in `reap_dead`, called each `handle`).
     reaper_tx: Sender<TabId>,
     reaper_rx: Receiver<TabId>,
     /// Stop flags for active brain (thinking-tail) watchers, keyed by tab.
     brain_watchers: HashMap<TabId, Arc<AtomicBool>>,
+}
+
+/// Per-engine launch options chosen in the launcher (empty = engine default).
+#[derive(Default)]
+struct LaunchCfg {
+    claude_model: Option<String>,
+    codex_model: Option<String>,
+    codex_effort: Option<String>,
+    codex_approval: Option<String>,
+    codex_sandbox: Option<String>,
 }
 
 /// Claude's real `--permission-mode` choices. Anything else falls back to `auto`.
@@ -90,6 +102,7 @@ impl Engine {
             tabs: HashMap::new(),
             order: Vec::new(),
             claude_perm: "auto".to_string(),
+            launch: LaunchCfg::default(),
             reaper_tx,
             reaper_rx,
             brain_watchers: HashMap::new(),
@@ -166,6 +179,22 @@ impl Engine {
                     tab: None,
                     message: format!("Claude permission mode: {mode}"),
                 });
+            }
+            Command::SetLaunchConfig {
+                claude_model,
+                codex_model,
+                codex_effort,
+                codex_approval,
+                codex_sandbox,
+            } => {
+                let norm = |o: Option<String>| o.filter(|s| !s.trim().is_empty());
+                self.launch = LaunchCfg {
+                    claude_model: norm(claude_model),
+                    codex_model: norm(codex_model),
+                    codex_effort: norm(codex_effort),
+                    codex_approval: norm(codex_approval),
+                    codex_sandbox: norm(codex_sandbox),
+                };
             }
             Command::LoadHistory => self.emit_history(),
             Command::LoadDiff { tab } => self.load_diff(tab),
@@ -249,6 +278,24 @@ impl Engine {
             Command::ClearLayout => {
                 let _ = self.store.clear_layout();
             }
+            Command::LoadPrStatuses { prs } => self.load_pr_statuses(prs),
+            Command::LoadWatches => self.emit(Event::Watches {
+                watches: self.store.watches(),
+            }),
+            Command::WatchUser { login, on } => {
+                let _ = self.store.toggle_watch_user(&login, on);
+                self.emit(Event::Watches {
+                    watches: self.store.watches(),
+                });
+            }
+            Command::WatchTeam { org, team, on } => {
+                let _ = self.store.toggle_watch_team(&org, &team, on);
+                self.emit(Event::Watches {
+                    watches: self.store.watches(),
+                });
+            }
+            Command::LoadTeamPrs => self.load_team_prs(),
+            Command::SummarizeDiff { tab } => self.summarize_diff(tab),
             Command::CheckSkills => self.emit(Event::SkillsStatus {
                 installed: crate::skills_install::skills_installed(),
             }),
@@ -351,6 +398,14 @@ impl Engine {
                     message: format!("queue move: {e}"),
                 }),
             },
+            Command::QueueSetPriority { pr, on } => {
+                let _ = self.store.queue_set_priority(&pr, on);
+                self.emit_history();
+            }
+            Command::QueueSetFavorite { pr, on } => {
+                let _ = self.store.queue_set_favorite(&pr, on);
+                self.emit_history();
+            }
         }
     }
 
@@ -394,6 +449,28 @@ impl Engine {
         let mut args: Vec<String> = base_args.iter().map(|s| s.to_string()).collect();
         if cli == CliKind::Claude {
             args.extend(claude_perm_args(&self.claude_perm));
+            if let Some(m) = &self.launch.claude_model {
+                args.push("--model".into());
+                args.push(m.clone());
+            }
+        }
+        if cli == CliKind::Codex {
+            if let Some(m) = &self.launch.codex_model {
+                args.push("-m".into());
+                args.push(m.clone());
+            }
+            if let Some(e) = &self.launch.codex_effort {
+                args.push("-c".into());
+                args.push(format!("model_reasoning_effort=\"{e}\""));
+            }
+            if let Some(a) = &self.launch.codex_approval {
+                args.push("-a".into());
+                args.push(a.clone());
+            }
+            if let Some(s) = &self.launch.codex_sandbox {
+                args.push("-s".into());
+                args.push(s.clone());
+            }
         }
 
         let mut session_id: Option<String> = None;
@@ -704,6 +781,14 @@ impl Engine {
                     pr,
                     cli,
                 });
+                // The PTY is still alive but the reloaded frontend's xterm is empty — replay the
+                // buffered output so the tab repaints instead of stalling.
+                if let Some(t) = self.tabs.get(&tab) {
+                    let bytes = t.session.replay();
+                    if !bytes.is_empty() {
+                        self.emit(Event::Output { tab, bytes });
+                    }
+                }
             }
             return;
         }
@@ -964,6 +1049,104 @@ impl Engine {
         std::thread::spawn(move || {
             let files = git_ls_files(&cwd).unwrap_or_default();
             sink(Event::RepoTree { tab, files });
+        });
+    }
+
+    /// Fetch review/merge status for a batch of PRs on a worker thread (drives the tree
+    /// status widgets). A missing token or fetch error degrades to no badges.
+    fn load_pr_statuses(&mut self, prs: Vec<PrRef>) {
+        if prs.is_empty() {
+            return;
+        }
+        let Some(gh) = self.github() else { return };
+        let sink = self.sink.clone();
+        std::thread::spawn(move || match gh.pr_statuses(&prs) {
+            Ok(statuses) => sink(Event::PrStatuses { statuses }),
+            Err(e) => sink(Event::Notice {
+                tab: None,
+                message: format!("pr status: {e}"),
+            }),
+        });
+    }
+
+    /// Fetch open PRs from every watched user (+ expanded team members) on a worker thread,
+    /// each with status. One search per user (keeps under the search query-length cap).
+    fn load_team_prs(&mut self) {
+        let watches = self.store.watches();
+        let Some(gh) = self.github() else {
+            self.emit(Event::Notice {
+                tab: None,
+                message: "no GitHub token — teams unavailable (run `gh auth login`)".into(),
+            });
+            return;
+        };
+        let sink = self.sink.clone();
+        std::thread::spawn(move || {
+            let mut users = watches.users.clone();
+            for slug in &watches.teams {
+                if let Some((org, team)) = slug.split_once('/') {
+                    if let Ok(members) = gh.team_members(org, team) {
+                        users.extend(members);
+                    }
+                }
+            }
+            users.sort_by_key(|u| u.to_lowercase());
+            users.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+
+            let mut prs: Vec<PrStatus> = Vec::new();
+            for u in &users {
+                let q = format!("is:pr is:open archived:false sort:updated-desc author:{u}");
+                if let Ok(mut found) = gh.search_prs(&q, 30) {
+                    prs.append(&mut found);
+                }
+            }
+            sink(Event::TeamPrs { prs });
+        });
+    }
+
+    /// Summarize each changed file in the tab's PR diff via Haiku (worker thread).
+    fn summarize_diff(&mut self, tab: TabId) {
+        let pr = self.tabs.get(&tab).and_then(|t| t.pr.clone());
+        let Some(pr) = pr else {
+            self.emit(Event::Notice {
+                tab: Some(tab),
+                message: "summary: this tab isn't a pull request".into(),
+            });
+            return;
+        };
+        let cwd = self.tabs.get(&tab).and_then(|t| self.live_cwd(t));
+        let Some(gh) = self.github() else {
+            self.emit(Event::Notice {
+                tab: Some(tab),
+                message: "no GitHub token — diff summary unavailable".into(),
+            });
+            return;
+        };
+        let sink = self.sink.clone();
+        std::thread::spawn(move || {
+            let diff = match gh.pr_diff(&pr) {
+                Ok(d) => d,
+                Err(e) => {
+                    sink(Event::Notice {
+                        tab: Some(tab),
+                        message: format!("summary: {e}"),
+                    });
+                    return;
+                }
+            };
+            match crate::summary::summarize_diff(&diff, cwd.as_deref()) {
+                Ok(pairs) => sink(Event::DiffSummaries {
+                    tab,
+                    summaries: pairs
+                        .into_iter()
+                        .map(|(path, summary)| crate::protocol::FileSummary { path, summary })
+                        .collect(),
+                }),
+                Err(e) => sink(Event::Notice {
+                    tab: Some(tab),
+                    message: format!("summary: {e}"),
+                }),
+            }
         });
     }
 

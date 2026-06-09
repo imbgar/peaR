@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>peaR — PR Control Center</title>
+    <title>peaR</title>
     <script type="module" src="/src/main.ts" defer></script>
   </head>
 
@@ -16,7 +16,7 @@
         <div class="brand">
           <img class="brand-mark" src="/pear.png" alt="peaR" />
           <span class="brand-name">peaR</span>
-          <span class="brand-sub">PR control center</span>
+          <span class="brand-ver" id="app-version" title="peaR version"></span>
           <button id="sidebar-collapse" title="Collapse sidebar (hover the left edge to peek)" aria-label="Collapse sidebar">‹</button>
         </div>
 
@@ -45,6 +45,24 @@
             <option value="plan">plan · read-only</option>
           </select>
 
+          <div id="launch-adv" class="launch-adv">
+            <select id="model-select" class="perm-field" title="Model the engine launches with"></select>
+            <input id="model-custom" class="perm-field hidden" placeholder="model name…" autocomplete="off" spellcheck="false" />
+            <select id="codex-effort" class="perm-field" title="Codex reasoning effort">
+              <option value="">effort · default</option>
+              <option value="low">effort · low</option>
+              <option value="medium">effort · medium</option>
+              <option value="high">effort · high</option>
+            </select>
+            <select id="codex-access" class="perm-field" title="Codex approval + sandbox">
+              <option value="">access · default</option>
+              <option value="ro">read-only · ask</option>
+              <option value="ws">workspace-write · ask</option>
+              <option value="auto">workspace-write · auto-run</option>
+              <option value="yolo">full access 🚨 · no prompts</option>
+            </select>
+          </div>
+
           <button type="submit" class="primary" id="open-btn">▸ Open &amp; review</button>
           <button type="button" id="new-shell" class="ghost">+ New empty shell</button>
         </form>
@@ -54,6 +72,7 @@
             <button type="button" id="view-list" class="hist-tab on">History</button>
             <button type="button" id="view-tree" class="hist-tab">Tree</button>
             <button type="button" id="view-queue" class="hist-tab">Queue<span id="queue-count" class="queue-count"></span></button>
+            <button type="button" id="view-teams" class="hist-tab">Teams</button>
           </span>
           <span class="section-actions">
             <button type="button" id="fav-only" class="mini icon" title="Show only favorites">★</button>
@@ -154,6 +173,10 @@
           <button id="persist-toggle" class="statusbtn" title="Reopen these tabs &amp; sessions next launch">⟲ persist</button>
           <span id="status">starting…</span>
           <span class="status-spacer"></span>
+          <div class="notif-wrap">
+            <button id="notif-bell" class="statusbtn" title="Notifications — new comments / commits / reviews on your PRs">🔔<span id="notif-count" class="notif-count hidden">0</span></button>
+            <div id="notif-panel" class="notif-panel hidden"></div>
+          </div>
           <div class="theme-picker">
             <button id="theme-toggle" class="theme-toggle"><span class="swatch">◉</span> <span id="theme-name">phosphor</span></button>
             <div id="theme-menu" class="theme-menu hidden"></div>

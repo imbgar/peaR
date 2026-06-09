@@ -1,10 +1,15 @@
 //! One PTY-backed terminal per tab. Raw bytes only — VT parsing/rendering lives in
 //! the frontend (`xterm.js`), so this module stays a thin, fast pipe.
 
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
+
+/// Per-session rolling output buffer cap. On a frontend reload the engine keeps the live PTY
+/// but the new xterm is empty — replaying this buffer repaints the screen so tabs don't stall.
+const SCROLLBACK_CAP: usize = 128 * 1024;
 
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 
@@ -23,6 +28,8 @@ pub struct Session {
     killer: Box<dyn ChildKiller + Send + Sync>,
     /// The spawned child's OS pid, used to read its live cwd for persist-session.
     pid: Option<u32>,
+    /// Rolling copy of recent PTY output, replayed on a frontend reload (see `replay`).
+    scrollback: Arc<Mutex<VecDeque<u8>>>,
 }
 
 impl Session {
@@ -82,8 +89,10 @@ impl Session {
         let killer = child.clone_killer();
         let pid = child.process_id();
 
-        // Pump PTY output -> Event::Output.
+        // Pump PTY output -> Event::Output, keeping a rolling copy for reload-replay.
+        let scrollback: Arc<Mutex<VecDeque<u8>>> = Arc::new(Mutex::new(VecDeque::new()));
         let sink_out = sink.clone();
+        let sb = scrollback.clone();
         thread::Builder::new()
             .name(format!("pear-pty-read-{tab}"))
             .spawn(move || {
@@ -91,10 +100,19 @@ impl Session {
                 loop {
                     match reader.read(&mut buf) {
                         Ok(0) => break,
-                        Ok(n) => (sink_out)(Event::Output {
-                            tab,
-                            bytes: buf[..n].to_vec(),
-                        }),
+                        Ok(n) => {
+                            if let Ok(mut g) = sb.lock() {
+                                g.extend(&buf[..n]);
+                                let over = g.len().saturating_sub(SCROLLBACK_CAP);
+                                if over > 0 {
+                                    g.drain(0..over);
+                                }
+                            }
+                            (sink_out)(Event::Output {
+                                tab,
+                                bytes: buf[..n].to_vec(),
+                            });
+                        }
                         Err(_) => break,
                     }
                 }
@@ -120,12 +138,21 @@ impl Session {
             master: pair.master,
             killer,
             pid,
+            scrollback,
         })
     }
 
     /// The child process's OS pid (for reading its live cwd; see `macproc`).
     pub fn pid(&self) -> Option<u32> {
         self.pid
+    }
+
+    /// A snapshot of recent PTY output — replayed to repaint a reloaded frontend's xterm.
+    pub fn replay(&self) -> Vec<u8> {
+        self.scrollback
+            .lock()
+            .map(|g| g.iter().copied().collect())
+            .unwrap_or_default()
     }
 
     /// Forward keystrokes to the child's stdin.

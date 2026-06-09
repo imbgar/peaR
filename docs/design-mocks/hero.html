@@ -1,0 +1,227 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ── theme palettes ───────────────────────────────────────────────────────── */
+.t-phosphor{
+  --bg:#0a0701; --panel:#0d0902; --elev:#120d03; --inp:#0f0a02; --bd:#3a2a06; --bd2:#5a4209;
+  --tx:#ffd072; --acc:#ffb000; --acc-d:#a9760a; --dim:#9a7a2e; --faint:#6b5418;
+  --green:#8bd450; --red:#ff6a4a; --purple:#d39bff; --blue:#7cc0ff;
+  --ui:"IBM Plex Mono",monospace; --mono:"IBM Plex Mono",monospace; --glow:0 0 6px rgba(255,176,0,.45);
+  --crt:1;
+}
+.t-instrument{
+  --bg:#07080a; --panel:#0b0d11; --elev:#10131a; --inp:#0c0f15; --bd:#191d26; --bd2:#262b36;
+  --tx:#e7e9ee; --acc:#c6f24e; --acc-d:#3c4a23; --dim:#8a909c; --faint:#565c69;
+  --green:#86e08a; --red:#ff6b6b; --purple:#b794f6; --blue:#6cb6ff;
+  --ui:"Hanken Grotesk",sans-serif; --mono:"IBM Plex Mono",monospace; --glow:none;
+  --crt:0;
+}
+*{box-sizing:border-box;margin:0}
+body{background:#000;overflow:hidden}
+#app{width:1320px;height:840px;background:var(--bg);color:var(--tx);font-family:var(--mono);
+  font-size:13px;display:grid;grid-template-columns:264px 1fr;position:relative;overflow:hidden}
+.glow{text-shadow:var(--glow)}
+/* CRT overlays (phosphor only) */
+#app.t-phosphor::before{content:"";position:absolute;inset:0;pointer-events:none;z-index:9;
+  background:repeating-linear-gradient(0deg,rgba(0,0,0,0) 0,rgba(0,0,0,0) 2px,rgba(0,0,0,.14) 3px,rgba(0,0,0,0) 4px)}
+#app.t-phosphor::after{content:"";position:absolute;inset:0;pointer-events:none;z-index:9;
+  background:radial-gradient(120% 90% at 50% 42%,transparent 58%,rgba(0,0,0,.5) 100%)}
+
+/* ── sidebar ───────────────────────────────────────────────────────────────── */
+#sb{background:var(--panel);border-right:1px solid var(--bd);display:flex;flex-direction:column;min-height:0}
+.brand{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--bd)}
+.brand img{width:20px;height:20px;border-radius:5px}
+.bname{font-weight:700;font-size:14px;letter-spacing:1px}
+.bsub{font-size:9px;color:var(--faint);letter-spacing:1px;text-transform:uppercase;font-family:var(--ui);flex:1;white-space:nowrap;overflow:hidden}
+.bver{font-size:9px;color:var(--faint);border:1px solid var(--bd2);border-radius:99px;padding:0 5px;margin-left:auto}
+.bchev{color:var(--faint);font-size:15px}
+.sbody{padding:13px 13px;display:flex;flex-direction:column;gap:13px;overflow:hidden}
+.lbl{font-size:10px;letter-spacing:1.4px;color:var(--acc-d);text-transform:uppercase;font-family:var(--ui);font-weight:600}
+.fld{border:1px solid var(--bd2);border-radius:5px;padding:8px 10px;color:var(--faint);font-size:12px;background:var(--inp)}
+.seg{display:flex;gap:3px;background:var(--inp);border:1px solid var(--bd2);border-radius:6px;padding:3px;margin-top:8px}
+.seg span{flex:1;text-align:center;padding:5px;font-size:11.5px;color:var(--dim);border-radius:4px}
+.seg span.on{background:color-mix(in srgb,var(--acc) 15%,transparent);color:var(--acc)}
+.chips{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:7px}
+.chip{border:1px solid var(--bd2);border-radius:5px;padding:6px;text-align:center;font-size:11px;color:var(--dim);font-family:var(--ui)}
+.chip.on{border-color:var(--acc);color:var(--acc);background:color-mix(in srgb,var(--acc) 9%,transparent)}
+.advsel{border:1px solid var(--bd2);border-radius:5px;padding:6px 9px;font-size:11px;color:var(--dim);margin-top:6px;display:flex;justify-content:space-between}
+.open{border:1px solid var(--acc);border-radius:6px;padding:8px;text-align:center;font-size:12px;font-weight:600;color:var(--acc);background:color-mix(in srgb,var(--acc) 8%,transparent);margin-top:8px;letter-spacing:.5px}
+.htabs{display:flex;gap:0;margin-top:4px}
+.htab{flex:1;text-align:center;font-size:11px;font-family:var(--ui);color:var(--dim);border:1px solid var(--bd2);padding:5px;border-right:none}
+.htab:last-child{border-right:1px solid var(--bd2)}
+.htab.on{color:var(--acc);border-color:var(--acc-d);background:color-mix(in srgb,var(--acc) 9%,transparent)}
+.tree{display:flex;flex-direction:column;gap:1px;font-size:12px;margin-top:4px}
+.tnode{color:var(--faint);font-size:10px;text-transform:uppercase;letter-spacing:.5px;padding:3px 4px;font-family:var(--ui)}
+.trow{display:flex;align-items:center;gap:6px;padding:4px 4px 4px 16px}
+.trow .mk{color:var(--faint);font-size:10px}
+.trow .mk.on{color:var(--acc)}
+.trow .nm{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11.5px}
+.st{font-size:8.5px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;border-radius:4px;padding:1px 5px;border:1px solid transparent;font-family:var(--ui)}
+.st.appr{color:var(--green);border-color:color-mix(in srgb,var(--green) 45%,transparent)}
+.st.chg{color:var(--red);border-color:color-mix(in srgb,var(--red) 45%,transparent)}
+.st.merged{color:var(--purple);border-color:color-mix(in srgb,var(--purple) 45%,transparent)}
+.st.rev{color:var(--acc);border-color:var(--acc-d)}
+
+/* ── workspace ─────────────────────────────────────────────────────────────── */
+#ws{display:grid;grid-template-rows:auto auto 1fr auto;min-width:0}
+#tabs{display:flex;gap:6px;padding:8px 12px 0;align-items:flex-end}
+.tab{padding:7px 12px;border-radius:6px 6px 0 0;background:var(--panel);color:var(--dim);font-size:12px;display:flex;gap:7px;align-items:center;border:1px solid var(--bd);border-bottom:none}
+.tab .dot{width:7px;height:7px;border-radius:50%;background:var(--blue)}
+.tab.on{background:var(--elev);color:var(--acc)}
+.tab .pc{font-size:9px;color:var(--faint);font-family:var(--ui)}
+.sp{flex:1}
+.reopen{align-self:center;border:1px solid var(--acc-d);border-radius:5px;color:var(--dim);padding:3px 8px;font-size:13px}
+#tb{display:flex;align-items:center;gap:6px;padding:9px 12px;border-bottom:1px solid var(--bd);background:var(--elev);font-family:var(--ui)}
+.bk{padding:5px 9px;border:1px solid var(--bd2);border-radius:5px;font-size:11px;color:var(--dim);display:flex;gap:5px;align-items:center}
+.bk.acc{border-color:var(--acc-d);color:var(--acc)}
+.tdiv{width:1px;height:18px;background:var(--bd2);margin:0 2px}
+
+/* ── stage: tiled terminals | diff panel ───────────────────────────────────── */
+#stage{display:grid;grid-template-columns:1fr 404px;min-height:0}
+#term{display:flex;flex-direction:column;border-right:1px solid var(--bd);min-width:0}
+.pane{flex:1;position:relative;padding:24px 14px 10px;font-size:12px;line-height:1.65;overflow:hidden;min-height:0}
+.pane+.pane{border-top:1px solid var(--bd)}
+.ptitle{position:absolute;top:0;left:0;right:0;height:21px;display:flex;align-items:center;padding:0 10px;font-size:10.5px;
+  font-family:var(--ui);color:var(--faint);background:var(--panel);border-bottom:1px solid var(--bd);letter-spacing:.3px}
+.ptitle.foc{color:var(--dim)}
+.pane.foc{box-shadow:inset 0 0 0 1px var(--acc-d)}
+.g{color:var(--green)} .d{color:var(--faint)} .r{color:var(--red)} .a{color:var(--acc)} .b{color:var(--blue)}
+.cur{display:inline-block;width:8px;height:14px;background:var(--acc);vertical-align:-2px;box-shadow:0 0 8px var(--acc)}
+#pan{background:var(--panel);display:flex;flex-direction:column;min-width:0}
+.ph{display:flex;justify-content:space-between;align-items:center;padding:10px 13px;border-bottom:1px solid var(--bd)}
+.pt{font-size:12px;font-weight:600;font-family:var(--ui)}
+.pha{display:flex;gap:5px;align-items:center;font-size:11px;color:var(--dim)}
+.pha .acc{border:1px solid var(--acc-d);border-radius:5px;color:var(--acc);padding:3px 8px}
+.psplit{flex:1;display:flex;min-height:0}
+.ftree{width:128px;border-right:1px solid var(--bd);background:color-mix(in srgb,var(--panel) 60%,var(--bg));
+  font-size:10.5px;display:flex;flex-direction:column}
+.fth{padding:6px 8px;border-bottom:1px solid var(--bd);color:var(--dim);font-size:10px;display:flex;gap:5px;align-items:center;font-family:var(--ui)}
+.ff{padding:4px 8px;display:flex;gap:5px;align-items:center;color:var(--dim)}
+.ff.on{color:var(--tx);background:color-mix(in srgb,var(--acc) 7%,transparent)}
+.ff .fa{color:var(--green);font-size:9px;margin-left:auto} .ff .fd{color:var(--red);font-size:9px}
+.dbody{flex:1;overflow:hidden;font-size:11px;line-height:1.5}
+.dfile{border-bottom:1px solid var(--bd)}
+.dfh{display:flex;gap:7px;align-items:center;padding:7px 11px;background:var(--inp)}
+.dfh .fn{flex:1;color:var(--tx)}
+.dfh .fa{color:var(--green);font-size:10px} .dfh .fd{color:var(--red);font-size:10px}
+.fsum{font-family:var(--ui);font-size:11px;line-height:1.4;color:var(--dim);padding:5px 11px 6px 28px;
+  border-bottom:1px solid var(--bd);background:color-mix(in srgb,var(--acc) 5%,transparent)}
+.drow{display:flex;font-family:var(--mono);font-size:11px}
+.drow .ln{width:34px;text-align:right;padding-right:8px;color:var(--faint);user-select:none}
+.drow.add{background:color-mix(in srgb,var(--green) 11%,transparent)} .drow.add .tx{color:var(--green)}
+.drow.del{background:color-mix(in srgb,var(--red) 11%,transparent)} .drow.del .tx{color:var(--red)}
+.drow .tx{white-space:pre;padding-left:2px}
+.cmt{margin:6px 10px;border:1px solid var(--bd2);border-radius:6px;padding:7px 9px;font-family:var(--ui);font-size:11px;color:var(--dim)}
+.cmt b{color:var(--acc);font-weight:600}
+
+/* ── status bar ────────────────────────────────────────────────────────────── */
+#sbar{display:flex;gap:8px;align-items:center;padding:7px 13px;border-top:1px solid var(--bd);background:var(--panel);
+  font-size:11px;color:var(--dim);font-family:var(--ui)}
+.sbtn{border:1px solid var(--bd2);border-radius:5px;padding:3px 8px;color:var(--dim)}
+.bell{position:relative;border:1px solid var(--bd2);border-radius:5px;padding:3px 8px}
+.bell .cnt{position:absolute;top:-5px;right:-5px;background:var(--red);color:#fff;border-radius:99px;font-size:8px;
+  font-weight:700;min-width:14px;height:14px;line-height:14px;text-align:center}
+.theme{margin-left:auto;border:1px solid var(--bd2);border-radius:5px;padding:3px 9px;color:var(--acc);display:flex;gap:6px;align-items:center}
+</style></head>
+<body><div id="app" class="t-phosphor">
+  <!-- sidebar -->
+  <aside id="sb">
+    <div class="brand">
+      <img src="../brand/pear.png" alt="">
+      <span class="bname glow">peaR</span>
+      <span class="bver">v0.1.12</span>
+      <span class="bchev">‹</span>
+    </div>
+    <div class="sbody">
+      <div>
+        <div class="lbl glow">open pr</div>
+        <div class="fld" style="margin-top:6px">owner/repo#123 · paste a URL</div>
+        <div class="seg"><span>claude</span><span class="on">codex</span><span>aider</span></div>
+        <div class="chips"><span class="chip">Light</span><span class="chip on">Standard</span><span class="chip">Complex</span><span class="chip">Ultra 💸</span></div>
+        <div class="advsel"><span>model · gpt-5.5</span><span>⌄</span></div>
+        <div class="advsel"><span>access · workspace-write</span><span>⌄</span></div>
+        <div class="open glow">▸ Open &amp; review</div>
+      </div>
+      <div>
+        <div class="htabs"><span class="htab">History</span><span class="htab on">Tree</span><span class="htab">Queue</span><span class="htab">Teams</span></div>
+        <div class="tree">
+          <div class="tnode">roboflow</div>
+          <div class="trow"><span class="mk on">★</span><span class="nm">#2144 · cilium config consolidation</span><span class="st chg">changes</span></div>
+          <div class="trow"><span class="mk">•</span><span class="nm">#2149 · async inference scale</span><span class="st rev">review</span></div>
+          <div class="trow"><span class="mk">•</span><span class="nm">#2156 · helm ownership</span><span class="st appr">approved</span></div>
+          <div class="tnode">imbgar</div>
+          <div class="trow"><span class="mk on">★</span><span class="nm">peaR#58 · tiling panes</span><span class="st merged">merged</span></div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- workspace -->
+  <section id="ws">
+    <header id="tabs">
+      <div class="tab on"><span class="dot"></span><span class="glow">roboflow-infra#2144</span><span class="pc">⊞2</span> ×</div>
+      <div class="tab"><span class="dot"></span>roboflow-infra#2149 ×</div>
+      <div class="tab"><span class="dot"></span>async-platform#811 ×</div>
+      <span class="sp"></span><span class="reopen">↩</span>
+    </header>
+    <div id="tb">
+      <span class="bk">↑ Post</span><span class="bk">▽ Distill</span><span class="bk">☰ Walk</span><span class="bk">ⓘ Explain</span>
+      <span class="tdiv"></span>
+      <span class="bk">▤ Comments</span><span class="bk acc">⇄ Diff</span><span class="bk acc">✓ Review</span>
+    </div>
+    <div id="stage">
+      <!-- tiled terminals -->
+      <div id="term">
+        <div class="pane foc">
+          <div class="ptitle foc">roboflow-infra#2144  ·  parent</div>
+<div class="d">~/repos/roboflow-infra on <span class="b">feat/cilium-config</span></div>
+<div><span class="a glow">❯</span> codex · gpt-5.5 · review</div>
+<div class="g glow">● reviewing roboflow-infra#2144 via gh — standard</div>
+<div class="d">  gh pr diff 2144 · 9 files · +148 / −63</div>
+<div class="a" style="margin-top:4px">2 blockers, 1 nit:</div>
+<div><span class="r glow">  1.</span> <span class="d">audit-mode left on after rollout</span></div>
+<div><span class="a">  2.</span> <span class="d">LRP flag restart races the DS roll</span></div>
+<div><span class="a glow" style="margin-top:4px">❯</span> <span class="cur"></span></div>
+        </div>
+        <div class="pane">
+          <div class="ptitle">claude · opus — side review</div>
+<div class="d">~/repos/roboflow-infra</div>
+<div><span class="a glow">❯</span> claude /code-review high 2144</div>
+<div class="g">● cross-checking the cilium values diff…</div>
+<div class="d">  prod vs stg plan: 2 expected changes ✓</div>
+        </div>
+      </div>
+      <!-- diff panel -->
+      <aside id="pan">
+        <div class="ph"><span class="pt glow">Diff — #2144</span>
+          <span class="pha"><span class="acc">✦ Summarize</span><span class="acc">✓ Review</span><span>×</span></span></div>
+        <div class="psplit">
+          <div class="ftree">
+            <div class="fth">◂ 9 diff files ▸</div>
+            <div class="ff on">cilium.tf <span class="fa">+22</span><span class="fd">−8</span></div>
+            <div class="ff">values.yaml <span class="fa">+40</span><span class="fd">−12</span></div>
+            <div class="ff">lrp.tf <span class="fa">2💬</span></div>
+            <div class="ff">README.md <span class="fa">+6</span></div>
+          </div>
+          <div class="dbody">
+            <div class="dfile">
+              <div class="dfh"><span>▾</span><span class="fn">cilium.tf</span><span class="fa">+22</span><span class="fd">−8</span></div>
+              <div class="fsum">✦ Drops the audit-mode + flag-restart bootstrap now that helm owns those values; tightens the rollout wait.</div>
+              <div class="drow del"><span class="ln">41</span><span class="tx">  policy_audit_mode = true</span></div>
+              <div class="drow add"><span class="ln">41</span><span class="tx">  policy_audit_mode = false</span></div>
+              <div class="drow add"><span class="ln">42</span><span class="tx">  wait_for_cilium_rollout = true</span></div>
+              <div class="cmt"><b>@imbgar</b> confirm state-rm landed on prod before this applies.</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+    <footer id="sbar">
+      <span class="sbtn">☰</span><span class="sbtn">🧠 brain</span><span class="sbtn">⟲ persist</span>
+      <span>standard review · 2 findings · auto-accept</span>
+      <span class="bell">🔔<span class="cnt">3</span></span>
+      <span class="theme">◉ phosphor</span>
+    </footer>
+  </section>
+</div></body></html>

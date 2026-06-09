@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -27,6 +33,8 @@ import {
   setPendingReview,
   setDiffCloseHandler,
   setApproveHandler,
+  setSummarizeHandler,
+  applyFileSummaries,
   jumpToThread,
   type TreeLevel,
 } from "./diff";
@@ -42,11 +50,13 @@ import {
   PrMeta,
   PrRecord,
   PrRef,
+  PrStatus,
   Queue,
   QueueItem,
   ReviewButton,
   ReviewThread,
   ReviewTier,
+  Watches,
   WinLayoutWire,
   PaneTreeWire,
   parsePrRef,
@@ -175,9 +185,6 @@ function showDropHint(el: HTMLElement, zone: DropZone) {
   const hint = el.querySelector<HTMLElement>(".drop-hint");
   if (hint) hint.className = `drop-hint show ${zone}`;
 }
-function clearDropHint(el: HTMLElement) {
-  el.querySelector<HTMLElement>(".drop-hint")?.classList.remove("show");
-}
 function clearAllDropHints() {
   document.querySelectorAll<HTMLElement>(".drop-hint.show").forEach((h) => h.classList.remove("show"));
 }
@@ -235,6 +242,136 @@ function dropOnPane(targetTab: number, zone: DropZone) {
   clearAllDropHints();
   setActive(focusAfter); // renders the target window, refits, rebuilds the tabbar
   saveLayout();
+}
+
+// ── pointer-based tile drag (HTML5 DnD is unreliable over the xterm canvas in the webview) ──
+const DRAG_THRESHOLD = 6;
+let tileGhost: HTMLElement | null = null;
+let lastTileDragEnd = 0; // suppress the click that follows a pill drag
+const labelForPayload = (p: DragPayload): string =>
+  p.kind === "win"
+    ? (tabs.get(windows.get(p.winId)?.root ?? -1)?.title ?? "window")
+    : (tabs.get(p.tab)?.title ?? "pane");
+
+/** Begin a potential tile-drag from `sourceEl`. Becomes a real drag only past a small
+ *  threshold (so clicks still work); shows a ghost + live left/right/top/bottom drop hint on
+ *  whatever pane the cursor is over, and on release asks to confirm the nesting. */
+function startTileDrag(e: PointerEvent, payload: DragPayload, sourceEl: HTMLElement) {
+  if (e.button !== 0) return;
+  const startX = e.clientX;
+  const startY = e.clientY;
+  let dragging = false;
+  let drop: { tab: number; zone: DropZone } | null = null;
+
+  const hostAt = (x: number, y: number) => {
+    const host = (document.elementFromPoint(x, y) as HTMLElement | null)?.closest<HTMLElement>(
+      ".terminal-host",
+    );
+    return host && host.dataset.pane ? host : null;
+  };
+  const move = (ev: PointerEvent) => {
+    if (!dragging) {
+      if (Math.abs(ev.clientX - startX) < DRAG_THRESHOLD && Math.abs(ev.clientY - startY) < DRAG_THRESHOLD)
+        return;
+      dragging = true;
+      dragPayload = payload;
+      sourceEl.classList.add("dragging");
+      document.body.classList.add("tiling-drag");
+      tileGhost = document.createElement("div");
+      tileGhost.className = "tile-ghost";
+      tileGhost.textContent = `⊞ ${labelForPayload(payload)}`;
+      document.body.appendChild(tileGhost);
+    }
+    if (tileGhost) {
+      tileGhost.style.left = `${ev.clientX + 14}px`;
+      tileGhost.style.top = `${ev.clientY + 16}px`;
+    }
+    clearAllDropHints();
+    drop = null;
+    const host = hostAt(ev.clientX, ev.clientY);
+    if (host) {
+      const tab = Number(host.dataset.pane);
+      const selfPane = payload.kind === "pane" && payload.tab === tab;
+      const selfWin = payload.kind === "win" && payload.winId === paneWin.get(tab);
+      if (!selfPane && !selfWin) {
+        const zone = zoneFor(host, ev.clientX, ev.clientY);
+        showDropHint(host, zone);
+        drop = { tab, zone };
+      }
+    }
+  };
+  const up = () => {
+    document.removeEventListener("pointermove", move);
+    document.removeEventListener("pointerup", up);
+    sourceEl.classList.remove("dragging");
+    document.body.classList.remove("tiling-drag");
+    tileGhost?.remove();
+    tileGhost = null;
+    if (dragging) lastTileDragEnd = Date.now();
+    if (dragging && drop) {
+      // Only confirm when dragging a whole tab that has NESTED tiles (a multi-pane window) —
+      // moving a single tile (or a single-pane tab) applies immediately.
+      const win = payload.kind === "win" ? windows.get(payload.winId) : null;
+      const nested = !!win && countLeaves(win.layout) > 1;
+      if (nested) {
+        confirmTile(drop.tab, drop.zone); // keeps the hint until the user decides
+      } else {
+        clearAllDropHints();
+        dropOnPane(drop.tab, drop.zone);
+      }
+    } else {
+      clearAllDropHints();
+      dragPayload = null;
+    }
+  };
+  document.addEventListener("pointermove", move);
+  document.addEventListener("pointerup", up);
+}
+
+/** Ask the user to confirm a drag-and-dropped nesting before it reorganizes the layout. */
+function confirmTile(targetTab: number, zone: DropZone) {
+  const payload = dragPayload;
+  if (!payload) return;
+  const srcLabel = labelForPayload(payload);
+  const tgtLabel = tabs.get(targetTab)?.title ?? "pane";
+  const scrim = document.createElement("div");
+  scrim.className = "pop-scrim";
+  const card = document.createElement("div");
+  card.className = "tile-confirm";
+  const msg = document.createElement("div");
+  msg.className = "tc-msg";
+  msg.innerHTML = `Nest <b>${escapeHtml(srcLabel)}</b> to the <b>${zone}</b> of <b>${escapeHtml(tgtLabel)}</b>?`;
+  const actions = document.createElement("div");
+  actions.className = "tc-actions";
+  const cancel = document.createElement("button");
+  cancel.className = "tc-cancel";
+  cancel.textContent = "Cancel";
+  const ok = document.createElement("button");
+  ok.className = "primary tc-ok";
+  ok.textContent = "Nest ⊞";
+  actions.append(cancel, ok);
+  card.append(msg, actions);
+  scrim.appendChild(card);
+  const close = (apply: boolean) => {
+    scrim.remove();
+    document.removeEventListener("keydown", onKey);
+    clearAllDropHints();
+    if (apply) dropOnPane(targetTab, zone);
+    else dragPayload = null;
+  };
+  const onKey = (ev: KeyboardEvent) => {
+    if (ev.key === "Escape") close(false);
+    else if (ev.key === "Enter") close(true);
+  };
+  cancel.onclick = () => close(false);
+  ok.onclick = () => close(true);
+  scrim.addEventListener("click", (ev) => {
+    if (ev.target === scrim) close(false);
+  });
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(scrim);
+  positionPopover(card); // centered (no anchor)
+  ok.focus();
 }
 
 const persistOn = () => localStorage.getItem("pear.persist") !== "0"; // default ON
@@ -302,6 +439,7 @@ function assembleRestore() {
   const activeTab = (rs.active != null ? rs.slots[rs.active] : undefined) ?? rs.slots[0];
   if (activeTab != null) setActive(activeTab);
   renderTabBar();
+  saveLayout(); // re-persist the rebuilt tree (the engine's restore opens wrote a flat layout)
 }
 
 // Feature flag: the saved-review "Insight" panel (markdown render of a stored review) is
@@ -375,6 +513,34 @@ const ENGINE_TIERS: Record<string, ReadonlySet<string>> = {
   aider: new Set(["light", "standard", "complex"]),
 };
 
+// Curated model presets per engine (the launcher also offers a free-text "custom…").
+const MODEL_PRESETS: Record<string, string[]> = {
+  claude: ["opus", "sonnet", "haiku"],
+  codex: ["gpt-5.5", "gpt-5", "gpt-5-codex", "o3"],
+  aider: [],
+};
+// Codex "access" preset → [--ask-for-approval, --sandbox]. "" = codex's own default (no flags).
+const CODEX_ACCESS: Record<string, [string, string]> = {
+  ro: ["on-request", "read-only"],
+  ws: ["on-request", "workspace-write"],
+  auto: ["never", "workspace-write"],
+  yolo: ["never", "danger-full-access"],
+};
+const engineModel = (engine: CliKind) => localStorage.getItem(`pear.model.${engine}`) ?? "";
+/** Push the current per-engine launch knobs to the engine (applied to future opens). */
+function sendLaunchConfig() {
+  const access = localStorage.getItem("pear.codexAccess") ?? "";
+  const [approval, sandbox] = CODEX_ACCESS[access] ?? [null, null];
+  send({
+    type: "set_launch_config",
+    claude_model: engineModel("claude") || null,
+    codex_model: engineModel("codex") || null,
+    codex_effort: localStorage.getItem("pear.codexEffort") || null,
+    codex_approval: approval,
+    codex_sandbox: sandbox,
+  });
+}
+
 // ── rendering ───────────────────────────────────────────────────────────────
 function setStatus(msg: string, warn = false) {
   statusEl.textContent = msg;
@@ -420,19 +586,14 @@ function renderTabBar() {
     };
     pill.appendChild(close);
 
-    pill.onclick = () => setActive(w.focus);
-    // Drag the pill to tile this whole window into another pane (see dropOnPane).
-    pill.draggable = true;
-    pill.addEventListener("dragstart", (e) => {
-      dragPayload = { kind: "win", winId: w.id };
-      pill.classList.add("dragging");
-      e.dataTransfer?.setData("text/plain", `win:${w.id}`);
-      if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-    });
-    pill.addEventListener("dragend", () => {
-      pill.classList.remove("dragging");
-      dragPayload = null;
-      clearAllDropHints();
+    pill.onclick = () => {
+      if (Date.now() - lastTileDragEnd < 250) return; // a tile-drag just ended — swallow the click
+      setActive(w.focus);
+    };
+    // Drag the pill (pointer-based) to tile this whole window into another pane.
+    pill.addEventListener("pointerdown", (e) => {
+      if ((e.target as HTMLElement).closest(".tab-close")) return; // let the × button work
+      startTileDrag(e, { kind: "win", winId: w.id }, pill);
     });
     tabbarEl.appendChild(pill);
   }
@@ -441,6 +602,19 @@ function renderTabBar() {
     empty.className = "tab-empty";
     empty.textContent = "no open tabs — open a PR or a shell from the left";
     tabbarEl.appendChild(empty);
+  }
+  // Reopen recently-closed tabs (browser-style), right-aligned at the end of the strip.
+  if (closedTabs.length) {
+    const reopen = document.createElement("button");
+    reopen.className = "tab-reopen";
+    reopen.textContent = "↩";
+    reopen.title = `Recently closed (${closedTabs.length}) — ⌘⇧T reopens the last`;
+    reopen.onclick = (e) => {
+      e.stopPropagation();
+      const r = reopen.getBoundingClientRect();
+      openClosedTabsMenu(r.right - 200, r.bottom + 4);
+    };
+    tabbarEl.appendChild(reopen);
   }
 }
 
@@ -630,12 +804,335 @@ function toggleSessionPop(rec: PrRecord, anchor: HTMLElement) {
 let historyEntries: PrRecord[] = [];
 let favorites: Favorites = { repos: [], prs: [] };
 let queue: Queue = { items: [] };
-type HistView = "list" | "tree" | "queue";
+type HistView = "list" | "tree" | "queue" | "teams";
 const savedView = localStorage.getItem("pear.histView");
 let historyView: HistView =
-  savedView === "tree" || savedView === "queue" ? savedView : "list";
+  savedView === "tree" || savedView === "queue" || savedView === "teams" ? savedView : "list";
 let favOnly = localStorage.getItem("pear.favOnly") === "1";
 let histQuery = "";
+
+// ── PR review/merge status (badges in the tree + teams views) ─────────────────
+// Cache live status by "owner/repo#number". Each PR is fetched at most once per session
+// (tracked in `statusRequested`) so re-renders don't loop.
+const prStatusCache = new Map<string, PrStatus>();
+const statusRequested = new Set<string>();
+// Teams view state: watched users/teams + the PRs they authored.
+let watches: Watches = { users: [], teams: [] };
+let teamPrs: PrStatus[] = [];
+const prKey = (pr: PrRef) => `${pr.owner}/${pr.repo}#${pr.number}`;
+function requestStatuses(prs: PrRef[]) {
+  const missing = prs.filter((p) => !statusRequested.has(prKey(p)));
+  if (!missing.length) return;
+  missing.forEach((p) => statusRequested.add(prKey(p)));
+  send({ type: "load_pr_statuses", prs: missing });
+}
+/** Map a PR's status to its tree badge (label · class · tooltip). Covers the user-requested
+ *  states: merged · closed · approved · changes requested · commented (+ draft/open/review). */
+function prStatusBadge(s: PrStatus): { text: string; cls: string; title: string } {
+  if (s.state === "merged") return { text: "merged", cls: "st-merged", title: "Merged" };
+  if (s.state === "closed") return { text: "closed", cls: "st-closed", title: "Closed" };
+  if (s.draft) return { text: "draft", cls: "st-draft", title: "Draft" };
+  if (s.review_decision === "APPROVED")
+    return { text: "approved", cls: "st-approved", title: "Approved" };
+  if (s.review_decision === "CHANGES_REQUESTED")
+    return { text: "changes", cls: "st-changes", title: "Changes requested" };
+  if (s.comments > 0)
+    return { text: `💬${s.comments}`, cls: "st-commented", title: `${s.comments} comment(s)` };
+  if (s.review_decision === "REVIEW_REQUIRED")
+    return { text: "review", cls: "st-review", title: "Review required" };
+  return { text: "open", cls: "st-open", title: "Open" };
+}
+/** Append the live status badge for `pr` to a tree row, if we have it cached. */
+function appendPrStatus(row: HTMLElement, pr: PrRef) {
+  const s = prStatusCache.get(prKey(pr));
+  if (!s) return;
+  const b = prStatusBadge(s);
+  const el = document.createElement("span");
+  el.className = `pr-status ${b.cls}`;
+  el.textContent = b.text;
+  el.title = b.title;
+  row.appendChild(el);
+}
+
+// ── teams view: watched users/teams → USER→REPO→PR ────────────────────────────
+function watchChip(label: string, onRemove: () => void): HTMLElement {
+  const c = document.createElement("span");
+  c.className = "teams-chip";
+  const t = document.createElement("span");
+  t.textContent = label;
+  const x = document.createElement("button");
+  x.type = "button";
+  x.className = "teams-chip-x";
+  x.textContent = "×";
+  x.title = "Unwatch";
+  x.onclick = (e) => {
+    e.stopPropagation();
+    onRemove();
+  };
+  c.append(t, x);
+  return c;
+}
+function teamPrNode(s: PrStatus): HTMLElement {
+  const li = document.createElement("li");
+  li.className = "tree-pr";
+  const row = document.createElement("div");
+  row.className = "tree-row tree-leaf";
+  const name = document.createElement("span");
+  name.className = "tree-name";
+  name.textContent = `#${s.pr.number} · ${s.title}`;
+  row.appendChild(name);
+  appendPrStatus(row, s.pr);
+  row.onclick = (e) => {
+    e.stopPropagation();
+    openPr(s.pr, "claude");
+  };
+  row.oncontextmenu = (e) => prContextMenu(e, s.pr, null);
+  li.appendChild(row);
+  return li;
+}
+function renderTeams() {
+  // Watch-management bar: add a user / org-team, plus removable chips for current watches.
+  const bar = document.createElement("div");
+  bar.className = "teams-bar";
+  const input = document.createElement("input");
+  input.className = "teams-add";
+  input.placeholder = "watch a github user — or org/team …";
+  input.onkeydown = (e) => {
+    if (e.key !== "Enter") return;
+    const v = input.value.trim().replace(/^@/, "");
+    input.value = "";
+    if (!v) return;
+    if (v.includes("/")) {
+      const [org, team] = v.split("/");
+      if (org && team) send({ type: "watch_team", org, team, on: true });
+    } else {
+      send({ type: "watch_user", login: v, on: true });
+    }
+  };
+  bar.appendChild(input);
+  const chips = document.createElement("div");
+  chips.className = "teams-chips";
+  for (const u of watches.users)
+    chips.appendChild(watchChip(`@${u}`, () => send({ type: "watch_user", login: u, on: false })));
+  for (const t of watches.teams)
+    chips.appendChild(
+      watchChip(`⛣ ${t}`, () => {
+        const [org, team] = t.split("/");
+        send({ type: "watch_team", org, team, on: false });
+      }),
+    );
+  bar.appendChild(chips);
+  historyEl.appendChild(bar);
+
+  if (!watches.users.length && !watches.teams.length) {
+    emptyRow("add a github user (or org/team) to watch their open PRs");
+    return;
+  }
+  // Group the watched PRs: USER → owner/repo → PRs.
+  const byUser = new Map<string, Map<string, PrStatus[]>>();
+  for (const s of teamPrs) {
+    const u = byUser.get(s.author) ?? byUser.set(s.author, new Map()).get(s.author)!;
+    const rk = `${s.pr.owner}/${s.pr.repo}`;
+    (u.get(rk) ?? u.set(rk, []).get(rk)!).push(s);
+  }
+  if (byUser.size === 0) {
+    emptyRow("no open PRs from watched users yet");
+    return;
+  }
+  for (const user of [...byUser.keys()].sort((a, b) => a.localeCompare(b))) {
+    const un = treeNode("user", `@${user}`, "");
+    const repos = byUser.get(user)!;
+    for (const rk of [...repos.keys()].sort((a, b) => a.localeCompare(b))) {
+      const repoNode = treeNode("repo", rk, "");
+      for (const s of repos.get(rk)!.sort((a, b) => b.pr.number - a.pr.number))
+        repoNode.children.appendChild(teamPrNode(s));
+      un.children.appendChild(repoNode.el);
+    }
+    historyEl.appendChild(un.el);
+  }
+}
+
+/** (Re)fetch the watch list + the watched users' open PRs for the Teams view. */
+function refreshTeams() {
+  send({ type: "load_watches" });
+  send({ type: "load_team_prs" });
+}
+
+// ── notifications (native OS + in-app bell) ───────────────────────────────────
+// Poll the PRs you care about (open tabs · favorites · queue · watched teams), diff each
+// against its last-seen snapshot, and surface new comments / commits / review verdicts /
+// review-requested. Native notification when peaR isn't focused; always logged to the bell.
+interface Notif {
+  id: number;
+  text: string;
+  pr: PrRef;
+  at: number;
+  read: boolean;
+}
+interface StatusSnap {
+  comments: number;
+  commits: number;
+  head_oid: string | null;
+  review_decision: string | null;
+  state: string;
+}
+const notifs: Notif[] = [];
+let notifSeq = 1;
+let osNotifGranted = false;
+const lastSeen = new Map<string, StatusSnap>();
+const notifyOn = () => localStorage.getItem("pear.notify") !== "0"; // default ON
+const snapOf = (s: PrStatus): StatusSnap => ({
+  comments: s.comments,
+  commits: s.commits,
+  head_oid: s.head_oid,
+  review_decision: s.review_decision,
+  state: s.state,
+});
+
+function maybeNotifyFromStatuses(statuses: PrStatus[]) {
+  for (const s of statuses) {
+    const k = prKey(s.pr);
+    const prev = lastSeen.get(k);
+    const cur = snapOf(s);
+    lastSeen.set(k, cur);
+    if (!prev || !notifyOn()) continue; // first sighting = baseline; muted = baseline only
+    const at = `${s.pr.owner}/${s.pr.repo}#${s.pr.number}`;
+    if (cur.commits > prev.commits || (!!cur.head_oid && cur.head_oid !== prev.head_oid))
+      pushNotif(`🔨 New commits · ${at}`, s.pr);
+    if (cur.comments > prev.comments) pushNotif(`💬 New comments · ${at}`, s.pr);
+    if (cur.review_decision !== prev.review_decision) {
+      if (cur.review_decision === "APPROVED") pushNotif(`✅ Approved · ${at}`, s.pr);
+      else if (cur.review_decision === "CHANGES_REQUESTED")
+        pushNotif(`✋ Changes requested · ${at}`, s.pr);
+      else if (cur.review_decision === "REVIEW_REQUIRED")
+        pushNotif(`👀 Your turn — review requested · ${at}`, s.pr);
+    }
+    if (cur.state !== prev.state && cur.state === "merged") pushNotif(`🟣 Merged · ${at}`, s.pr);
+  }
+}
+
+function pushNotif(text: string, pr: PrRef) {
+  notifs.unshift({ id: notifSeq++, text, pr, at: Date.now(), read: false });
+  if (notifs.length > 50) notifs.pop();
+  renderNotifBadge();
+  if (osNotifGranted && !document.hasFocus()) {
+    try {
+      sendNotification({ title: "peaR", body: text });
+    } catch {
+      /* plugin unavailable */
+    }
+  }
+}
+
+function renderNotifBadge() {
+  const unread = notifs.filter((n) => !n.read).length;
+  const c = $("#notif-count");
+  c.textContent = unread > 9 ? "9+" : String(unread);
+  c.classList.toggle("hidden", unread === 0);
+}
+
+function renderNotifPanel() {
+  const panel = $("#notif-panel");
+  panel.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "notif-head";
+  const title = document.createElement("span");
+  title.textContent = "Notifications";
+  const mute = document.createElement("button");
+  mute.className = "notif-act";
+  mute.textContent = notifyOn() ? "mute" : "unmute";
+  mute.onclick = (e) => {
+    e.stopPropagation();
+    localStorage.setItem("pear.notify", notifyOn() ? "0" : "1");
+    if (notifyOn()) pollNotifications();
+    renderNotifPanel();
+  };
+  const clear = document.createElement("button");
+  clear.className = "notif-act";
+  clear.textContent = "clear";
+  clear.onclick = (e) => {
+    e.stopPropagation();
+    notifs.length = 0;
+    renderNotifBadge();
+    renderNotifPanel();
+  };
+  head.append(title, mute, clear);
+  panel.appendChild(head);
+
+  if (!notifs.length) {
+    const empty = document.createElement("div");
+    empty.className = "notif-empty";
+    empty.textContent = notifyOn() ? "no notifications yet" : "notifications muted";
+    panel.appendChild(empty);
+    return;
+  }
+  for (const n of notifs) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "notif-item";
+    item.textContent = n.text;
+    item.onclick = () => {
+      openPr(n.pr, "claude");
+      $("#notif-panel").classList.add("hidden");
+    };
+    panel.appendChild(item);
+  }
+}
+
+function toggleNotifPanel() {
+  const panel = $("#notif-panel");
+  if (!panel.classList.contains("hidden")) {
+    panel.classList.add("hidden");
+    return;
+  }
+  renderNotifPanel();
+  panel.classList.remove("hidden");
+  notifs.forEach((n) => (n.read = true)); // opening marks all read
+  renderNotifBadge();
+}
+
+/** The set of PRs to poll for notifications: open tabs · favorites · queue (teams polled
+ *  separately via load_team_prs). */
+function notifPollSet(): PrRef[] {
+  const set = new Map<string, PrRef>();
+  for (const v of tabs.values()) if (v.pr) set.set(prKey(v.pr), v.pr);
+  for (const p of favorites.prs) set.set(prKey(p), p);
+  for (const i of queue.items) set.set(prKey(i.pr), i.pr);
+  return [...set.values()];
+}
+function pollNotifications() {
+  if (!notifyOn()) return;
+  const prs = notifPollSet();
+  if (prs.length) send({ type: "load_pr_statuses", prs });
+  if (watches.users.length || watches.teams.length) send({ type: "load_team_prs" });
+}
+
+function initNotifications() {
+  // Wire the UI + polling synchronously so the bell always works, independent of whether the
+  // OS-permission check resolves (it throws in a plain browser).
+  $("#notif-bell").addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleNotifPanel();
+  });
+  document.addEventListener("click", (e) => {
+    const panel = $("#notif-panel");
+    if (!panel.classList.contains("hidden") && !(e.target as HTMLElement)?.closest(".notif-wrap"))
+      panel.classList.add("hidden");
+  });
+  // Baseline shortly after launch (first sighting never notifies), then poll on an interval.
+  window.setTimeout(pollNotifications, 4000);
+  window.setInterval(pollNotifications, 90_000);
+  // Best-effort OS-notification permission (async, non-blocking).
+  void (async () => {
+    try {
+      let granted = await isPermissionGranted();
+      if (!granted) granted = (await requestPermission()) === "granted";
+      osNotifGranted = granted;
+    } catch {
+      osNotifGranted = false;
+    }
+  })();
+}
 
 const samePr = (a: PrRef, b: PrRef) =>
   a.owner === b.owner && a.repo === b.repo && a.number === b.number;
@@ -796,20 +1293,27 @@ function renderHistory() {
   $("#view-list").classList.toggle("on", historyView === "list");
   $("#view-tree").classList.toggle("on", historyView === "tree");
   $("#view-queue").classList.toggle("on", historyView === "queue");
+  $("#view-teams")?.classList.toggle("on", historyView === "teams");
   $("#fav-only").classList.toggle("on", favOnly);
   // Queue tab badge: number of items not yet done.
   const pending = queue.items.filter((i) => i.status !== "done").length;
   const qc = $("#queue-count");
   qc.textContent = pending ? String(pending) : "";
   qc.classList.toggle("hidden", pending === 0);
-  // Search + favorites filters apply to history/tree only, not the queue.
-  $("#hist-search").classList.toggle("hidden", historyView === "queue");
-  $("#fav-only").classList.toggle("hidden", historyView === "queue");
-  historyEl.classList.toggle("tree-mode", historyView === "tree");
+  // Search + favorites filters apply to history/tree only, not queue/teams.
+  const noFilter = historyView === "queue" || historyView === "teams";
+  $("#hist-search").classList.toggle("hidden", noFilter);
+  $("#fav-only").classList.toggle("hidden", noFilter);
+  historyEl.classList.toggle("tree-mode", historyView === "tree" || historyView === "teams");
   historyEl.classList.toggle("queue-mode", historyView === "queue");
+  historyEl.classList.toggle("teams-mode", historyView === "teams");
   historyEl.innerHTML = "";
   if (historyView === "queue") {
     renderQueue();
+    return;
+  }
+  if (historyView === "teams") {
+    renderTeams();
     return;
   }
   const entries = visibleEntries();
@@ -916,12 +1420,16 @@ const QUEUE_STATUS: Record<string, { icon: string; label: string; cls: string }>
   done: { icon: "✓", label: "done", cls: "q-done" },
 };
 
+// Auto-sort rank: priority floats above favorites floats above the rest. Stable within a
+// rank, so manual ↑/↓ order is preserved among equals.
+const queueRank = (i: QueueItem) => (i.priority ? 2 : 0) + (i.favorite ? 1 : 0);
 function renderQueue() {
   if (queue.items.length === 0) {
     emptyRow("queue is empty — right-click a PR → “Add to queue”");
     return;
   }
-  for (const item of queue.items) historyEl.appendChild(queueItemEl(item));
+  const sorted = [...queue.items].sort((a, b) => queueRank(b) - queueRank(a));
+  for (const item of sorted) historyEl.appendChild(queueItemEl(item));
 }
 
 function cycleQueueStatus(item: QueueItem) {
@@ -943,6 +1451,26 @@ function queueItemEl(item: QueueItem): HTMLElement {
   dot.onclick = (e) => {
     e.stopPropagation();
     cycleQueueStatus(item);
+  };
+
+  // Click-to-reorg marks: ⚡ priority (floats to top), ★ favorite (above the rest).
+  const pri = document.createElement("button");
+  pri.type = "button";
+  pri.className = "queue-mark" + (item.priority ? " on pri" : "");
+  pri.textContent = "⚡";
+  pri.title = item.priority ? "Priority — click to unset" : "Mark priority";
+  pri.onclick = (e) => {
+    e.stopPropagation();
+    send({ type: "queue_set_priority", pr: item.pr, on: !item.priority });
+  };
+  const favBtn = document.createElement("button");
+  favBtn.type = "button";
+  favBtn.className = "queue-mark" + (item.favorite ? " on fav" : "");
+  favBtn.textContent = "★";
+  favBtn.title = item.favorite ? "Favorite — click to unset" : "Mark favorite";
+  favBtn.onclick = (e) => {
+    e.stopPropagation();
+    send({ type: "queue_set_favorite", pr: item.pr, on: !item.favorite });
   };
 
   const main = document.createElement("div");
@@ -968,7 +1496,7 @@ function queueItemEl(item: QueueItem): HTMLElement {
   rm.classList.add("hicon-danger");
   actions.appendChild(rm);
 
-  li.append(dot, main, actions);
+  li.append(dot, pri, favBtn, main, actions);
   li.oncontextmenu = (e) => queueContextMenu(e, item);
   return li;
 }
@@ -976,16 +1504,22 @@ function queueItemEl(item: QueueItem): HTMLElement {
 function queueContextMenu(e: MouseEvent, item: QueueItem) {
   e.preventDefault();
   e.stopPropagation();
-  const fav = isPrFav(item.pr);
   const set = (status: string): CtxItem["on"] => () => send({ type: "queue_set_status", pr: item.pr, status });
   openHistCtx(e.clientX, e.clientY, [
+    {
+      label: item.priority ? "⚡ Unset priority" : "⚡ Mark priority",
+      on: () => send({ type: "queue_set_priority", pr: item.pr, on: !item.priority }),
+    },
+    {
+      label: item.favorite ? "★ Unfavorite" : "☆ Mark favorite",
+      on: () => send({ type: "queue_set_favorite", pr: item.pr, on: !item.favorite }),
+    },
     { label: "👀 Mark in progress", on: set("active") },
     { label: "✓ Mark done", on: set("done") },
     { label: "📋 Mark queued", on: set("queued") },
     { label: "↑ Move up", on: () => send({ type: "queue_move", pr: item.pr, dir: -1 }) },
     { label: "↓ Move down", on: () => send({ type: "queue_move", pr: item.pr, dir: 1 }) },
     { label: "⟲ Open / resume", on: () => openPr(item.pr, "claude") },
-    { label: fav ? "★ Unfavorite" : "☆ Favorite", on: () => favPr(item.pr, !fav) },
     { label: "× Remove from queue", danger: true, on: () => send({ type: "queue_remove", pr: item.pr }) },
   ]);
 }
@@ -1036,10 +1570,12 @@ function renderHistTree(entries: PrRecord[]) {
     }
     historyEl.appendChild(org.el);
   }
+  // Fetch live review/merge status for every PR shown (batched, once per session).
+  requestStatuses(entries.map((r) => r.pr));
 }
 
 function treeNode(
-  kind: "org" | "repo",
+  kind: "org" | "repo" | "user",
   label: string,
   mark: string,
 ): { el: HTMLElement; rowBtn: HTMLElement; children: HTMLElement } {
@@ -1092,6 +1628,7 @@ function treePrNode({ pr, rec }: PrCell): HTMLElement {
     badge.title = `${rec.sessions.length} session(s), ${msgs} messages`;
     row.appendChild(badge);
   }
+  appendPrStatus(row, pr); // live review/merge status badge
   row.onclick = (e) => {
     e.stopPropagation();
     if (rec) toggleSessionPop(rec, li);
@@ -1220,47 +1757,21 @@ function createTabView(id: number, title: string, cli: CliKind, pr: PrRef | null
   // solo terminal stays clean). It overlays the host's top padding — see .pane-title CSS.
   const titleBar = document.createElement("div");
   titleBar.className = "pane-title";
-  // Drag the title bar to pull this single pane out into another pane (or window).
-  titleBar.draggable = true;
-  titleBar.addEventListener("dragstart", (e) => {
+  // Drag the title bar (pointer-based) to pull this single pane out into another pane/window.
+  titleBar.addEventListener("pointerdown", (e) => {
     e.stopPropagation();
     const winId = paneWin.get(id);
-    if (winId == null) return;
-    dragPayload = { kind: "pane", tab: id, winId };
-    el.classList.add("dragging");
-    e.dataTransfer?.setData("text/plain", `pane:${id}`);
-    if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-  });
-  titleBar.addEventListener("dragend", () => {
-    el.classList.remove("dragging");
-    dragPayload = null;
-    clearAllDropHints();
+    if (winId != null) startTileDrag(e, { kind: "pane", tab: id, winId }, el);
   });
   el.appendChild(titleBar);
   // A translucent edge highlight shown while a drag hovers this pane (the drop target).
   const dropHint = document.createElement("div");
   dropHint.className = "drop-hint";
   el.appendChild(dropHint);
-  // Focus this pane on click; right-click to split / close it.
+  // Focus this pane on click; right-click to split / close it. (Drop targeting is handled by
+  // the global pointer-drag in startTileDrag via elementFromPoint + this host's data-pane.)
   el.addEventListener("mousedown", () => focusPane(id), true);
   el.addEventListener("contextmenu", (e) => paneContextMenu(e, id));
-  // Drop target: accept a dragged window/pane, previewing the dock edge under the cursor.
-  el.addEventListener("dragover", (e) => {
-    if (!dragPayload) return;
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-    showDropHint(el, zoneFor(el, e.clientX, e.clientY));
-  });
-  el.addEventListener("dragleave", (e) => {
-    if (!el.contains(e.relatedTarget as Node)) clearDropHint(el);
-  });
-  el.addEventListener("drop", (e) => {
-    if (!dragPayload) return;
-    e.preventDefault();
-    const zone = zoneFor(el, e.clientX, e.clientY);
-    clearDropHint(el);
-    dropOnPane(id, zone);
-  });
   terminalsEl.appendChild(el);
 
   const term = new Terminal({
@@ -1334,6 +1845,7 @@ function setActive(id: number) {
 function closeTabView(id: number) {
   const v = tabs.get(id);
   if (v) {
+    recordClosedTab(v); // remember it so it can be reopened
     v.term.dispose();
     v.el.remove();
     tabs.delete(id);
@@ -1376,6 +1888,45 @@ function closeTabView(id: number) {
   renderTabBar();
   renderToolbar();
   saveLayout(); // a pane/window closed — re-capture the tile structure
+}
+
+// ── recently closed tabs (reopen via the ↩ tab-bar button or ⌘⇧T) ──────────────
+interface ClosedTab {
+  pr: PrRef | null;
+  cli: CliKind;
+  title: string;
+}
+const closedTabs: ClosedTab[] = [];
+const MAX_CLOSED = 25;
+function closedKey(c: ClosedTab): string {
+  return c.pr ? `${c.pr.owner}/${c.pr.repo}#${c.pr.number}` : `shell:${c.title}`;
+}
+function recordClosedTab(v: TabView) {
+  const entry: ClosedTab = { pr: v.pr, cli: v.cli, title: v.title };
+  const key = closedKey(entry);
+  const i = closedTabs.findIndex((c) => closedKey(c) === key);
+  if (i >= 0) closedTabs.splice(i, 1); // de-dupe, bump to front
+  closedTabs.unshift(entry);
+  if (closedTabs.length > MAX_CLOSED) closedTabs.pop();
+}
+function reopenClosed(c: ClosedTab) {
+  const i = closedTabs.indexOf(c);
+  if (i >= 0) closedTabs.splice(i, 1);
+  if (c.pr) openPr(c.pr, c.cli);
+  else send({ type: "open_scratch", cli: c.cli, cwd: null });
+  renderTabBar();
+}
+function reopenLastClosed() {
+  if (closedTabs.length) reopenClosed(closedTabs[0]);
+}
+function openClosedTabsMenu(x: number, y: number) {
+  const items: CtxItem[] = closedTabs.length
+    ? closedTabs.map((c) => ({
+        label: `${c.pr ? `⎇ ${c.title}` : `› ${c.title}`}  ·  ${c.cli}`,
+        on: () => reopenClosed(c),
+      }))
+    : [{ label: "no recently closed tabs", on: () => {} }];
+  openHistCtx(x, y, items);
 }
 
 // ── pane tree: build / mutate / render ────────────────────────────────────────
@@ -1489,6 +2040,15 @@ function makeGutter(node: Extract<PaneNode, { kind: "split" }>): HTMLElement {
   g.className = `pane-gutter ${node.dir}`;
   g.addEventListener("pointerdown", (e) => {
     e.preventDefault();
+    e.stopPropagation();
+    // Capture the pointer so moves keep landing on the gutter even as the cursor passes over
+    // the xterm canvas (whose own pointer handling would otherwise swallow them).
+    try {
+      g.setPointerCapture(e.pointerId);
+    } catch {
+      /* fine without capture */
+    }
+    g.classList.add("dragging");
     const split = g.parentElement;
     if (!split) return;
     const rect = split.getBoundingClientRect();
@@ -1518,6 +2078,7 @@ function makeGutter(node: Extract<PaneNode, { kind: "split" }>): HTMLElement {
     const up = () => {
       document.removeEventListener("pointermove", move);
       document.removeEventListener("pointerup", up);
+      g.classList.remove("dragging");
       if (raf) cancelAnimationFrame(raf);
       if (activeWin != null) refitWindow(activeWin); // final exact fit
       saveLayout(); // persist the new split ratio
@@ -1609,6 +2170,14 @@ function handle(ev: CoreEvent) {
     case "layout_restore": {
       const total = ev.windows.reduce((n, w) => n + countLeavesWire(w.tree), 0);
       restoreState = total > 0 ? { windows: ev.windows, active: ev.active, total, slots: [] } : null;
+      // Safety net: if some entry fails to open (fewer tab_opened than expected), assemble with
+      // what arrived after a grace period so the layout never gets stuck mid-restore.
+      if (restoreState) {
+        const rs = restoreState;
+        setTimeout(() => {
+          if (restoreState === rs && rs.slots.length > 0) assembleRestore();
+        }, 5000);
+      }
       break;
     }
     case "tab_opened": {
@@ -1716,6 +2285,38 @@ function handle(ev: CoreEvent) {
       favorites = ev.favorites ?? { repos: [], prs: [] };
       queue = ev.queue ?? { items: [] };
       renderHistory();
+      break;
+    }
+    case "pr_statuses": {
+      for (const s of ev.statuses) prStatusCache.set(prKey(s.pr), s);
+      maybeNotifyFromStatuses(ev.statuses); // notification diffing (no-op until armed)
+      if (historyView === "tree" || historyView === "teams") renderHistory();
+      break;
+    }
+    case "watches": {
+      watches = ev.watches ?? { users: [], teams: [] };
+      if (historyView === "teams") renderHistory();
+      break;
+    }
+    case "team_prs": {
+      teamPrs = ev.prs;
+      for (const s of ev.prs) prStatusCache.set(prKey(s.pr), s);
+      maybeNotifyFromStatuses(ev.prs);
+      if (historyView === "teams") renderHistory();
+      break;
+    }
+    case "diff_summaries": {
+      const map = new Map(ev.summaries.map((s) => [s.path, s.summary]));
+      diffSummaries.set(ev.tab, map);
+      // If this tab's diff is currently shown, inject the summaries now.
+      if (ev.tab === active && panelBodyEl.classList.contains("diff-mode"))
+        applyFileSummaries(panelBodyEl, map);
+      setStatus(`summarized ${map.size} file${map.size === 1 ? "" : "s"}`);
+      const btn = panelBodyEl.querySelector<HTMLButtonElement>(".dt-summary");
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "✦ Summarize";
+      }
       break;
     }
     case "skills_status": {
@@ -2022,6 +2623,12 @@ function handleZoomKey(e: KeyboardEvent) {
   ) {
     return; // a real form field (e.g. the review popover) — let it type
   }
+  // ⌘⇧T reopens the most recently closed tab (browser-style).
+  if (e.shiftKey && (e.key === "T" || e.key === "t")) {
+    e.preventDefault();
+    reopenLastClosed();
+    return;
+  }
   if (e.key === "=" || e.key === "+") {
     e.preventDefault();
     applyZoom(+1);
@@ -2056,6 +2663,8 @@ function loadPanel() {
 
 // Per-tab diff cache so reopening the panel is instant instead of re-hitting GitHub.
 const diffCache = new Map<number, { diff: string; comments: DiffComment[] }>();
+// Per-tab per-file Haiku summaries (path → one-line summary).
+const diffSummaries = new Map<number, Map<string, string>>();
 
 function diffTitle(tab: number): string {
   const pr = tabs.get(tab)?.pr ?? null;
@@ -2068,6 +2677,8 @@ function showDiff(tab: number, diff: string, comments: DiffComment[]) {
   // Drive inline threads from the comments cache (resolved state + reactions) when
   // present; renderDiff falls back to the flat REST comments until they arrive.
   renderDiff(panelBodyEl, diff, comments, commentsCache.get(tab)?.threads ?? []);
+  const sums = diffSummaries.get(tab);
+  if (sums) applyFileSummaries(panelBodyEl, sums); // re-apply cached per-file summaries
   setPanel(true);
   renderTreeRail(); // re-sync the file-tree rail (open state persists across diffs)
   setStatus(`diff · ${comments.length} comment${comments.length === 1 ? "" : "s"}`);
@@ -3111,10 +3722,58 @@ function initLauncher(): void {
     });
     disarmUltra();
     permSelect.classList.toggle("hidden", selectedEngine !== "claude");
+    refreshLaunchAdv();
     openBtn.textContent = selectedTier ? "▸ Open & review" : "▸ Open";
     localStorage.setItem("pear.engine", selectedEngine);
     localStorage.setItem("pear.tier", selectedTier ?? "off");
   };
+
+  // Per-engine model / effort / access selectors.
+  const modelSel = $<HTMLSelectElement>("#model-select");
+  const modelCustom = $<HTMLInputElement>("#model-custom");
+  const effortSel = $<HTMLSelectElement>("#codex-effort");
+  const accessSel = $<HTMLSelectElement>("#codex-access");
+  const refreshLaunchAdv = () => {
+    const cur = engineModel(selectedEngine);
+    const presets = MODEL_PRESETS[selectedEngine] ?? [];
+    const isCustom = cur !== "" && !presets.includes(cur);
+    modelSel.innerHTML = "";
+    modelSel.add(new Option("model · default", ""));
+    for (const p of presets) modelSel.add(new Option(p, p));
+    modelSel.add(new Option("custom…", "__custom__"));
+    modelSel.value = isCustom ? "__custom__" : cur;
+    modelCustom.classList.toggle("hidden", modelSel.value !== "__custom__");
+    if (isCustom) modelCustom.value = cur;
+    const isCodex = selectedEngine === "codex";
+    effortSel.classList.toggle("hidden", !isCodex);
+    accessSel.classList.toggle("hidden", !isCodex);
+    effortSel.value = localStorage.getItem("pear.codexEffort") ?? "";
+    accessSel.value = localStorage.getItem("pear.codexAccess") ?? "";
+  };
+  modelSel.addEventListener("change", () => {
+    if (modelSel.value === "__custom__") {
+      modelCustom.classList.remove("hidden");
+      modelCustom.focus();
+      return;
+    }
+    localStorage.setItem(`pear.model.${selectedEngine}`, modelSel.value);
+    modelCustom.classList.add("hidden");
+    sendLaunchConfig();
+  });
+  const commitCustomModel = () => {
+    localStorage.setItem(`pear.model.${selectedEngine}`, modelCustom.value.trim());
+    sendLaunchConfig();
+  };
+  modelCustom.addEventListener("change", commitCustomModel);
+  modelCustom.addEventListener("blur", commitCustomModel);
+  effortSel.addEventListener("change", () => {
+    localStorage.setItem("pear.codexEffort", effortSel.value);
+    sendLaunchConfig();
+  });
+  accessSel.addEventListener("change", () => {
+    localStorage.setItem("pear.codexAccess", accessSel.value);
+    sendLaunchConfig();
+  });
 
   seg.querySelectorAll<HTMLButtonElement>("button[data-engine]").forEach((b) =>
     b.addEventListener("click", () => {
@@ -3149,6 +3808,7 @@ function initLauncher(): void {
   });
 
   refresh();
+  sendLaunchConfig(); // push persisted model/effort/access to the engine on startup
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
@@ -3205,11 +3865,13 @@ window.addEventListener("DOMContentLoaded", async () => {
   const setHistView = (v: HistView) => {
     historyView = v;
     localStorage.setItem("pear.histView", v);
+    if (v === "teams") refreshTeams();
     renderHistory();
   };
   $("#view-list").addEventListener("click", () => setHistView("list"));
   $("#view-tree").addEventListener("click", () => setHistView("tree"));
   $("#view-queue").addEventListener("click", () => setHistView("queue"));
+  $("#view-teams")?.addEventListener("click", () => setHistView("teams"));
   $("#fav-only").addEventListener("click", () => {
     favOnly = !favOnly;
     localStorage.setItem("pear.favOnly", favOnly ? "1" : "0");
@@ -3327,6 +3989,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#dtree-narrower").addEventListener("click", () => setTreeLevel(NARROWER[treeLevel]));
   $("#dtree-close").addEventListener("click", () => closeTree());
   setApproveHandler((anchor) => openReviewModal("APPROVE", anchor));
+  setSummarizeHandler(() => {
+    if (active !== null) {
+      send({ type: "summarize_diff", tab: active });
+      setStatus("summarizing the diff with Haiku…");
+    }
+  });
   // Insight is hard-coded off for now — hide its controls (the panel itself is reused
   // by the diff view, so it stays). Flip INSIGHT_ENABLED to bring these back.
   if (!INSIGHT_ENABLED) {
@@ -3561,11 +4229,21 @@ window.addEventListener("DOMContentLoaded", async () => {
   window.addEventListener("resize", refit);
   new ResizeObserver(refit).observe(terminalsEl);
 
+  initNotifications(); // wire the bell + polling before the (Tauri-only) event listener
+
   await listen<CoreEvent>("pear:event", (e) => handle(e.payload));
 
   renderTabBar();
   renderToolbar();
+  // Show the running app version in the sidebar brand.
+  getVersion()
+    .then((v) => {
+      const el = document.getElementById("app-version");
+      if (el) el.textContent = `v${v}`;
+    })
+    .catch(() => {});
   send({ type: "load_history" });
+  if (historyView === "teams") refreshTeams(); // restore the Teams view on launch
   send({ type: "check_skills" }); // → skills_status; consent modal if /pr-* missing
   // Always sync the engine's tabs into this (possibly reloaded) frontend; the engine only
   // *restores* the saved layout on a genuinely fresh start, so a reload never duplicates.
