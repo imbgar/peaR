@@ -183,9 +183,6 @@ function showDropHint(el: HTMLElement, zone: DropZone) {
   const hint = el.querySelector<HTMLElement>(".drop-hint");
   if (hint) hint.className = `drop-hint show ${zone}`;
 }
-function clearDropHint(el: HTMLElement) {
-  el.querySelector<HTMLElement>(".drop-hint")?.classList.remove("show");
-}
 function clearAllDropHints() {
   document.querySelectorAll<HTMLElement>(".drop-hint.show").forEach((h) => h.classList.remove("show"));
 }
@@ -243,6 +240,127 @@ function dropOnPane(targetTab: number, zone: DropZone) {
   clearAllDropHints();
   setActive(focusAfter); // renders the target window, refits, rebuilds the tabbar
   saveLayout();
+}
+
+// ── pointer-based tile drag (HTML5 DnD is unreliable over the xterm canvas in the webview) ──
+const DRAG_THRESHOLD = 6;
+let tileGhost: HTMLElement | null = null;
+let lastTileDragEnd = 0; // suppress the click that follows a pill drag
+const labelForPayload = (p: DragPayload): string =>
+  p.kind === "win"
+    ? (tabs.get(windows.get(p.winId)?.root ?? -1)?.title ?? "window")
+    : (tabs.get(p.tab)?.title ?? "pane");
+
+/** Begin a potential tile-drag from `sourceEl`. Becomes a real drag only past a small
+ *  threshold (so clicks still work); shows a ghost + live left/right/top/bottom drop hint on
+ *  whatever pane the cursor is over, and on release asks to confirm the nesting. */
+function startTileDrag(e: PointerEvent, payload: DragPayload, sourceEl: HTMLElement) {
+  if (e.button !== 0) return;
+  const startX = e.clientX;
+  const startY = e.clientY;
+  let dragging = false;
+  let drop: { tab: number; zone: DropZone } | null = null;
+
+  const hostAt = (x: number, y: number) => {
+    const host = (document.elementFromPoint(x, y) as HTMLElement | null)?.closest<HTMLElement>(
+      ".terminal-host",
+    );
+    return host && host.dataset.pane ? host : null;
+  };
+  const move = (ev: PointerEvent) => {
+    if (!dragging) {
+      if (Math.abs(ev.clientX - startX) < DRAG_THRESHOLD && Math.abs(ev.clientY - startY) < DRAG_THRESHOLD)
+        return;
+      dragging = true;
+      dragPayload = payload;
+      sourceEl.classList.add("dragging");
+      document.body.classList.add("tiling-drag");
+      tileGhost = document.createElement("div");
+      tileGhost.className = "tile-ghost";
+      tileGhost.textContent = `⊞ ${labelForPayload(payload)}`;
+      document.body.appendChild(tileGhost);
+    }
+    if (tileGhost) {
+      tileGhost.style.left = `${ev.clientX + 14}px`;
+      tileGhost.style.top = `${ev.clientY + 16}px`;
+    }
+    clearAllDropHints();
+    drop = null;
+    const host = hostAt(ev.clientX, ev.clientY);
+    if (host) {
+      const tab = Number(host.dataset.pane);
+      const selfPane = payload.kind === "pane" && payload.tab === tab;
+      const selfWin = payload.kind === "win" && payload.winId === paneWin.get(tab);
+      if (!selfPane && !selfWin) {
+        const zone = zoneFor(host, ev.clientX, ev.clientY);
+        showDropHint(host, zone);
+        drop = { tab, zone };
+      }
+    }
+  };
+  const up = () => {
+    document.removeEventListener("pointermove", move);
+    document.removeEventListener("pointerup", up);
+    sourceEl.classList.remove("dragging");
+    document.body.classList.remove("tiling-drag");
+    tileGhost?.remove();
+    tileGhost = null;
+    if (dragging) lastTileDragEnd = Date.now();
+    if (dragging && drop) {
+      confirmTile(drop.tab, drop.zone); // keeps the hint until the user decides
+    } else {
+      clearAllDropHints();
+      dragPayload = null;
+    }
+  };
+  document.addEventListener("pointermove", move);
+  document.addEventListener("pointerup", up);
+}
+
+/** Ask the user to confirm a drag-and-dropped nesting before it reorganizes the layout. */
+function confirmTile(targetTab: number, zone: DropZone) {
+  const payload = dragPayload;
+  if (!payload) return;
+  const srcLabel = labelForPayload(payload);
+  const tgtLabel = tabs.get(targetTab)?.title ?? "pane";
+  const scrim = document.createElement("div");
+  scrim.className = "pop-scrim";
+  const card = document.createElement("div");
+  card.className = "tile-confirm";
+  const msg = document.createElement("div");
+  msg.className = "tc-msg";
+  msg.innerHTML = `Nest <b>${escapeHtml(srcLabel)}</b> to the <b>${zone}</b> of <b>${escapeHtml(tgtLabel)}</b>?`;
+  const actions = document.createElement("div");
+  actions.className = "tc-actions";
+  const cancel = document.createElement("button");
+  cancel.className = "tc-cancel";
+  cancel.textContent = "Cancel";
+  const ok = document.createElement("button");
+  ok.className = "primary tc-ok";
+  ok.textContent = "Nest ⊞";
+  actions.append(cancel, ok);
+  card.append(msg, actions);
+  scrim.appendChild(card);
+  const close = (apply: boolean) => {
+    scrim.remove();
+    document.removeEventListener("keydown", onKey);
+    clearAllDropHints();
+    if (apply) dropOnPane(targetTab, zone);
+    else dragPayload = null;
+  };
+  const onKey = (ev: KeyboardEvent) => {
+    if (ev.key === "Escape") close(false);
+    else if (ev.key === "Enter") close(true);
+  };
+  cancel.onclick = () => close(false);
+  ok.onclick = () => close(true);
+  scrim.addEventListener("click", (ev) => {
+    if (ev.target === scrim) close(false);
+  });
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(scrim);
+  positionPopover(card); // centered (no anchor)
+  ok.focus();
 }
 
 const persistOn = () => localStorage.getItem("pear.persist") !== "0"; // default ON
@@ -456,19 +574,14 @@ function renderTabBar() {
     };
     pill.appendChild(close);
 
-    pill.onclick = () => setActive(w.focus);
-    // Drag the pill to tile this whole window into another pane (see dropOnPane).
-    pill.draggable = true;
-    pill.addEventListener("dragstart", (e) => {
-      dragPayload = { kind: "win", winId: w.id };
-      pill.classList.add("dragging");
-      e.dataTransfer?.setData("text/plain", `win:${w.id}`);
-      if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-    });
-    pill.addEventListener("dragend", () => {
-      pill.classList.remove("dragging");
-      dragPayload = null;
-      clearAllDropHints();
+    pill.onclick = () => {
+      if (Date.now() - lastTileDragEnd < 250) return; // a tile-drag just ended — swallow the click
+      setActive(w.focus);
+    };
+    // Drag the pill (pointer-based) to tile this whole window into another pane.
+    pill.addEventListener("pointerdown", (e) => {
+      if ((e.target as HTMLElement).closest(".tab-close")) return; // let the × button work
+      startTileDrag(e, { kind: "win", winId: w.id }, pill);
     });
     tabbarEl.appendChild(pill);
   }
@@ -1602,47 +1715,21 @@ function createTabView(id: number, title: string, cli: CliKind, pr: PrRef | null
   // solo terminal stays clean). It overlays the host's top padding — see .pane-title CSS.
   const titleBar = document.createElement("div");
   titleBar.className = "pane-title";
-  // Drag the title bar to pull this single pane out into another pane (or window).
-  titleBar.draggable = true;
-  titleBar.addEventListener("dragstart", (e) => {
+  // Drag the title bar (pointer-based) to pull this single pane out into another pane/window.
+  titleBar.addEventListener("pointerdown", (e) => {
     e.stopPropagation();
     const winId = paneWin.get(id);
-    if (winId == null) return;
-    dragPayload = { kind: "pane", tab: id, winId };
-    el.classList.add("dragging");
-    e.dataTransfer?.setData("text/plain", `pane:${id}`);
-    if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-  });
-  titleBar.addEventListener("dragend", () => {
-    el.classList.remove("dragging");
-    dragPayload = null;
-    clearAllDropHints();
+    if (winId != null) startTileDrag(e, { kind: "pane", tab: id, winId }, el);
   });
   el.appendChild(titleBar);
   // A translucent edge highlight shown while a drag hovers this pane (the drop target).
   const dropHint = document.createElement("div");
   dropHint.className = "drop-hint";
   el.appendChild(dropHint);
-  // Focus this pane on click; right-click to split / close it.
+  // Focus this pane on click; right-click to split / close it. (Drop targeting is handled by
+  // the global pointer-drag in startTileDrag via elementFromPoint + this host's data-pane.)
   el.addEventListener("mousedown", () => focusPane(id), true);
   el.addEventListener("contextmenu", (e) => paneContextMenu(e, id));
-  // Drop target: accept a dragged window/pane, previewing the dock edge under the cursor.
-  el.addEventListener("dragover", (e) => {
-    if (!dragPayload) return;
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-    showDropHint(el, zoneFor(el, e.clientX, e.clientY));
-  });
-  el.addEventListener("dragleave", (e) => {
-    if (!el.contains(e.relatedTarget as Node)) clearDropHint(el);
-  });
-  el.addEventListener("drop", (e) => {
-    if (!dragPayload) return;
-    e.preventDefault();
-    const zone = zoneFor(el, e.clientX, e.clientY);
-    clearDropHint(el);
-    dropOnPane(id, zone);
-  });
   terminalsEl.appendChild(el);
 
   const term = new Terminal({
