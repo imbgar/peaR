@@ -295,6 +295,7 @@ impl Engine {
                 });
             }
             Command::LoadTeamPrs => self.load_team_prs(),
+            Command::SummarizeDiff { tab } => self.summarize_diff(tab),
             Command::CheckSkills => self.emit(Event::SkillsStatus {
                 installed: crate::skills_install::skills_installed(),
             }),
@@ -1100,6 +1101,52 @@ impl Engine {
                 }
             }
             sink(Event::TeamPrs { prs });
+        });
+    }
+
+    /// Summarize each changed file in the tab's PR diff via Haiku (worker thread).
+    fn summarize_diff(&mut self, tab: TabId) {
+        let pr = self.tabs.get(&tab).and_then(|t| t.pr.clone());
+        let Some(pr) = pr else {
+            self.emit(Event::Notice {
+                tab: Some(tab),
+                message: "summary: this tab isn't a pull request".into(),
+            });
+            return;
+        };
+        let cwd = self.tabs.get(&tab).and_then(|t| self.live_cwd(t));
+        let Some(gh) = self.github() else {
+            self.emit(Event::Notice {
+                tab: Some(tab),
+                message: "no GitHub token — diff summary unavailable".into(),
+            });
+            return;
+        };
+        let sink = self.sink.clone();
+        std::thread::spawn(move || {
+            let diff = match gh.pr_diff(&pr) {
+                Ok(d) => d,
+                Err(e) => {
+                    sink(Event::Notice {
+                        tab: Some(tab),
+                        message: format!("summary: {e}"),
+                    });
+                    return;
+                }
+            };
+            match crate::summary::summarize_diff(&diff, cwd.as_deref()) {
+                Ok(pairs) => sink(Event::DiffSummaries {
+                    tab,
+                    summaries: pairs
+                        .into_iter()
+                        .map(|(path, summary)| crate::protocol::FileSummary { path, summary })
+                        .collect(),
+                }),
+                Err(e) => sink(Event::Notice {
+                    tab: Some(tab),
+                    message: format!("summary: {e}"),
+                }),
+            }
         });
     }
 

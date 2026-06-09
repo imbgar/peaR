@@ -250,6 +250,13 @@ pub struct PrStatus {
     pub head_oid: Option<String>,
 }
 
+/// A one-line Haiku-generated summary of a single changed file in a PR diff.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileSummary {
+    pub path: String,
+    pub summary: String,
+}
+
 /// The user's "teams" watch list: GitHub logins and org teams whose members' PRs show up in
 /// the Teams view (USER → REPO → PR). Persisted in the data dir.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -605,6 +612,9 @@ pub enum Command {
     /// Fetch open PRs authored by every watched user (+ expanded team members), with status.
     /// Replied via `Event::TeamPrs`.
     LoadTeamPrs,
+    /// Generate a one-line Haiku summary per changed file in the tab's PR diff. Replied via
+    /// `Event::DiffSummaries`.
+    SummarizeDiff { tab: TabId },
 }
 
 /// Events the engine emits to the frontend.
@@ -686,6 +696,11 @@ pub enum Event {
     Watches { watches: Watches },
     /// Open PRs from watched users/teams (reply to `LoadTeamPrs`) — drives the Teams view.
     TeamPrs { prs: Vec<PrStatus> },
+    /// One-line per-file Haiku summaries for the tab's diff (reply to `SummarizeDiff`).
+    DiffSummaries {
+        tab: TabId,
+        summaries: Vec<FileSummary>,
+    },
     /// A non-fatal problem the UI should surface (toast).
     Notice { tab: Option<TabId>, message: String },
     /// A fatal-for-this-command error.

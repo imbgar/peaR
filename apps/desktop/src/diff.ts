@@ -144,6 +144,39 @@ let onApprove: ((anchor: HTMLElement) => void) | null = null;
 export function setApproveHandler(fn: (anchor: HTMLElement) => void) {
   onApprove = fn;
 }
+let onSummarize: (() => void) | null = null;
+/** Wire the diff toolbar's "Summarize" (per-file Haiku summary) button. */
+export function setSummarizeHandler(fn: () => void) {
+  onSummarize = fn;
+}
+
+/** Inject/refresh a one-line summary under each file header. Matches a summary to a file by
+ *  exact path, else by suffix (Haiku may keep a/ b/ prefixes). */
+export function applyFileSummaries(container: HTMLElement, summaries: Map<string, string>) {
+  const lookup = (path: string): string | undefined => {
+    if (summaries.has(path)) return summaries.get(path);
+    for (const [k, v] of summaries) {
+      if (k.endsWith(path) || path.endsWith(k)) return v;
+    }
+    return undefined;
+  };
+  container.querySelectorAll<HTMLElement>(":scope > .diff-file").forEach((card) => {
+    const path = card.dataset.path;
+    if (!path) return;
+    const s = lookup(path);
+    let el = card.querySelector<HTMLElement>(":scope > .diff-file-summary");
+    if (!s) {
+      el?.remove();
+      return;
+    }
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "diff-file-summary";
+      card.querySelector(".diff-file-head")?.after(el);
+    }
+    el.textContent = `✦ ${s}`;
+  });
+}
 
 function sortFiles(files: DFile[]): DFile[] {
   const by = (f: DFile) =>
@@ -319,6 +352,20 @@ function buildDiffToolbar(
   };
   bar.appendChild(mkToggle("+", "hide-add", "Show / hide added lines"));
   bar.appendChild(mkToggle("−", "hide-del", "Show / hide removed lines"));
+
+  if (onSummarize) {
+    const sum = document.createElement("button");
+    sum.type = "button";
+    sum.className = "dt-summary";
+    sum.textContent = "✦ Summarize";
+    sum.title = "One-line summary per file (Claude Haiku)";
+    sum.addEventListener("click", () => {
+      sum.disabled = true;
+      sum.textContent = "✦ Summarizing…";
+      onSummarize?.();
+    });
+    bar.appendChild(sum);
+  }
 
   if (onApprove) {
     const review = document.createElement("button");

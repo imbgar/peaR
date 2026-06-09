@@ -33,6 +33,8 @@ import {
   setPendingReview,
   setDiffCloseHandler,
   setApproveHandler,
+  setSummarizeHandler,
+  applyFileSummaries,
   jumpToThread,
   type TreeLevel,
 } from "./diff";
@@ -2284,6 +2286,20 @@ function handle(ev: CoreEvent) {
       if (historyView === "teams") renderHistory();
       break;
     }
+    case "diff_summaries": {
+      const map = new Map(ev.summaries.map((s) => [s.path, s.summary]));
+      diffSummaries.set(ev.tab, map);
+      // If this tab's diff is currently shown, inject the summaries now.
+      if (ev.tab === active && panelBodyEl.classList.contains("diff-mode"))
+        applyFileSummaries(panelBodyEl, map);
+      setStatus(`summarized ${map.size} file${map.size === 1 ? "" : "s"}`);
+      const btn = panelBodyEl.querySelector<HTMLButtonElement>(".dt-summary");
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "✦ Summarize";
+      }
+      break;
+    }
     case "skills_status": {
       if (ev.installed) {
         // Installed (initial check or post-install). Close any open prompt.
@@ -2628,6 +2644,8 @@ function loadPanel() {
 
 // Per-tab diff cache so reopening the panel is instant instead of re-hitting GitHub.
 const diffCache = new Map<number, { diff: string; comments: DiffComment[] }>();
+// Per-tab per-file Haiku summaries (path → one-line summary).
+const diffSummaries = new Map<number, Map<string, string>>();
 
 function diffTitle(tab: number): string {
   const pr = tabs.get(tab)?.pr ?? null;
@@ -2640,6 +2658,8 @@ function showDiff(tab: number, diff: string, comments: DiffComment[]) {
   // Drive inline threads from the comments cache (resolved state + reactions) when
   // present; renderDiff falls back to the flat REST comments until they arrive.
   renderDiff(panelBodyEl, diff, comments, commentsCache.get(tab)?.threads ?? []);
+  const sums = diffSummaries.get(tab);
+  if (sums) applyFileSummaries(panelBodyEl, sums); // re-apply cached per-file summaries
   setPanel(true);
   renderTreeRail(); // re-sync the file-tree rail (open state persists across diffs)
   setStatus(`diff · ${comments.length} comment${comments.length === 1 ? "" : "s"}`);
@@ -3950,6 +3970,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#dtree-narrower").addEventListener("click", () => setTreeLevel(NARROWER[treeLevel]));
   $("#dtree-close").addEventListener("click", () => closeTree());
   setApproveHandler((anchor) => openReviewModal("APPROVE", anchor));
+  setSummarizeHandler(() => {
+    if (active !== null) {
+      send({ type: "summarize_diff", tab: active });
+      setStatus("summarizing the diff with Haiku…");
+    }
+  });
   // Insight is hard-coded off for now — hide its controls (the panel itself is reused
   // by the diff view, so it stays). Flip INSIGHT_ENABLED to bring these back.
   if (!INSIGHT_ENABLED) {

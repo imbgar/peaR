@@ -208,7 +208,13 @@ export type Command =
   | { type: "load_watches" }
   | { type: "watch_user"; login: string; on: boolean }
   | { type: "watch_team"; org: string; team: string; on: boolean }
-  | { type: "load_team_prs" };
+  | { type: "load_team_prs" }
+  | { type: "summarize_diff"; tab: number };
+
+export interface FileSummary {
+  path: string;
+  summary: string;
+}
 
 /** Serialized pane tree for tile persistence. Leaves carry live TabIds on save (the engine
  *  remaps them to entry indices); on a restore event they are entry indices. */
@@ -239,6 +245,7 @@ export type Event =
   | { type: "pr_statuses"; statuses: PrStatus[] }
   | { type: "watches"; watches: Watches }
   | { type: "team_prs"; prs: PrStatus[] }
+  | { type: "diff_summaries"; tab: number; summaries: FileSummary[] }
   | { type: "notice"; tab: number | null; message: string }
   | { type: "error"; tab: number | null; message: string };
 
