@@ -307,7 +307,16 @@ function startTileDrag(e: PointerEvent, payload: DragPayload, sourceEl: HTMLElem
     tileGhost = null;
     if (dragging) lastTileDragEnd = Date.now();
     if (dragging && drop) {
-      confirmTile(drop.tab, drop.zone); // keeps the hint until the user decides
+      // Only confirm when dragging a whole tab that has NESTED tiles (a multi-pane window) —
+      // moving a single tile (or a single-pane tab) applies immediately.
+      const win = payload.kind === "win" ? windows.get(payload.winId) : null;
+      const nested = !!win && countLeaves(win.layout) > 1;
+      if (nested) {
+        confirmTile(drop.tab, drop.zone); // keeps the hint until the user decides
+      } else {
+        clearAllDropHints();
+        dropOnPane(drop.tab, drop.zone);
+      }
     } else {
       clearAllDropHints();
       dragPayload = null;
