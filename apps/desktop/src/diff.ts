@@ -133,6 +133,10 @@ const SORT_LABELS: Record<SortMode, string> = {
   removals: "Most removals",
 };
 let diffSort: SortMode = "default";
+/** Set the default file sort (from settings). Re-renders happen on the next diff render. */
+export function setDiffSort(mode: string) {
+  if (mode in SORT_LABELS) diffSort = mode as SortMode;
+}
 let onDiffClose: (() => void) | null = null;
 /** Wire the diff toolbar's × (close) button. */
 export function setDiffCloseHandler(fn: () => void) {
