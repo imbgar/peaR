@@ -950,10 +950,21 @@ button:disabled { opacity: 0.38; cursor: default; }
 .pane-split { display: flex; flex: 1 1 0; min-width: 0; min-height: 0; }
 .pane-split.row { flex-direction: row; }
 .pane-split.col { flex-direction: column; }
-.pane-gutter { flex: 0 0 5px; background: var(--bd); transition: background 0.12s; }
+.pane-gutter {
+  flex: 0 0 6px; background: var(--bd); transition: background 0.12s;
+  position: relative; z-index: 5; touch-action: none; /* reliable pointer-drag in the webview */
+}
 .pane-gutter.row { cursor: col-resize; }
 .pane-gutter.col { cursor: row-resize; }
-.pane-gutter:hover { background: var(--accent-d); }
+.pane-gutter:hover, .pane-gutter.dragging { background: var(--accent-d); }
+/* a subtle grip so the divider is discoverable */
+.pane-gutter::after {
+  content: ""; position: absolute; background: color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 999px; opacity: 0; transition: opacity 0.12s;
+}
+.pane-gutter:hover::after, .pane-gutter.dragging::after { opacity: 1; }
+.pane-gutter.row::after { top: 50%; left: 1px; right: 1px; height: 22px; transform: translateY(-50%); }
+.pane-gutter.col::after { left: 50%; top: 1px; bottom: 1px; width: 22px; transform: translateX(-50%); }
 /* focus ring on the active pane (only when there's more than one) */
 .terminal-host.pane-focus { box-shadow: inset 0 0 0 1px var(--accent-d); border-radius: var(--r-sm); }
 .tab-panes { font-size: 9px; color: var(--dim); margin-left: 5px; }

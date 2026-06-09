@@ -2039,6 +2039,15 @@ function makeGutter(node: Extract<PaneNode, { kind: "split" }>): HTMLElement {
   g.className = `pane-gutter ${node.dir}`;
   g.addEventListener("pointerdown", (e) => {
     e.preventDefault();
+    e.stopPropagation();
+    // Capture the pointer so moves keep landing on the gutter even as the cursor passes over
+    // the xterm canvas (whose own pointer handling would otherwise swallow them).
+    try {
+      g.setPointerCapture(e.pointerId);
+    } catch {
+      /* fine without capture */
+    }
+    g.classList.add("dragging");
     const split = g.parentElement;
     if (!split) return;
     const rect = split.getBoundingClientRect();
@@ -2068,6 +2077,7 @@ function makeGutter(node: Extract<PaneNode, { kind: "split" }>): HTMLElement {
     const up = () => {
       document.removeEventListener("pointermove", move);
       document.removeEventListener("pointerup", up);
+      g.classList.remove("dragging");
       if (raf) cancelAnimationFrame(raf);
       if (activeWin != null) refitWindow(activeWin); // final exact fit
       saveLayout(); // persist the new split ratio
