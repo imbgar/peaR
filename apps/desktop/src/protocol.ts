@@ -209,7 +209,7 @@ export type Command =
   | { type: "watch_user"; login: string; on: boolean }
   | { type: "watch_team"; org: string; team: string; on: boolean }
   | { type: "load_team_prs" }
-  | { type: "summarize_diff"; tab: number };
+  | { type: "summarize_diff"; tab: number; path?: string };
 
 export interface FileSummary {
   path: string;

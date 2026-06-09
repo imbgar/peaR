@@ -612,9 +612,13 @@ pub enum Command {
     /// Fetch open PRs authored by every watched user (+ expanded team members), with status.
     /// Replied via `Event::TeamPrs`.
     LoadTeamPrs,
-    /// Generate a one-line Haiku summary per changed file in the tab's PR diff. Replied via
-    /// `Event::DiffSummaries`.
-    SummarizeDiff { tab: TabId },
+    /// Generate a one-line Haiku summary for the tab's PR diff. With `path`, summarize only that
+    /// one file (per-file button); without it, every changed file. Replied via `DiffSummaries`.
+    SummarizeDiff {
+        tab: TabId,
+        #[serde(default)]
+        path: Option<String>,
+    },
 }
 
 /// Events the engine emits to the frontend.
