@@ -12,9 +12,9 @@ Review with one keystroke, resume any past session, and keep your reviews close.
 [![Platform](https://img.shields.io/badge/macOS-Apple%20Silicon%20%7C%20Intel-ffb000)](#install)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24c8db)](https://tauri.app)
 
-<img src="docs/design-mocks/theme-flip.gif" alt="peaR — Phosphor and Instrument themes" width="860">
+<img src="docs/design-mocks/theme-flip.gif" alt="peaR — tiled PR review across Phosphor and Instrument themes" width="880">
 
-<sub>Two built-in themes — <b>Phosphor</b> (amber CRT) and <b>Instrument</b> (refined industrial) — toggle live in the app.</sub>
+<sub>Tiled review panes, live diff with per-file summaries, a PR tree with review-status badges — in two built-in themes, <b>Phosphor</b> (amber CRT) and <b>Instrument</b> (refined industrial), toggled live.</sub>
 
 </div>
 
