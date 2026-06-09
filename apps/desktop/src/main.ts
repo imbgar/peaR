@@ -33,7 +33,7 @@ import {
   setPendingReview,
   setDiffCloseHandler,
   setApproveHandler,
-  setSummarizeHandler,
+  setFileSummarizeHandler,
   applyFileSummaries,
   jumpToThread,
   type TreeLevel,
@@ -1787,12 +1787,13 @@ function createTabView(id: number, title: string, cli: CliKind, pr: PrRef | null
   terminalsEl.appendChild(el);
 
   const term = new Terminal({
-    theme: XTERM_THEMES[currentTheme()],
+    theme: xtermTheme(currentTheme()),
     fontFamily: TERM_FONT[currentTheme()],
     fontSize: 13,
     lineHeight: 1.2,
     cursorBlink: true,
     allowProposedApi: true,
+    allowTransparency: true, // so the terminal area's (translucent) CSS bg shows for vibrancy
     scrollback: 10000,
   });
   const fit = new FitAddon();
@@ -2257,21 +2258,22 @@ function handle(ev: CoreEvent) {
       // scroll position + collapse state on a background refresh.
       const changed =
         !prev || prev.diff !== ev.diff || prev.comments.length !== ev.comments.length;
-      if (ev.tab === active && changed) showDiff(ev.tab, ev.diff, ev.comments);
+      if (ev.tab === diffAnchor() && changed) showDiff(ev.tab, ev.diff, ev.comments);
       break;
     }
     case "comments": {
       commentsCache.set(ev.tab, ev.comments);
-      if (ev.tab !== active) break;
-      setPendingReview(ev.comments.pending_review_id);
-      updateReviewBar(ev.tab);
-      // Refresh the conversation panel if it's showing this tab.
-      if (stageEl.classList.contains("comments-open")) renderConversation(ev.tab);
-      // Upgrade the diff's inline threads now that we have them.
-      const cached = diffCache.get(ev.tab);
-      if (cached && stageEl.classList.contains("panel-open") && panelBodyEl.classList.contains("diff-mode")) {
-        showDiff(ev.tab, cached.diff, cached.comments);
+      // Diff inline threads + the review bar follow the window's PR anchor (parent tab)…
+      if (ev.tab === diffAnchor()) {
+        setPendingReview(ev.comments.pending_review_id);
+        updateReviewBar(ev.tab);
+        const cached = diffCache.get(ev.tab);
+        if (cached && stageEl.classList.contains("panel-open") && panelBodyEl.classList.contains("diff-mode")) {
+          showDiff(ev.tab, cached.diff, cached.comments);
+        }
       }
+      // …while the conversation panel follows the focused pane.
+      if (ev.tab === active && stageEl.classList.contains("comments-open")) renderConversation(ev.tab);
       break;
     }
     case "thought": {
@@ -2313,17 +2315,18 @@ function handle(ev: CoreEvent) {
       break;
     }
     case "diff_summaries": {
-      const map = new Map(ev.summaries.map((s) => [s.path, s.summary]));
+      // Merge into any existing per-file summaries for this tab (per-file requests return one).
+      const map = diffSummaries.get(ev.tab) ?? new Map<string, string>();
+      for (const s of ev.summaries) map.set(s.path, s.summary);
       diffSummaries.set(ev.tab, map);
       // If this tab's diff is currently shown, inject the summaries now.
-      if (ev.tab === active && panelBodyEl.classList.contains("diff-mode"))
+      if (ev.tab === diffAnchor() && panelBodyEl.classList.contains("diff-mode"))
         applyFileSummaries(panelBodyEl, map);
-      setStatus(`summarized ${map.size} file${map.size === 1 ? "" : "s"}`);
-      const btn = panelBodyEl.querySelector<HTMLButtonElement>(".dt-summary");
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = "✦ Summarize";
-      }
+      setStatus(`summarized ${ev.summaries.length} file${ev.summaries.length === 1 ? "" : "s"}`);
+      // Reset any spinning per-file ✦ buttons.
+      panelBodyEl
+        .querySelectorAll<HTMLElement>(".dt-file-sum.busy")
+        .forEach((b) => b.classList.remove("busy"));
       break;
     }
     case "skills_status": {
@@ -2508,6 +2511,14 @@ const THEMES: ReadonlyArray<{ id: string; label: string; swatch: string }> = [
   { id: "light", label: "Light", swatch: "#0969da" },
 ];
 
+/** Under `body.translucent` xterm draws NO background (fully transparent); the visible terminal
+ *  tint comes from the `.terminal-host` CSS layer + native vibrancy behind it. Opaque otherwise. */
+function xtermTheme(name: string): Record<string, string> {
+  const t = XTERM_THEMES[name] ?? XTERM_THEMES.instrument;
+  if (!document.body.classList.contains("translucent")) return t;
+  return { ...t, background: "rgba(0,0,0,0)" };
+}
+
 function applyTheme(name: string) {
   if (!XTERM_THEMES[name]) name = "instrument";
   document.documentElement.dataset.theme = name;
@@ -2517,7 +2528,7 @@ function applyTheme(name: string) {
   if (label) label.textContent = meta?.label ?? name;
   const sw = document.querySelector<HTMLElement>("#theme-toggle .swatch");
   if (sw && meta) sw.style.color = meta.swatch;
-  const theme = XTERM_THEMES[name];
+  const theme = xtermTheme(name);
   const font = TERM_FONT[name];
   for (const v of tabs.values()) {
     v.term.options.theme = theme;
@@ -2978,24 +2989,33 @@ function jumpToFile(path: string) {
   setTimeout(() => card.classList.remove("dtree-jump"), 1100);
 }
 
-/** Point the (open) diff panel at the active tab: cache → instant, PR-without-cache →
- *  fetch, no-PR tab → a placeholder. Called on Diff-button open and on tab switch. */
+/** The PR-bearing "parent tab" of the active window — its ROOT session, the one the tab-bar
+ *  pill is pinned to. The diff/review follow this, NOT the focused tile, so focusing a sub-pane
+ *  (or a merged different-PR pane) never repoints the diff away from the tab's own PR. */
+function diffAnchor(): number | null {
+  const w = activeWin != null ? windows.get(activeWin) : undefined;
+  return w?.root ?? active;
+}
+
+/** Point the (open) diff panel at the active tab's PR (its parent/root pane): cache → instant,
+ *  PR-without-cache → fetch, no-PR tab → a placeholder. Called on Diff open and on tab switch. */
 function syncDiffToActive() {
-  if (active === null) return;
-  const v = tabs.get(active);
-  const cached = diffCache.get(active);
+  const anchor = diffAnchor();
+  if (anchor === null) return;
+  const v = tabs.get(anchor);
+  const cached = diffCache.get(anchor);
   if (cached) {
-    showDiff(active, cached.diff, cached.comments);
+    showDiff(anchor, cached.diff, cached.comments);
   } else if (v?.pr) {
-    showDiffMessage(active, "loading PR diff…");
-    send({ type: "load_diff", tab: active });
+    showDiffMessage(anchor, "loading PR diff…");
+    send({ type: "load_diff", tab: anchor });
   } else {
-    showDiffMessage(active, "No diff — this tab isn't a pull request.");
+    showDiffMessage(anchor, "No diff — this tab isn't a pull request.");
   }
   // The diff shows inline threads, so make sure comments are loaded too.
-  if (v?.pr) ensureComments(active);
-  setPendingReview(commentsCache.get(active)?.pending_review_id ?? null);
-  updateReviewBar(active);
+  if (v?.pr) ensureComments(anchor);
+  setPendingReview(commentsCache.get(anchor)?.pending_review_id ?? null);
+  updateReviewBar(anchor);
 }
 
 /** Diff toolbar button: toggle the diff panel for the active tab. */
@@ -3996,10 +4016,11 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#dtree-narrower").addEventListener("click", () => setTreeLevel(NARROWER[treeLevel]));
   $("#dtree-close").addEventListener("click", () => closeTree());
   setApproveHandler((anchor) => openReviewModal("APPROVE", anchor));
-  setSummarizeHandler(() => {
-    if (active !== null) {
-      send({ type: "summarize_diff", tab: active });
-      setStatus("summarizing the diff with Haiku…");
+  setFileSummarizeHandler((path) => {
+    const t = diffAnchor();
+    if (t !== null) {
+      send({ type: "summarize_diff", tab: t, path });
+      setStatus(`summarizing ${path} with Haiku…`);
     }
   });
   // Insight is hard-coded off for now — hide its controls (the panel itself is reused

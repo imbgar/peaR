@@ -178,13 +178,37 @@
 
 html, body {
   height: 100%;
-  background: var(--bg);
   color: var(--tx);
   font-family: var(--font-ui);
   font-size: 13px;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
 }
+/* Background lives on body only (html stays transparent), so `body.translucent` can clear it
+   and let the native window/vibrancy show through. */
+body { background: var(--bg); }
+
+/* ── native macOS vibrancy (Ghostty-style frosted background) ──────────────
+   When `body.translucent` is set, the window's surfaces go translucent so the
+   NSVisualEffectView material (applied in Rust) shows through. The base layers go
+   fully clear; chrome panels keep a readable tint; the terminal is lightest so the
+   blur reads strongest there. Toggleable, so it's an opt-in appearance setting. */
+:root { --vib-term: 42%; --vib-panel: 76%; --vib-toolbar: 76%; } /* surface opacities under vibrancy */
+body.translucent, body.translucent #workspace { background: transparent; }
+/* xterm hard-codes an OPAQUE black `.xterm-viewport` background (for macOS scrollbar opacity);
+   clear it so the host tint + vibrancy show. The terminal tint lives on `.terminal-host`. */
+body.translucent #terminals { background: transparent; }
+body.translucent .terminal-host { background: color-mix(in srgb, var(--term-bg) var(--vib-term), transparent); }
+body.translucent .xterm,
+body.translucent .xterm .xterm-viewport,
+body.translucent .xterm .xterm-screen { background: transparent !important; background-color: transparent !important; }
+body.translucent #sidebar,
+body.translucent #tabbar,
+body.translucent #panel,
+body.translucent #comments-panel,
+body.translucent #brain-drawer,
+body.translucent #statusbar { background: color-mix(in srgb, var(--panel) var(--vib-panel), transparent); }
+body.translucent #toolbar { background: color-mix(in srgb, var(--elev) var(--vib-toolbar), transparent); }
 
 /* ── CRT overlay (phosphor only) ───────────────────────────────────────── */
 #crt {
@@ -1473,6 +1497,17 @@ button.close-x:hover { color: var(--red); border-color: color-mix(in srgb, var(-
 .diff-ccount { margin-left: auto; color: var(--blue); }
 .diff-adds { color: var(--green); font-weight: 600; }
 .diff-dels { color: var(--red); font-weight: 600; }
+/* Per-file ✦ summarize action button (lives in the file header). */
+.dt-file-sum {
+  flex: none; color: var(--faint); font-size: 11px; line-height: 1; padding: 2px 5px;
+  border: 1px solid transparent; border-radius: var(--r-sm); cursor: pointer; user-select: none;
+}
+.dt-file-sum:hover {
+  color: var(--accent); border-color: var(--accent-d);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.dt-file-sum.busy { color: var(--accent); animation: dt-pulse 0.9s ease-in-out infinite; cursor: default; }
+@keyframes dt-pulse { 50% { opacity: 0.35; } }
 
 .diff-file {
   margin: 10px; border: 1px solid var(--bd); border-radius: var(--r);

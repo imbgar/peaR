@@ -150,6 +150,12 @@ export function setSummarizeHandler(fn: () => void) {
   onSummarize = fn;
 }
 
+let onFileSummarize: ((path: string) => void) | null = null;
+/** Per-file ✦ button handler — summarizes just one file's diff on demand. */
+export function setFileSummarizeHandler(fn: (path: string) => void) {
+  onFileSummarize = fn;
+}
+
 /** Inject/refresh a one-line summary under each file header. Matches a summary to a file by
  *  exact path, else by suffix (Haiku may keep a/ b/ prefixes). */
 export function applyFileSummaries(container: HTMLElement, summaries: Map<string, string>) {
@@ -470,6 +476,23 @@ export function renderDiff(
     dels.className = "diff-dels";
     dels.textContent = `−${f.dels}`;
     head.append(chev, badge, path, adds, dels);
+    if (onFileSummarize) {
+      // A small per-file action button. It's a <span> (not a <button>) because the head is
+      // itself a <button> and nesting is invalid; stopPropagation keeps it from toggling collapse.
+      const sb = document.createElement("span");
+      sb.className = "dt-file-sum";
+      sb.textContent = "✦";
+      sb.title = "Summarize this file (Claude Haiku)";
+      sb.dataset.path = f.path;
+      sb.addEventListener("click", (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        if (sb.classList.contains("busy")) return;
+        sb.classList.add("busy");
+        onFileSummarize?.(f.path);
+      });
+      head.append(sb);
+    }
     card.appendChild(head);
 
     const body = document.createElement("div");

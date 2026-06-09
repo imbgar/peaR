@@ -10,6 +10,29 @@ const MODEL: &str = "haiku";
 /// Cap the diff sent to the model (latency/cost); larger PRs are truncated.
 const MAX_DIFF: usize = 60_000;
 
+/// Slice a unified diff down to the single file matching `path` (its `diff --git …` chunk).
+/// Returns `None` if no chunk matches — callers fall back to the whole diff. Used so a
+/// per-file "summarize" button only sends that one file to Haiku.
+pub fn slice_diff_to_file(diff: &str, path: &str) -> Option<String> {
+    let mut chunks: Vec<String> = Vec::new();
+    for line in diff.split_inclusive('\n') {
+        if line.starts_with("diff --git ") {
+            chunks.push(String::new());
+        }
+        if let Some(last) = chunks.last_mut() {
+            last.push_str(line);
+        }
+    }
+    let b = format!("b/{path}");
+    chunks.into_iter().find(|c| {
+        c.lines().any(|l| {
+            (l.starts_with("diff --git ") && l.ends_with(&b))
+                || l == format!("+++ {b}")
+                || l == format!("--- a/{path}")
+        })
+    })
+}
+
 /// Summarize each file in `diff` via Haiku. Returns `(path, summary)` pairs.
 pub fn summarize_diff(diff: &str, cwd: Option<&str>) -> Result<Vec<(String, String)>, String> {
     let path = crate::shellenv::login_path();

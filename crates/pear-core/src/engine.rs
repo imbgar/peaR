@@ -295,7 +295,7 @@ impl Engine {
                 });
             }
             Command::LoadTeamPrs => self.load_team_prs(),
-            Command::SummarizeDiff { tab } => self.summarize_diff(tab),
+            Command::SummarizeDiff { tab, path } => self.summarize_diff(tab, path),
             Command::CheckSkills => self.emit(Event::SkillsStatus {
                 installed: crate::skills_install::skills_installed(),
             }),
@@ -1139,7 +1139,7 @@ impl Engine {
     }
 
     /// Summarize each changed file in the tab's PR diff via Haiku (worker thread).
-    fn summarize_diff(&mut self, tab: TabId) {
+    fn summarize_diff(&mut self, tab: TabId, path: Option<String>) {
         let pr = self.tabs.get(&tab).and_then(|t| t.pr.clone());
         let Some(pr) = pr else {
             self.emit(Event::Notice {
@@ -1167,6 +1167,14 @@ impl Engine {
                     });
                     return;
                 }
+            };
+            // Per-file button: slice to just that file's chunk (fall back to the whole diff).
+            let diff = match path
+                .as_deref()
+                .and_then(|p| crate::summary::slice_diff_to_file(&diff, p))
+            {
+                Some(sliced) => sliced,
+                None => diff,
             };
             match crate::summary::summarize_diff(&diff, cwd.as_deref()) {
                 Ok(pairs) => sink(Event::DiffSummaries {
