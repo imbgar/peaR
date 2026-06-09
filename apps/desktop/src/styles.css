@@ -1512,6 +1512,37 @@ button.close-x:hover { color: var(--red); border-color: color-mix(in srgb, var(-
   box-shadow: var(--shadow-modal);
 }
 .theme-menu.hidden { display: none; }
+
+/* notification bell + panel (status bar) */
+.notif-wrap { position: relative; display: inline-flex; }
+#notif-bell { position: relative; }
+.notif-count {
+  position: absolute; top: -4px; right: -4px; min-width: 14px; height: 14px; box-sizing: border-box;
+  padding: 0 3px; border-radius: 999px; background: var(--red); color: #fff;
+  font-family: var(--font-mono); font-size: 9px; line-height: 14px; text-align: center; font-weight: 700;
+}
+.notif-count.hidden { display: none; }
+.notif-panel {
+  position: absolute; bottom: calc(100% + 6px); right: 0; z-index: 60;
+  width: 320px; max-height: 60vh; overflow-y: auto; padding: 4px;
+  background: var(--elev); border: 1px solid var(--bd2); border-radius: var(--r);
+  box-shadow: var(--shadow-modal);
+}
+.notif-panel.hidden { display: none; }
+.notif-head {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px 8px;
+  border-bottom: 1px solid var(--bd); margin-bottom: 4px;
+}
+.notif-head > span { flex: 1; font-family: var(--font-ui); font-size: 12px; font-weight: 600; color: var(--tx); }
+.notif-act { background: transparent; border: none; color: var(--faint); font-size: 11px; cursor: pointer; padding: 0 4px; }
+.notif-act:hover { color: var(--accent); }
+.notif-empty { color: var(--faint); font-style: italic; font-size: 11.5px; padding: 8px; }
+.notif-item {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  padding: 7px 9px; border-radius: var(--r-sm); background: transparent; border: 1px solid transparent;
+  color: var(--tx); font-family: var(--font-ui); font-size: 11.5px; line-height: 1.4;
+}
+.notif-item:hover { background: var(--inp); border-color: var(--accent-d); }
 .theme-opt {
   display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
   padding: 6px 9px; background: transparent; border: none; border-radius: var(--r-sm);

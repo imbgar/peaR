@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -828,10 +833,180 @@ function refreshTeams() {
   send({ type: "load_team_prs" });
 }
 
-// Notifications hook — armed by the notifications feature; diffs incoming statuses against
-// the last-seen snapshot to surface new comments / commits / review-ready / your-turn.
-function maybeNotifyFromStatuses(_statuses: PrStatus[]) {
-  /* no-op until the notifications feature is enabled */
+// ── notifications (native OS + in-app bell) ───────────────────────────────────
+// Poll the PRs you care about (open tabs · favorites · queue · watched teams), diff each
+// against its last-seen snapshot, and surface new comments / commits / review verdicts /
+// review-requested. Native notification when peaR isn't focused; always logged to the bell.
+interface Notif {
+  id: number;
+  text: string;
+  pr: PrRef;
+  at: number;
+  read: boolean;
+}
+interface StatusSnap {
+  comments: number;
+  commits: number;
+  head_oid: string | null;
+  review_decision: string | null;
+  state: string;
+}
+const notifs: Notif[] = [];
+let notifSeq = 1;
+let osNotifGranted = false;
+const lastSeen = new Map<string, StatusSnap>();
+const notifyOn = () => localStorage.getItem("pear.notify") !== "0"; // default ON
+const snapOf = (s: PrStatus): StatusSnap => ({
+  comments: s.comments,
+  commits: s.commits,
+  head_oid: s.head_oid,
+  review_decision: s.review_decision,
+  state: s.state,
+});
+
+function maybeNotifyFromStatuses(statuses: PrStatus[]) {
+  for (const s of statuses) {
+    const k = prKey(s.pr);
+    const prev = lastSeen.get(k);
+    const cur = snapOf(s);
+    lastSeen.set(k, cur);
+    if (!prev || !notifyOn()) continue; // first sighting = baseline; muted = baseline only
+    const at = `${s.pr.owner}/${s.pr.repo}#${s.pr.number}`;
+    if (cur.commits > prev.commits || (!!cur.head_oid && cur.head_oid !== prev.head_oid))
+      pushNotif(`🔨 New commits · ${at}`, s.pr);
+    if (cur.comments > prev.comments) pushNotif(`💬 New comments · ${at}`, s.pr);
+    if (cur.review_decision !== prev.review_decision) {
+      if (cur.review_decision === "APPROVED") pushNotif(`✅ Approved · ${at}`, s.pr);
+      else if (cur.review_decision === "CHANGES_REQUESTED")
+        pushNotif(`✋ Changes requested · ${at}`, s.pr);
+      else if (cur.review_decision === "REVIEW_REQUIRED")
+        pushNotif(`👀 Your turn — review requested · ${at}`, s.pr);
+    }
+    if (cur.state !== prev.state && cur.state === "merged") pushNotif(`🟣 Merged · ${at}`, s.pr);
+  }
+}
+
+function pushNotif(text: string, pr: PrRef) {
+  notifs.unshift({ id: notifSeq++, text, pr, at: Date.now(), read: false });
+  if (notifs.length > 50) notifs.pop();
+  renderNotifBadge();
+  if (osNotifGranted && !document.hasFocus()) {
+    try {
+      sendNotification({ title: "peaR", body: text });
+    } catch {
+      /* plugin unavailable */
+    }
+  }
+}
+
+function renderNotifBadge() {
+  const unread = notifs.filter((n) => !n.read).length;
+  const c = $("#notif-count");
+  c.textContent = unread > 9 ? "9+" : String(unread);
+  c.classList.toggle("hidden", unread === 0);
+}
+
+function renderNotifPanel() {
+  const panel = $("#notif-panel");
+  panel.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "notif-head";
+  const title = document.createElement("span");
+  title.textContent = "Notifications";
+  const mute = document.createElement("button");
+  mute.className = "notif-act";
+  mute.textContent = notifyOn() ? "mute" : "unmute";
+  mute.onclick = (e) => {
+    e.stopPropagation();
+    localStorage.setItem("pear.notify", notifyOn() ? "0" : "1");
+    if (notifyOn()) pollNotifications();
+    renderNotifPanel();
+  };
+  const clear = document.createElement("button");
+  clear.className = "notif-act";
+  clear.textContent = "clear";
+  clear.onclick = (e) => {
+    e.stopPropagation();
+    notifs.length = 0;
+    renderNotifBadge();
+    renderNotifPanel();
+  };
+  head.append(title, mute, clear);
+  panel.appendChild(head);
+
+  if (!notifs.length) {
+    const empty = document.createElement("div");
+    empty.className = "notif-empty";
+    empty.textContent = notifyOn() ? "no notifications yet" : "notifications muted";
+    panel.appendChild(empty);
+    return;
+  }
+  for (const n of notifs) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "notif-item";
+    item.textContent = n.text;
+    item.onclick = () => {
+      openPr(n.pr, "claude");
+      $("#notif-panel").classList.add("hidden");
+    };
+    panel.appendChild(item);
+  }
+}
+
+function toggleNotifPanel() {
+  const panel = $("#notif-panel");
+  if (!panel.classList.contains("hidden")) {
+    panel.classList.add("hidden");
+    return;
+  }
+  renderNotifPanel();
+  panel.classList.remove("hidden");
+  notifs.forEach((n) => (n.read = true)); // opening marks all read
+  renderNotifBadge();
+}
+
+/** The set of PRs to poll for notifications: open tabs · favorites · queue (teams polled
+ *  separately via load_team_prs). */
+function notifPollSet(): PrRef[] {
+  const set = new Map<string, PrRef>();
+  for (const v of tabs.values()) if (v.pr) set.set(prKey(v.pr), v.pr);
+  for (const p of favorites.prs) set.set(prKey(p), p);
+  for (const i of queue.items) set.set(prKey(i.pr), i.pr);
+  return [...set.values()];
+}
+function pollNotifications() {
+  if (!notifyOn()) return;
+  const prs = notifPollSet();
+  if (prs.length) send({ type: "load_pr_statuses", prs });
+  if (watches.users.length || watches.teams.length) send({ type: "load_team_prs" });
+}
+
+function initNotifications() {
+  // Wire the UI + polling synchronously so the bell always works, independent of whether the
+  // OS-permission check resolves (it throws in a plain browser).
+  $("#notif-bell").addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleNotifPanel();
+  });
+  document.addEventListener("click", (e) => {
+    const panel = $("#notif-panel");
+    if (!panel.classList.contains("hidden") && !(e.target as HTMLElement)?.closest(".notif-wrap"))
+      panel.classList.add("hidden");
+  });
+  // Baseline shortly after launch (first sighting never notifies), then poll on an interval.
+  window.setTimeout(pollNotifications, 4000);
+  window.setInterval(pollNotifications, 90_000);
+  // Best-effort OS-notification permission (async, non-blocking).
+  void (async () => {
+    try {
+      let granted = await isPermissionGranted();
+      if (!granted) granted = (await requestPermission()) === "granted";
+      osNotifGranted = granted;
+    } catch {
+      osNotifGranted = false;
+    }
+  })();
 }
 
 const samePr = (a: PrRef, b: PrRef) =>
@@ -3882,6 +4057,8 @@ window.addEventListener("DOMContentLoaded", async () => {
   };
   window.addEventListener("resize", refit);
   new ResizeObserver(refit).observe(terminalsEl);
+
+  initNotifications(); // wire the bell + polling before the (Tauri-only) event listener
 
   await listen<CoreEvent>("pear:event", (e) => handle(e.payload));
 
