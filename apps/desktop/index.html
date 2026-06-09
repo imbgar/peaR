@@ -46,6 +46,24 @@
             <option value="plan">plan · read-only</option>
           </select>
 
+          <div id="launch-adv" class="launch-adv">
+            <select id="model-select" class="perm-field" title="Model the engine launches with"></select>
+            <input id="model-custom" class="perm-field hidden" placeholder="model name…" autocomplete="off" spellcheck="false" />
+            <select id="codex-effort" class="perm-field" title="Codex reasoning effort">
+              <option value="">effort · default</option>
+              <option value="low">effort · low</option>
+              <option value="medium">effort · medium</option>
+              <option value="high">effort · high</option>
+            </select>
+            <select id="codex-access" class="perm-field" title="Codex approval + sandbox">
+              <option value="">access · default</option>
+              <option value="ro">read-only · ask</option>
+              <option value="ws">workspace-write · ask</option>
+              <option value="auto">workspace-write · auto-run</option>
+              <option value="yolo">full access 🚨 · no prompts</option>
+            </select>
+          </div>
+
           <button type="submit" class="primary" id="open-btn">▸ Open &amp; review</button>
           <button type="button" id="new-shell" class="ghost">+ New empty shell</button>
         </form>

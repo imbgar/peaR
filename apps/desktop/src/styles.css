@@ -415,6 +415,7 @@ button:disabled { opacity: 0.38; cursor: default; }
 
 .perm-field { margin-top: 2px; }
 .perm-field.hidden { display: none; }
+.launch-adv { display: flex; flex-direction: column; gap: 4px; }
 #perm-select.perm-danger { border-color: var(--red); color: var(--red); }
 
 .section-head { padding: 4px 3px 0; }

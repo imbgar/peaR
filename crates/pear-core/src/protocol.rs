@@ -426,6 +426,21 @@ pub enum Command {
     /// `"full"` (bypass — no prompts), `"edits"` (auto-accept edits, default),
     /// `"ask"` (default prompts), `"plan"` (read-only). Applies to future opens.
     SetClaudePermission { mode: String },
+    /// Per-engine launch knobs applied to future opens: model (`--model`/`-m`), Codex reasoning
+    /// effort + approval policy + sandbox. Empty/None means "engine default". Sent wholesale on
+    /// any change. `""` is treated as None.
+    SetLaunchConfig {
+        #[serde(default)]
+        claude_model: Option<String>,
+        #[serde(default)]
+        codex_model: Option<String>,
+        #[serde(default)]
+        codex_effort: Option<String>,
+        #[serde(default)]
+        codex_approval: Option<String>,
+        #[serde(default)]
+        codex_sandbox: Option<String>,
+    },
     /// Ask for the history list (replied via `Event::History`).
     LoadHistory,
     /// Clear the history (backed up first; restorable across runs).

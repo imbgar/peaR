@@ -47,12 +47,24 @@ pub struct Engine {
     order: Vec<TabId>,
     /// Claude `--permission-mode` for launches (see `CLAUDE_PERM_MODES`).
     claude_perm: String,
+    /// Per-engine launch knobs (model / Codex effort / approval / sandbox).
+    launch: LaunchCfg,
     /// A session's wait-thread sends its `TabId` here when its process exits, so the
     /// engine can drop the dead tab (drained in `reap_dead`, called each `handle`).
     reaper_tx: Sender<TabId>,
     reaper_rx: Receiver<TabId>,
     /// Stop flags for active brain (thinking-tail) watchers, keyed by tab.
     brain_watchers: HashMap<TabId, Arc<AtomicBool>>,
+}
+
+/// Per-engine launch options chosen in the launcher (empty = engine default).
+#[derive(Default)]
+struct LaunchCfg {
+    claude_model: Option<String>,
+    codex_model: Option<String>,
+    codex_effort: Option<String>,
+    codex_approval: Option<String>,
+    codex_sandbox: Option<String>,
 }
 
 /// Claude's real `--permission-mode` choices. Anything else falls back to `auto`.
@@ -90,6 +102,7 @@ impl Engine {
             tabs: HashMap::new(),
             order: Vec::new(),
             claude_perm: "auto".to_string(),
+            launch: LaunchCfg::default(),
             reaper_tx,
             reaper_rx,
             brain_watchers: HashMap::new(),
@@ -166,6 +179,22 @@ impl Engine {
                     tab: None,
                     message: format!("Claude permission mode: {mode}"),
                 });
+            }
+            Command::SetLaunchConfig {
+                claude_model,
+                codex_model,
+                codex_effort,
+                codex_approval,
+                codex_sandbox,
+            } => {
+                let norm = |o: Option<String>| o.filter(|s| !s.trim().is_empty());
+                self.launch = LaunchCfg {
+                    claude_model: norm(claude_model),
+                    codex_model: norm(codex_model),
+                    codex_effort: norm(codex_effort),
+                    codex_approval: norm(codex_approval),
+                    codex_sandbox: norm(codex_sandbox),
+                };
             }
             Command::LoadHistory => self.emit_history(),
             Command::LoadDiff { tab } => self.load_diff(tab),
@@ -411,6 +440,28 @@ impl Engine {
         let mut args: Vec<String> = base_args.iter().map(|s| s.to_string()).collect();
         if cli == CliKind::Claude {
             args.extend(claude_perm_args(&self.claude_perm));
+            if let Some(m) = &self.launch.claude_model {
+                args.push("--model".into());
+                args.push(m.clone());
+            }
+        }
+        if cli == CliKind::Codex {
+            if let Some(m) = &self.launch.codex_model {
+                args.push("-m".into());
+                args.push(m.clone());
+            }
+            if let Some(e) = &self.launch.codex_effort {
+                args.push("-c".into());
+                args.push(format!("model_reasoning_effort=\"{e}\""));
+            }
+            if let Some(a) = &self.launch.codex_approval {
+                args.push("-a".into());
+                args.push(a.clone());
+            }
+            if let Some(s) = &self.launch.codex_sandbox {
+                args.push("-s".into());
+                args.push(s.clone());
+            }
         }
 
         let mut session_id: Option<String> = None;

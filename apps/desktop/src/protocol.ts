@@ -192,6 +192,14 @@ export type Command =
   | { type: "save_layout"; active?: number | null; windows?: WinLayoutWire[] }
   | { type: "load_layout"; restore: boolean }
   | { type: "clear_layout" }
+  | {
+      type: "set_launch_config";
+      claude_model?: string | null;
+      codex_model?: string | null;
+      codex_effort?: string | null;
+      codex_approval?: string | null;
+      codex_sandbox?: string | null;
+    }
   | { type: "load_pr_statuses"; prs: PrRef[] }
   | { type: "load_watches" }
   | { type: "watch_user"; login: string; on: boolean }

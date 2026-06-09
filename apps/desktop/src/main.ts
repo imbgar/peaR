@@ -378,6 +378,34 @@ const ENGINE_TIERS: Record<string, ReadonlySet<string>> = {
   aider: new Set(["light", "standard", "complex"]),
 };
 
+// Curated model presets per engine (the launcher also offers a free-text "custom…").
+const MODEL_PRESETS: Record<string, string[]> = {
+  claude: ["opus", "sonnet", "haiku"],
+  codex: ["gpt-5.5", "gpt-5", "gpt-5-codex", "o3"],
+  aider: [],
+};
+// Codex "access" preset → [--ask-for-approval, --sandbox]. "" = codex's own default (no flags).
+const CODEX_ACCESS: Record<string, [string, string]> = {
+  ro: ["on-request", "read-only"],
+  ws: ["on-request", "workspace-write"],
+  auto: ["never", "workspace-write"],
+  yolo: ["never", "danger-full-access"],
+};
+const engineModel = (engine: CliKind) => localStorage.getItem(`pear.model.${engine}`) ?? "";
+/** Push the current per-engine launch knobs to the engine (applied to future opens). */
+function sendLaunchConfig() {
+  const access = localStorage.getItem("pear.codexAccess") ?? "";
+  const [approval, sandbox] = CODEX_ACCESS[access] ?? [null, null];
+  send({
+    type: "set_launch_config",
+    claude_model: engineModel("claude") || null,
+    codex_model: engineModel("codex") || null,
+    codex_effort: localStorage.getItem("pear.codexEffort") || null,
+    codex_approval: approval,
+    codex_sandbox: sandbox,
+  });
+}
+
 // ── rendering ───────────────────────────────────────────────────────────────
 function setStatus(msg: string, warn = false) {
   statusEl.textContent = msg;
@@ -3354,10 +3382,58 @@ function initLauncher(): void {
     });
     disarmUltra();
     permSelect.classList.toggle("hidden", selectedEngine !== "claude");
+    refreshLaunchAdv();
     openBtn.textContent = selectedTier ? "▸ Open & review" : "▸ Open";
     localStorage.setItem("pear.engine", selectedEngine);
     localStorage.setItem("pear.tier", selectedTier ?? "off");
   };
+
+  // Per-engine model / effort / access selectors.
+  const modelSel = $<HTMLSelectElement>("#model-select");
+  const modelCustom = $<HTMLInputElement>("#model-custom");
+  const effortSel = $<HTMLSelectElement>("#codex-effort");
+  const accessSel = $<HTMLSelectElement>("#codex-access");
+  const refreshLaunchAdv = () => {
+    const cur = engineModel(selectedEngine);
+    const presets = MODEL_PRESETS[selectedEngine] ?? [];
+    const isCustom = cur !== "" && !presets.includes(cur);
+    modelSel.innerHTML = "";
+    modelSel.add(new Option("model · default", ""));
+    for (const p of presets) modelSel.add(new Option(p, p));
+    modelSel.add(new Option("custom…", "__custom__"));
+    modelSel.value = isCustom ? "__custom__" : cur;
+    modelCustom.classList.toggle("hidden", modelSel.value !== "__custom__");
+    if (isCustom) modelCustom.value = cur;
+    const isCodex = selectedEngine === "codex";
+    effortSel.classList.toggle("hidden", !isCodex);
+    accessSel.classList.toggle("hidden", !isCodex);
+    effortSel.value = localStorage.getItem("pear.codexEffort") ?? "";
+    accessSel.value = localStorage.getItem("pear.codexAccess") ?? "";
+  };
+  modelSel.addEventListener("change", () => {
+    if (modelSel.value === "__custom__") {
+      modelCustom.classList.remove("hidden");
+      modelCustom.focus();
+      return;
+    }
+    localStorage.setItem(`pear.model.${selectedEngine}`, modelSel.value);
+    modelCustom.classList.add("hidden");
+    sendLaunchConfig();
+  });
+  const commitCustomModel = () => {
+    localStorage.setItem(`pear.model.${selectedEngine}`, modelCustom.value.trim());
+    sendLaunchConfig();
+  };
+  modelCustom.addEventListener("change", commitCustomModel);
+  modelCustom.addEventListener("blur", commitCustomModel);
+  effortSel.addEventListener("change", () => {
+    localStorage.setItem("pear.codexEffort", effortSel.value);
+    sendLaunchConfig();
+  });
+  accessSel.addEventListener("change", () => {
+    localStorage.setItem("pear.codexAccess", accessSel.value);
+    sendLaunchConfig();
+  });
 
   seg.querySelectorAll<HTMLButtonElement>("button[data-engine]").forEach((b) =>
     b.addEventListener("click", () => {
@@ -3392,6 +3468,7 @@ function initLauncher(): void {
   });
 
   refresh();
+  sendLaunchConfig(); // push persisted model/effort/access to the engine on startup
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
