@@ -401,7 +401,18 @@ let restoreState: {
   active: number | null;
   total: number;
   slots: number[]; // restored TabIds, indexed by entry order
+  timer: number; // quiet-period fallback: assemble if no new tab arrives for a while
 } | null = null;
+/** Reset the restore fallback timer — fires only after a quiet gap (so a slow-but-complete
+ *  restore isn't cut short), assembling with whatever tabs arrived. */
+function armRestoreFallback() {
+  const rs = restoreState;
+  if (!rs) return;
+  clearTimeout(rs.timer);
+  rs.timer = window.setTimeout(() => {
+    if (restoreState === rs && rs.slots.length > 0) assembleRestore();
+  }, 4000);
+}
 
 function countLeavesWire(n: PaneTreeWire): number {
   return n.kind === "leaf" ? 1 : countLeavesWire(n.a) + countLeavesWire(n.b);
@@ -422,6 +433,7 @@ function assembleRestore() {
   const rs = restoreState;
   restoreState = null;
   if (!rs) return;
+  clearTimeout(rs.timer);
   for (const w of rs.windows) {
     const layout = rebuildTree(w.tree, rs.slots);
     if (!layout) continue;
@@ -2169,15 +2181,9 @@ function handle(ev: CoreEvent) {
   switch (ev.type) {
     case "layout_restore": {
       const total = ev.windows.reduce((n, w) => n + countLeavesWire(w.tree), 0);
-      restoreState = total > 0 ? { windows: ev.windows, active: ev.active, total, slots: [] } : null;
-      // Safety net: if some entry fails to open (fewer tab_opened than expected), assemble with
-      // what arrived after a grace period so the layout never gets stuck mid-restore.
-      if (restoreState) {
-        const rs = restoreState;
-        setTimeout(() => {
-          if (restoreState === rs && rs.slots.length > 0) assembleRestore();
-        }, 5000);
-      }
+      restoreState =
+        total > 0 ? { windows: ev.windows, active: ev.active, total, slots: [], timer: 0 } : null;
+      armRestoreFallback(); // assemble after a quiet gap if some entry never opens
       break;
     }
     case "tab_opened": {
@@ -2187,6 +2193,7 @@ function handle(ev: CoreEvent) {
       if (restoreState) {
         restoreState.slots.push(ev.tab);
         if (restoreState.slots.length >= restoreState.total) assembleRestore();
+        else armRestoreFallback(); // each arrival resets the quiet-period fallback
         break;
       }
       // A pending split inserts this session as a pane beside its source; otherwise it's

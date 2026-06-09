@@ -763,32 +763,66 @@ impl Engine {
     /// (the frontend reloaded / HMR'd against a live engine), re-emit the existing tabs to
     /// re-sync the UI instead of opening duplicates. `restore` is the persist preference;
     /// when off, a fresh engine opens nothing.
+    /// Re-emit a live tab to a (re)syncing frontend: `TabOpened` + a replay of its buffered
+    /// PTY output so the new xterm repaints instead of stalling.
+    fn reemit_tab(&self, tab: TabId) {
+        if let Some(t) = self.tabs.get(&tab) {
+            self.emit(Event::TabOpened {
+                tab,
+                title: t.title.clone(),
+                pr: t.pr.clone(),
+                cli: t.cli,
+            });
+            let bytes = t.session.replay();
+            if !bytes.is_empty() {
+                self.emit(Event::Output { tab, bytes });
+            }
+        }
+    }
+
+    /// Map each saved layout entry to a live tab id (by session id, else pr+cli+title), in the
+    /// saved order. `Some(ids)` only if every entry matched a distinct live tab and all live
+    /// tabs were consumed — so the saved window tree's indices line up with the re-emit order.
+    fn match_saved_to_live(&self, saved: &Layout) -> Option<Vec<TabId>> {
+        let mut pool: Vec<TabId> = self.order.clone();
+        let mut ordered: Vec<TabId> = Vec::with_capacity(saved.entries.len());
+        for e in &saved.entries {
+            let pos = pool.iter().position(|id| {
+                self.tabs.get(id).is_some_and(|t| {
+                    match (e.session_id.as_deref(), t.session_id.as_deref()) {
+                        (Some(a), Some(b)) => a == b,
+                        _ => t.pr == e.pr && t.cli == e.cli && t.title == e.title,
+                    }
+                })
+            })?;
+            ordered.push(pool.remove(pos));
+        }
+        pool.is_empty().then_some(ordered)
+    }
+
     fn load_layout(&mut self, restore: bool) {
         if !self.tabs.is_empty() {
-            let live: Vec<(TabId, String, Option<PrRef>, CliKind)> = self
-                .order
-                .iter()
-                .filter_map(|id| {
-                    self.tabs
-                        .get(id)
-                        .map(|t| (*id, t.title.clone(), t.pr.clone(), t.cli))
-                })
-                .collect();
-            for (tab, title, pr, cli) in live {
-                self.emit(Event::TabOpened {
-                    tab,
-                    title,
-                    pr,
-                    cli,
+            // A frontend reload against a live engine. Re-emit the open tabs so the UI re-syncs.
+            // Tile-aware: if the saved tree's entries map 1:1 to the live tabs (by session id,
+            // else pr+cli+title), re-emit them in the saved order WITH `LayoutRestore` so the
+            // reloaded frontend rebuilds its splits instead of flattening to one window per tab.
+            let saved = self.store.read_layout();
+            let ordered = (!saved.windows.is_empty() && saved.entries.len() == self.tabs.len())
+                .then(|| self.match_saved_to_live(&saved))
+                .flatten();
+            if let Some(ordered) = ordered {
+                self.emit(Event::LayoutRestore {
+                    windows: saved.windows.clone(),
+                    active: saved.active,
                 });
-                // The PTY is still alive but the reloaded frontend's xterm is empty — replay the
-                // buffered output so the tab repaints instead of stalling.
-                if let Some(t) = self.tabs.get(&tab) {
-                    let bytes = t.session.replay();
-                    if !bytes.is_empty() {
-                        self.emit(Event::Output { tab, bytes });
-                    }
+                for tab in ordered {
+                    self.reemit_tab(tab);
                 }
+                return;
+            }
+            // Fallback: flat re-sync in open order.
+            for tab in self.order.clone() {
+                self.reemit_tab(tab);
             }
             return;
         }
