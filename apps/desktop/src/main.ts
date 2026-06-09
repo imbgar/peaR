@@ -34,6 +34,7 @@ import {
   setDiffCloseHandler,
   setApproveHandler,
   setFileSummarizeHandler,
+  setDiffSort,
   applyFileSummaries,
   jumpToThread,
   type TreeLevel,
@@ -313,7 +314,7 @@ function startTileDrag(e: PointerEvent, payload: DragPayload, sourceEl: HTMLElem
       // moving a single tile (or a single-pane tab) applies immediately.
       const win = payload.kind === "win" ? windows.get(payload.winId) : null;
       const nested = !!win && countLeaves(win.layout) > 1;
-      if (nested) {
+      if (nested && prefs.confirmNest) {
         confirmTile(drop.tab, drop.zone); // keeps the hint until the user decides
       } else {
         clearAllDropHints();
@@ -375,6 +376,97 @@ function confirmTile(targetTab: number, zone: DropZone) {
 }
 
 const persistOn = () => localStorage.getItem("pear.persist") !== "0"; // default ON
+
+// ── settings / preferences ────────────────────────────────────────────────────
+// User-tunable prefs persisted in localStorage and applied live by applyPrefs().
+interface Prefs {
+  // appearance
+  translucent: boolean;
+  vibTerm: number; // % — terminal background tint under vibrancy
+  vibPanel: number; // % — side panels
+  vibToolbar: number; // % — toolbar
+  material: string; // NSVisualEffectView material key (set_vibrancy_material)
+  termFont: number; // px
+  reduceMotion: boolean;
+  // notifications
+  notifNative: boolean; // native OS notifications (separate from the in-app bell)
+  trig: { commits: boolean; comments: boolean; reviewReady: boolean; yourTurn: boolean; merged: boolean };
+  scope: { openTabs: boolean; favPrs: boolean; queue: boolean; teams: boolean };
+  pollSecs: number;
+  // behavior
+  autoSummarize: boolean; // auto-run Haiku summaries when a PR diff first opens
+  confirmNest: boolean; // confirm before nesting a whole multi-pane tab on drag-to-tile
+  restoreTiling: boolean; // rebuild split layouts on restore (vs one window per tab)
+  diffSort: string;
+}
+const DEFAULT_PREFS: Prefs = {
+  translucent: true,
+  vibTerm: 42,
+  vibPanel: 76,
+  vibToolbar: 76,
+  material: "hud",
+  termFont: 13,
+  reduceMotion: false,
+  notifNative: true,
+  trig: { commits: true, comments: true, reviewReady: true, yourTurn: true, merged: true },
+  scope: { openTabs: true, favPrs: true, queue: true, teams: true },
+  pollSecs: 90,
+  autoSummarize: false,
+  confirmNest: true,
+  restoreTiling: true,
+  diffSort: "default",
+};
+const PREFS_KEY = "pear.prefs.v1";
+function loadPrefs(): Prefs {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
+    return {
+      ...DEFAULT_PREFS,
+      ...raw,
+      trig: { ...DEFAULT_PREFS.trig, ...(raw.trig ?? {}) },
+      scope: { ...DEFAULT_PREFS.scope, ...(raw.scope ?? {}) },
+    };
+  } catch {
+    return { ...DEFAULT_PREFS };
+  }
+}
+const prefs: Prefs = loadPrefs();
+function savePrefs() {
+  localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+}
+let notifTimer = 0;
+let appliedMaterial = ""; // avoid re-invoking the native material swap needlessly
+/** Apply every live-applicable pref to the running app (CSS vars, body classes, terminal
+ *  font, diff sort, notification cadence, native vibrancy material). Idempotent. */
+function applyPrefs() {
+  const root = document.documentElement;
+  document.body.classList.toggle("translucent", prefs.translucent);
+  root.style.setProperty("--vib-term", `${prefs.vibTerm}%`);
+  root.style.setProperty("--vib-panel", `${prefs.vibPanel}%`);
+  root.style.setProperty("--vib-toolbar", `${prefs.vibToolbar}%`);
+  document.body.classList.toggle("reduce-motion", prefs.reduceMotion);
+  // Terminal font size — live across every open pane.
+  for (const v of tabs.values()) {
+    if (v.term.options.fontSize !== prefs.termFont) {
+      v.term.options.fontSize = prefs.termFont;
+      try {
+        v.fit.fit();
+      } catch {
+        /* not yet attached */
+      }
+    }
+  }
+  setDiffSort(prefs.diffSort);
+  // Notification cadence.
+  if (notifTimer) clearInterval(notifTimer);
+  notifTimer = window.setInterval(pollNotifications, Math.max(15, prefs.pollSecs) * 1000);
+  // Native vibrancy material (macOS) — only when it changed.
+  if (prefs.material !== appliedMaterial) {
+    appliedMaterial = prefs.material;
+    void invoke("set_vibrancy_material", { material: prefs.material }).catch(() => {});
+  }
+}
+
 function serializeTree(n: PaneNode): PaneTreeWire {
   return n.kind === "leaf"
     ? { kind: "leaf", i: n.tab }
@@ -434,6 +526,15 @@ function assembleRestore() {
   restoreState = null;
   if (!rs) return;
   clearTimeout(rs.timer);
+  // Restore-tiling off → ignore the saved split trees and give every restored tab its own window.
+  if (!prefs.restoreTiling) {
+    for (const tab of rs.slots) if (!paneWin.has(tab)) newWindow(tab);
+    const at = (rs.active != null ? rs.slots[rs.active] : undefined) ?? rs.slots[0];
+    if (at != null) setActive(at);
+    renderTabBar();
+    saveLayout();
+    return;
+  }
   for (const w of rs.windows) {
     const layout = rebuildTree(w.tree, rs.slots);
     if (!layout) continue;
@@ -556,6 +657,7 @@ function sendLaunchConfig() {
 // ── rendering ───────────────────────────────────────────────────────────────
 function setStatus(msg: string, warn = false) {
   statusEl.textContent = msg;
+  statusEl.title = msg; // the bar truncates long messages — full text on hover
   statusEl.classList.toggle("warn", warn);
 }
 
@@ -1009,17 +1111,20 @@ function maybeNotifyFromStatuses(statuses: PrStatus[]) {
     lastSeen.set(k, cur);
     if (!prev || !notifyOn()) continue; // first sighting = baseline; muted = baseline only
     const at = `${s.pr.owner}/${s.pr.repo}#${s.pr.number}`;
-    if (cur.commits > prev.commits || (!!cur.head_oid && cur.head_oid !== prev.head_oid))
+    if (prefs.trig.commits && (cur.commits > prev.commits || (!!cur.head_oid && cur.head_oid !== prev.head_oid)))
       pushNotif(`🔨 New commits · ${at}`, s.pr);
-    if (cur.comments > prev.comments) pushNotif(`💬 New comments · ${at}`, s.pr);
+    if (prefs.trig.comments && cur.comments > prev.comments)
+      pushNotif(`💬 New comments · ${at}`, s.pr);
     if (cur.review_decision !== prev.review_decision) {
-      if (cur.review_decision === "APPROVED") pushNotif(`✅ Approved · ${at}`, s.pr);
-      else if (cur.review_decision === "CHANGES_REQUESTED")
+      if (prefs.trig.reviewReady && cur.review_decision === "APPROVED")
+        pushNotif(`✅ Approved · ${at}`, s.pr);
+      else if (prefs.trig.reviewReady && cur.review_decision === "CHANGES_REQUESTED")
         pushNotif(`✋ Changes requested · ${at}`, s.pr);
-      else if (cur.review_decision === "REVIEW_REQUIRED")
+      else if (prefs.trig.yourTurn && cur.review_decision === "REVIEW_REQUIRED")
         pushNotif(`👀 Your turn — review requested · ${at}`, s.pr);
     }
-    if (cur.state !== prev.state && cur.state === "merged") pushNotif(`🟣 Merged · ${at}`, s.pr);
+    if (prefs.trig.merged && cur.state !== prev.state && cur.state === "merged")
+      pushNotif(`🟣 Merged · ${at}`, s.pr);
   }
 }
 
@@ -1027,7 +1132,7 @@ function pushNotif(text: string, pr: PrRef) {
   notifs.unshift({ id: notifSeq++, text, pr, at: Date.now(), read: false });
   if (notifs.length > 50) notifs.pop();
   renderNotifBadge();
-  if (osNotifGranted && !document.hasFocus()) {
+  if (prefs.notifNative && osNotifGranted && !document.hasFocus()) {
     try {
       sendNotification({ title: "peaR", body: text });
     } catch {
@@ -1107,16 +1212,17 @@ function toggleNotifPanel() {
  *  separately via load_team_prs). */
 function notifPollSet(): PrRef[] {
   const set = new Map<string, PrRef>();
-  for (const v of tabs.values()) if (v.pr) set.set(prKey(v.pr), v.pr);
-  for (const p of favorites.prs) set.set(prKey(p), p);
-  for (const i of queue.items) set.set(prKey(i.pr), i.pr);
+  if (prefs.scope.openTabs) for (const v of tabs.values()) if (v.pr) set.set(prKey(v.pr), v.pr);
+  if (prefs.scope.favPrs) for (const p of favorites.prs) set.set(prKey(p), p);
+  if (prefs.scope.queue) for (const i of queue.items) set.set(prKey(i.pr), i.pr);
   return [...set.values()];
 }
 function pollNotifications() {
   if (!notifyOn()) return;
   const prs = notifPollSet();
   if (prs.length) send({ type: "load_pr_statuses", prs });
-  if (watches.users.length || watches.teams.length) send({ type: "load_team_prs" });
+  if (prefs.scope.teams && (watches.users.length || watches.teams.length))
+    send({ type: "load_team_prs" });
 }
 
 function initNotifications() {
@@ -1131,9 +1237,9 @@ function initNotifications() {
     if (!panel.classList.contains("hidden") && !(e.target as HTMLElement)?.closest(".notif-wrap"))
       panel.classList.add("hidden");
   });
-  // Baseline shortly after launch (first sighting never notifies), then poll on an interval.
+  // Baseline shortly after launch (first sighting never notifies); the recurring poll interval
+  // is owned by applyPrefs() (configurable in settings).
   window.setTimeout(pollNotifications, 4000);
-  window.setInterval(pollNotifications, 90_000);
   // Best-effort OS-notification permission (async, non-blocking).
   void (async () => {
     try {
@@ -1789,7 +1895,7 @@ function createTabView(id: number, title: string, cli: CliKind, pr: PrRef | null
   const term = new Terminal({
     theme: xtermTheme(currentTheme()),
     fontFamily: TERM_FONT[currentTheme()],
-    fontSize: 13,
+    fontSize: prefs.termFont,
     lineHeight: 1.2,
     cursorBlink: true,
     allowProposedApi: true,
@@ -3014,6 +3120,11 @@ function syncDiffToActive() {
   }
   // The diff shows inline threads, so make sure comments are loaded too.
   if (v?.pr) ensureComments(anchor);
+  // Auto-summarize the whole diff (once) when the setting is on.
+  if (prefs.autoSummarize && v?.pr && !diffSummaries.has(anchor)) {
+    diffSummaries.set(anchor, new Map()); // mark requested so we don't fire twice
+    send({ type: "summarize_diff", tab: anchor });
+  }
   setPendingReview(commentsCache.get(anchor)?.pending_review_id ?? null);
   updateReviewBar(anchor);
 }
@@ -3838,6 +3949,202 @@ function initLauncher(): void {
   sendLaunchConfig(); // push persisted model/effort/access to the engine on startup
 }
 
+// ── settings sheet (gear → categorized preferences) ────────────────────────────
+const MATERIAL_OPTS: [string, string][] = [
+  ["hud", "HUD window (dark)"],
+  ["under_window", "Under-window"],
+  ["sidebar", "Sidebar"],
+  ["fullscreen_ui", "Fullscreen UI"],
+  ["content", "Content"],
+  ["window_bg", "Window background"],
+  ["popover", "Popover"],
+  ["menu", "Menu"],
+  ["header", "Header view"],
+  ["titlebar", "Titlebar"],
+  ["under_page", "Under-page"],
+];
+const DIFFSORT_OPTS: [string, string][] = [
+  ["default", "File order"],
+  ["changes", "Most changes"],
+  ["additions", "Most additions"],
+  ["removals", "Most removals"],
+];
+const POLL_OPTS: [string, string][] = [
+  ["30", "every 30s"],
+  ["60", "every 60s"],
+  ["90", "every 90s"],
+  ["300", "every 5m"],
+];
+
+function sToggle(get: () => boolean, set: (v: boolean) => void): HTMLElement {
+  const lab = document.createElement("label");
+  lab.className = "s-switch";
+  const inp = document.createElement("input");
+  inp.type = "checkbox";
+  inp.checked = get();
+  inp.addEventListener("change", () => {
+    set(inp.checked);
+    savePrefs();
+    applyPrefs();
+  });
+  const knob = document.createElement("span");
+  knob.className = "s-knob";
+  lab.append(inp, knob);
+  return lab;
+}
+function sSlider(
+  min: number,
+  max: number,
+  unit: string,
+  get: () => number,
+  set: (v: number) => void,
+): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "s-slider";
+  const inp = document.createElement("input");
+  inp.type = "range";
+  inp.min = String(min);
+  inp.max = String(max);
+  inp.step = "1";
+  inp.value = String(get());
+  const val = document.createElement("b");
+  val.textContent = `${get()}${unit}`;
+  inp.addEventListener("input", () => {
+    set(parseFloat(inp.value));
+    val.textContent = `${inp.value}${unit}`;
+    savePrefs();
+    applyPrefs();
+  });
+  wrap.append(inp, val);
+  return wrap;
+}
+function sSelect(
+  opts: [string, string][],
+  get: () => string,
+  set: (v: string) => void,
+): HTMLElement {
+  const sel = document.createElement("select");
+  sel.className = "s-select";
+  for (const [v, l] of opts) {
+    const o = document.createElement("option");
+    o.value = v;
+    o.textContent = l;
+    if (v === get()) o.selected = true;
+    sel.appendChild(o);
+  }
+  sel.addEventListener("change", () => {
+    set(sel.value);
+    savePrefs();
+    applyPrefs();
+  });
+  return sel;
+}
+function sRow(label: string, control: HTMLElement, hint?: string): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "s-row";
+  const l = document.createElement("div");
+  l.className = "s-label";
+  l.textContent = label;
+  if (hint) {
+    const h = document.createElement("span");
+    h.className = "s-hint";
+    h.textContent = hint;
+    l.appendChild(h);
+  }
+  row.append(l, control);
+  return row;
+}
+function sSection(title: string): HTMLElement {
+  const sec = document.createElement("div");
+  sec.className = "s-section";
+  const h = document.createElement("div");
+  h.className = "s-section-title";
+  h.textContent = title;
+  sec.appendChild(h);
+  return sec;
+}
+function sSubhead(text: string): HTMLElement {
+  const h = document.createElement("div");
+  h.className = "s-subhead";
+  h.textContent = text;
+  return h;
+}
+
+let settingsOpen = false;
+function openSettings() {
+  if (settingsOpen) return;
+  settingsOpen = true;
+  const back = document.createElement("div");
+  back.className = "settings-back";
+  const sheet = document.createElement("div");
+  sheet.className = "settings-sheet";
+  const head = document.createElement("div");
+  head.className = "settings-head";
+  const title = document.createElement("span");
+  title.textContent = "⚙ Settings";
+  const x = document.createElement("button");
+  x.className = "settings-x";
+  x.textContent = "×";
+  head.append(title, x);
+  const body = document.createElement("div");
+  body.className = "settings-body";
+
+  const ap = sSection("Appearance");
+  ap.append(
+    sRow("Window translucency", sToggle(() => prefs.translucent, (v) => (prefs.translucent = v)), "frosted native background"),
+    sRow("Terminal tint", sSlider(0, 100, "%", () => prefs.vibTerm, (v) => (prefs.vibTerm = v))),
+    sRow("Side panels", sSlider(0, 100, "%", () => prefs.vibPanel, (v) => (prefs.vibPanel = v))),
+    sRow("Toolbar", sSlider(0, 100, "%", () => prefs.vibToolbar, (v) => (prefs.vibToolbar = v))),
+    sRow("Vibrancy material", sSelect(MATERIAL_OPTS, () => prefs.material, (v) => (prefs.material = v))),
+    sRow("Terminal font size", sSlider(9, 22, "px", () => prefs.termFont, (v) => (prefs.termFont = v))),
+    sRow("Reduce motion", sToggle(() => prefs.reduceMotion, (v) => (prefs.reduceMotion = v)), "disable animations"),
+  );
+
+  const nt = sSection("Notifications");
+  nt.append(
+    sRow("Native OS notifications", sToggle(() => prefs.notifNative, (v) => (prefs.notifNative = v))),
+    sSubhead("Notify me about"),
+    sRow("New commits", sToggle(() => prefs.trig.commits, (v) => (prefs.trig.commits = v))),
+    sRow("New comments", sToggle(() => prefs.trig.comments, (v) => (prefs.trig.comments = v))),
+    sRow("Review ready", sToggle(() => prefs.trig.reviewReady, (v) => (prefs.trig.reviewReady = v)), "approved / changes"),
+    sRow("Your turn", sToggle(() => prefs.trig.yourTurn, (v) => (prefs.trig.yourTurn = v)), "review requested"),
+    sRow("Merged", sToggle(() => prefs.trig.merged, (v) => (prefs.trig.merged = v))),
+    sSubhead("Watch"),
+    sRow("Open-tab PRs", sToggle(() => prefs.scope.openTabs, (v) => (prefs.scope.openTabs = v))),
+    sRow("Favorited PRs", sToggle(() => prefs.scope.favPrs, (v) => (prefs.scope.favPrs = v))),
+    sRow("Queued PRs", sToggle(() => prefs.scope.queue, (v) => (prefs.scope.queue = v))),
+    sRow("Watched teams", sToggle(() => prefs.scope.teams, (v) => (prefs.scope.teams = v))),
+    sRow("Poll interval", sSelect(POLL_OPTS, () => String(prefs.pollSecs), (v) => (prefs.pollSecs = parseInt(v, 10)))),
+  );
+
+  const bh = sSection("Behavior");
+  bh.append(
+    sRow("Auto-summarize diff on open", sToggle(() => prefs.autoSummarize, (v) => (prefs.autoSummarize = v)), "Haiku, all files"),
+    sRow("Confirm before nesting tabs", sToggle(() => prefs.confirmNest, (v) => (prefs.confirmNest = v)), "on drag-to-tile"),
+    sRow("Restore tiling layout", sToggle(() => prefs.restoreTiling, (v) => (prefs.restoreTiling = v))),
+    sRow("Default diff sort", sSelect(DIFFSORT_OPTS, () => prefs.diffSort, (v) => (prefs.diffSort = v))),
+  );
+
+  body.append(ap, nt, bh);
+  sheet.append(head, body);
+  back.appendChild(sheet);
+  document.body.appendChild(back);
+
+  const close = () => {
+    settingsOpen = false;
+    back.remove();
+    document.removeEventListener("keydown", esc);
+  };
+  const esc = (e: KeyboardEvent) => {
+    if (e.key === "Escape") close();
+  };
+  x.addEventListener("click", close);
+  back.addEventListener("click", (e) => {
+    if (e.target === back) close();
+  });
+  document.addEventListener("keydown", esc);
+}
+
 window.addEventListener("DOMContentLoaded", async () => {
   tabbarEl = $("#tabbar");
   terminalsEl = $("#terminals");
@@ -4258,6 +4565,8 @@ window.addEventListener("DOMContentLoaded", async () => {
   new ResizeObserver(refit).observe(terminalsEl);
 
   initNotifications(); // wire the bell + polling before the (Tauri-only) event listener
+  $("#settings-btn").addEventListener("click", openSettings);
+  applyPrefs(); // apply persisted appearance/notification/behavior prefs on startup
 
   await listen<CoreEvent>("pear:event", (e) => handle(e.payload));
 
