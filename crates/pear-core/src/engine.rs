@@ -772,6 +772,14 @@ impl Engine {
                     pr,
                     cli,
                 });
+                // The PTY is still alive but the reloaded frontend's xterm is empty — replay the
+                // buffered output so the tab repaints instead of stalling.
+                if let Some(t) = self.tabs.get(&tab) {
+                    let bytes = t.session.replay();
+                    if !bytes.is_empty() {
+                        self.emit(Event::Output { tab, bytes });
+                    }
+                }
             }
             return;
         }
