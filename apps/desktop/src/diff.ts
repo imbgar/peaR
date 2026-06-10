@@ -137,6 +137,88 @@ let diffSort: SortMode = "default";
 export function setDiffSort(mode: string) {
   if (mode in SORT_LABELS) diffSort = mode as SortMode;
 }
+
+// Comment display mode: "inline" expands a GitHub-style thread under the line; "hover" shows a
+// compact 💬 icon to the right of the line whose thread pops out in a floating bubble on hover.
+let commentMode: "inline" | "hover" = "inline";
+export function setCommentMode(mode: string) {
+  commentMode = mode === "hover" ? "hover" : "inline";
+}
+
+// ── hover-mode comment popover ──────────────────────────────────────────────
+// A single shared floating bubble (appended to <body> to escape the diff panel's overflow).
+let cmtPop: HTMLElement | null = null;
+let cmtHideTimer = 0;
+let cmtPinned = false; // a click pins it open (so the reply box / reactions are usable)
+let cmtAnchor: HTMLElement | null = null;
+function ensureCmtPop(): HTMLElement {
+  if (cmtPop) return cmtPop;
+  const pop = document.createElement("div");
+  pop.className = "diff-cmt-pop hidden";
+  pop.addEventListener("mouseenter", () => window.clearTimeout(cmtHideTimer));
+  pop.addEventListener("mouseleave", () => {
+    if (!cmtPinned) scheduleCmtHide();
+  });
+  document.body.appendChild(pop);
+  // Pinned-open dismissal: click outside (or Escape).
+  document.addEventListener("click", (e) => {
+    if (!cmtPinned) return;
+    const t = e.target as HTMLElement;
+    if (pop.contains(t) || t === cmtAnchor) return;
+    cmtPinned = false;
+    pop.classList.add("hidden");
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && cmtPinned) {
+      cmtPinned = false;
+      pop.classList.add("hidden");
+    }
+  });
+  cmtPop = pop;
+  return pop;
+}
+function scheduleCmtHide() {
+  window.clearTimeout(cmtHideTimer);
+  cmtHideTimer = window.setTimeout(() => {
+    if (!cmtPinned) cmtPop?.classList.add("hidden");
+  }, 240);
+}
+function showCmtPop(icon: HTMLElement, blocks: HTMLElement[]) {
+  const pop = ensureCmtPop();
+  window.clearTimeout(cmtHideTimer);
+  cmtAnchor = icon;
+  pop.replaceChildren(...blocks); // move the thread blocks into the bubble
+  pop.classList.remove("hidden");
+  // Open the bubble to the LEFT of the icon (keeps the code clear); fall back to the right only
+  // if there isn't room on the left.
+  const r = icon.getBoundingClientRect();
+  const w = pop.offsetWidth || 340;
+  const h = pop.offsetHeight || 160;
+  let left = r.left - w - 8;
+  if (left < 8) left = Math.min(r.right + 8, window.innerWidth - w - 8);
+  let top = r.top - 4;
+  if (top + h > window.innerHeight - 8) top = Math.max(8, window.innerHeight - h - 8);
+  pop.style.left = `${Math.max(8, left)}px`;
+  pop.style.top = `${top}px`;
+}
+function attachCommentHover(icon: HTMLElement, blocks: HTMLElement[]) {
+  icon.addEventListener("mouseenter", () => {
+    if (!cmtPinned) showCmtPop(icon, blocks);
+  });
+  icon.addEventListener("mouseleave", () => {
+    if (!cmtPinned) scheduleCmtHide();
+  });
+  icon.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (cmtPinned && cmtAnchor === icon) {
+      cmtPinned = false;
+      cmtPop?.classList.add("hidden");
+    } else {
+      showCmtPop(icon, blocks);
+      cmtPinned = true;
+    }
+  });
+}
 let onDiffClose: (() => void) | null = null;
 /** Wire the diff toolbar's × (close) button. */
 export function setDiffCloseHandler(fn: () => void) {
@@ -258,13 +340,29 @@ export function jumpToThread(container: HTMLElement, threadId: string): boolean 
   const find = (sel: string) =>
     [...container.querySelectorAll<HTMLElement>(sel)].find((e) => e.dataset.threadId === threadId);
   const block = find(".diff-thread");
-  if (!block) return false;
-  block.closest(".diff-file")?.classList.remove("collapsed");
-  if (block.classList.contains("hidden")) find(".diff-bubble")?.click();
-  block.scrollIntoView({ behavior: "smooth", block: "center" });
-  block.classList.add("flash");
-  setTimeout(() => block.classList.remove("flash"), 1100);
-  return true;
+  if (block) {
+    // Inline mode: scroll to the thread block (expanding it if collapsed).
+    block.closest(".diff-file")?.classList.remove("collapsed");
+    if (block.classList.contains("hidden")) find(".diff-bubble")?.click();
+    block.scrollIntoView({ behavior: "smooth", block: "center" });
+    block.classList.add("flash");
+    setTimeout(() => block.classList.remove("flash"), 1100);
+    return true;
+  }
+  // Hover mode: the thread isn't rendered inline — jump to the line's row and pop its bubble open.
+  const icon = [...container.querySelectorAll<HTMLElement>(".diff-cmt-icon")].find((e) =>
+    (e.dataset.threadIds ?? "").split(" ").includes(threadId),
+  );
+  if (icon) {
+    const row = (icon.closest(".diff-row") as HTMLElement | null) ?? icon;
+    row.closest(".diff-file")?.classList.remove("collapsed");
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    icon.click(); // pin the comment bubble open at the line
+    row.classList.add("flash");
+    setTimeout(() => row.classList.remove("flash"), 1100);
+    return true;
+  }
+  return false;
 }
 
 /** The sticky diff toolbar: stats · collapse-all · sort · show +/− · close. */
@@ -414,6 +512,7 @@ export function renderDiff(
   threads: ReviewThread[] = [],
 ) {
   container.innerHTML = "";
+  container.classList.toggle("cmt-hover", commentMode === "hover");
   const files = parseDiff(diff);
   if (!files.length) {
     const empty = document.createElement("div");
@@ -541,6 +640,32 @@ export function renderDiff(
         const lineThreads = line.newNo != null ? threadMap?.get(line.newNo) : undefined;
         if (lineThreads) {
           row.classList.add("has-cmt");
+          if (commentMode === "hover") {
+            // Hover mode: a compact 💬 icon to the right of the line; its thread(s) pop out in a
+            // floating bubble on hover (click to pin). Nothing is rendered inline.
+            const blocks: HTMLElement[] = [];
+            let total = 0;
+            let allResolved = true;
+            for (const t of lineThreads) {
+              const block = renderThread(t);
+              block.dataset.threadId = t.id;
+              block.classList.remove("hidden"); // visible inside the popover
+              blocks.push(block);
+              total += t.comments.length;
+              if (!t.is_resolved) allResolved = false;
+            }
+            const icon = document.createElement("button");
+            icon.type = "button";
+            icon.className = "diff-cmt-icon" + (allResolved ? " resolved" : "");
+            icon.textContent = total > 1 ? `💬 ${total}` : "💬";
+            icon.title = "Comments — hover to view, click to pin";
+            icon.dataset.threadIds = lineThreads.map((t) => t.id).join(" "); // for jumpToThread
+            attachCommentHover(icon, blocks);
+            row.appendChild(icon);
+            body.appendChild(row);
+            continue;
+          }
+          // Inline mode (default): a 💬 bubble on the line toggles a thread block below it.
           const blocks: HTMLElement[] = [];
           for (const t of lineThreads) {
             const block = renderThread(t);
