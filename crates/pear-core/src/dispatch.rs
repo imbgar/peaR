@@ -91,6 +91,43 @@ pub fn coreview_keystrokes(
     )
 }
 
+/// The tandem-review macro — review a GROUP of related PRs as a group (typed into a
+/// CLAUDE tab; the `/pr-tandem` skill maps how the PRs relate before reviewing).
+/// `co` runs the group through the two-engine co-review pipeline; `claude_tier` is
+/// the (single-engine or claude-side) depth, `codex_tier` codex's depth under `co`.
+pub fn tandem_keystrokes(
+    prs: &[PrRef],
+    claude_tier: ReviewTier,
+    co: bool,
+    first: CliKind,
+    codex_tier: ReviewTier,
+) -> String {
+    let depth = |t: ReviewTier| match t {
+        ReviewTier::Light => "light",
+        ReviewTier::Standard => "standard",
+        ReviewTier::Complex => "complex",
+    };
+    let refs = prs
+        .iter()
+        .map(PrRef::full_label)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if co {
+        let first = if first == CliKind::Codex {
+            "codex"
+        } else {
+            "claude"
+        };
+        format!(
+            "/pr-tandem {refs} claude={} co first={first} codex={}\r",
+            depth(claude_tier),
+            depth(codex_tier)
+        )
+    } else {
+        format!("/pr-tandem {refs} claude={}\r", depth(claude_tier))
+    }
+}
+
 /// Keystrokes for an action [`ReviewButton`] under `cli`, targeting `pr` (trailing CR).
 pub fn keystrokes(button: ReviewButton, cli: CliKind, pr: Option<&PrRef>) -> Option<String> {
     use CliKind::*;
@@ -270,6 +307,38 @@ mod tests {
                 None
             ),
             "/pr-coreview first=claude claude=complex codex=complex\r"
+        );
+    }
+
+    #[test]
+    fn tandem_names_every_pr_and_modes() {
+        let p1 = pr();
+        let p2 = PrRef {
+            owner: "imbgar".into(),
+            repo: "peaR".into(),
+            number: 43,
+        };
+        // Single-engine group review.
+        assert_eq!(
+            tandem_keystrokes(
+                &[p1.clone(), p2.clone()],
+                ReviewTier::Standard,
+                false,
+                CliKind::Claude,
+                ReviewTier::Standard
+            ),
+            "/pr-tandem imbgar/peaR#42 imbgar/peaR#43 claude=standard\r"
+        );
+        // Group co-review pipeline.
+        assert_eq!(
+            tandem_keystrokes(
+                &[p1, p2],
+                ReviewTier::Complex,
+                true,
+                CliKind::Codex,
+                ReviewTier::Light
+            ),
+            "/pr-tandem imbgar/peaR#42 imbgar/peaR#43 claude=complex co first=codex codex=light\r"
         );
     }
 

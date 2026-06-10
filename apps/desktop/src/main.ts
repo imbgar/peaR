@@ -798,8 +798,9 @@ function renderToolbar() {
 /** Open a PR tab. Default = resume the PR's most recent session; `fresh` forces a
  *  new one; `session_id` resumes that exact session. */
 // A review to auto-run on the next opened PR tab: a tier, "ultra" (the paid cloud
-// review, dispatched as a button), or "coreview" (the two-engine pipeline skill).
-type LaunchReview = ReviewTier | "ultra" | "coreview";
+// review, dispatched as a button), "coreview" (the two-engine pipeline skill), or
+// "tandem" (the group-of-related-PRs skill, fed from `pendingTandem`).
+type LaunchReview = ReviewTier | "ultra" | "coreview" | "tandem";
 // Auto-review intent for the NEXT tab to open, set per-open so it only applies to
 // a fresh Open-box launch — never to a Resume / session-restore.
 let pendingAutoReview: LaunchReview | null = null;
@@ -852,21 +853,20 @@ function startCoReview(pr: PrRef) {
   openPr(pr, "claude", { fresh: true, autoReview: "coreview" });
 }
 
-// ── tandem review (several related PRs together, tiled) ──────────────────────────
-// The user multi-selects PRs (the ⋔ modal); each opens with the launcher's current
-// engine + tier. Tabs chain through tab_opened: each newly-opened tab sets pendingSplit
-// for the next queued PR, tiling them all into ONE window. Split direction alternates
-// row/col so 3-4 PRs land in a grid-ish spiral instead of ever-thinner strips.
-let tandemQueue: { pr: PrRef; dir: "row" | "col" }[] = [];
+// ── tandem review (a GROUP of related PRs, reviewed AS a group) ───────────────────
+// One claude tab (anchored on the first PR) runs the /pr-tandem skill over the whole
+// set: it maps how the PRs relate (stacking, shared files, cross-PR contracts), reviews
+// each in that context, surfaces cross-PR findings, and recommends a merge order.
+// `co` runs the group through the two-engine co-review pipeline instead of claude alone.
+let pendingTandem: { prs: PrRef[]; co: boolean } | null = null;
 
-function startTandem(prs: PrRef[]) {
+function startTandem(prs: PrRef[], co: boolean) {
   if (!prs.length) return;
-  const [first, ...rest] = prs;
-  tandemQueue = rest.map((pr, i) => ({ pr, dir: i % 2 === 0 ? "row" : "col" }));
+  pendingTandem = { prs, co };
   setStatus(
-    `tandem review: ${prs.length} PRs (${prs.map((p) => `#${p.number}`).join(", ")}) — ${selectedEngine}`,
+    `tandem review: ${prs.map((p) => `#${p.number}`).join(" + ")} as a group${co ? " (co-review pipeline)" : ""}`,
   );
-  openPr(first, selectedEngine, { fresh: true, autoReview: selectedTier });
+  openPr(prs[0], "claude", { fresh: true, autoReview: "tandem" });
 }
 
 /** The ⋔ modal: a manual multi-select of PRs — input boxes with "+ add" for more. */
@@ -877,7 +877,16 @@ function openTandemModal() {
   card.className = "tile-confirm tandem-card";
   const title = document.createElement("div");
   title.className = "tc-msg";
-  title.innerHTML = `<b>⋔ Tandem review</b> — open related PRs together, tiled, each auto-reviewing (${escapeHtml(selectedEngine)} · ${escapeHtml(String(selectedTier ?? "no review"))})`;
+  title.innerHTML = `<b>⋔ Tandem review</b> — review a group of <b>related</b> PRs as a group: how they stack, shared files, cross-PR contracts, merge order.`;
+  const modeRow = document.createElement("div");
+  modeRow.className = "tandem-mode";
+  const modeLabel = document.createElement("span");
+  modeLabel.textContent = "Reviewer";
+  const modeSel = document.createElement("select");
+  modeSel.className = "tandem-mode-sel";
+  modeSel.add(new Option(`claude · ${coreviewDepth(String(selectedTier ?? "standard"))}`, "single"));
+  modeSel.add(new Option("co-review pipeline (claude ⇄ codex)", "co"));
+  modeRow.append(modeLabel, modeSel);
   const rows = document.createElement("div");
   rows.className = "tandem-rows";
 
@@ -924,9 +933,9 @@ function openTandemModal() {
   cancel.textContent = "Cancel";
   const ok = document.createElement("button");
   ok.className = "primary tc-ok";
-  ok.textContent = "⋔ Open all & review";
+  ok.textContent = "⋔ Review as group";
   actions.append(more, cancel, ok);
-  card.append(title, rows, actions);
+  card.append(title, modeRow, rows, actions);
   scrim.appendChild(card);
 
   const close = () => {
@@ -949,13 +958,13 @@ function openTandemModal() {
       }
     }
     if (bad) return; // invalid rows are flagged red — fix or clear them
-    if (!prs.length) {
-      setStatus("⚠ tandem: enter at least one owner/repo#NUMBER", true);
+    if (prs.length < 2) {
+      setStatus("⚠ tandem reviews a GROUP — enter at least two related PRs", true);
       return;
     }
     close();
     prInput.value = "";
-    startTandem(prs);
+    startTandem(prs, modeSel.value === "co");
   };
   const onKey = (ev: KeyboardEvent) => {
     if (ev.key === "Escape") close();
@@ -997,7 +1006,20 @@ function fireReview(tab: number) {
   const agent = v ? resolveAgent(v) : undefined;
   setStatus(`auto-review (${p.sel}) → ${v?.title ?? `tab ${tab}`}`);
   if (p.sel === "ultra") send({ type: "button", tab, button: "ultra", agent });
-  else if (p.sel === "coreview")
+  else if (p.sel === "tandem") {
+    const t = pendingTandem;
+    pendingTandem = null;
+    if (!t) return;
+    send({
+      type: "start_tandem_review",
+      tab,
+      prs: t.prs,
+      claude_tier: coreviewDepth(t.co ? prefs.coReviewClaudeTier : String(selectedTier ?? "standard")),
+      co: t.co,
+      first: prefs.coReviewOrder === "codex_claude" ? "codex" : "claude",
+      codex_tier: coreviewDepth(prefs.coReviewCodexTier),
+    });
+  } else if (p.sel === "coreview")
     send({
       type: "start_co_review",
       tab,
@@ -2566,11 +2588,6 @@ function handle(ev: CoreEvent) {
         coReviewSecond = null;
         pendingSplit = { source: ev.tab, dir: "row", before: false };
         openPr(sec.pr, sec.engine, { fresh: true, autoReview: sec.tier });
-      } else if (tandemQueue.length) {
-        // Tandem chain: tile the next queued PR beside the tab that just landed.
-        const next = tandemQueue.shift()!;
-        pendingSplit = { source: ev.tab, dir: next.dir, before: false };
-        openPr(next.pr, selectedEngine, { fresh: true, autoReview: selectedTier });
       }
       break;
     }

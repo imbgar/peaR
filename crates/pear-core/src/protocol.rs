@@ -439,6 +439,21 @@ pub enum Command {
         claude_tier: ReviewTier,
         codex_tier: ReviewTier,
     },
+    /// Review a GROUP of related PRs as a group (`/pr-tandem` skill in a claude tab):
+    /// map how the PRs relate (stacking, shared files, contracts), review each in that
+    /// context, surface cross-PR findings, recommend a merge order. `co` additionally
+    /// runs the group through the two-engine co-review pipeline.
+    StartTandemReview {
+        tab: TabId,
+        prs: Vec<PrRef>,
+        claude_tier: ReviewTier,
+        #[serde(default)]
+        co: bool,
+        #[serde(default)]
+        first: Option<CliKind>,
+        #[serde(default)]
+        codex_tier: Option<ReviewTier>,
+    },
     /// Persist an arbitrary review artifact (e.g. captured agent output).
     SaveReview { tab: TabId, content: String },
     /// Load the latest persisted review for the tab's PR into the Insight panel

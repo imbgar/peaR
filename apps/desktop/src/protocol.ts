@@ -158,6 +158,15 @@ export type Command =
       claude_tier: ReviewTier;
       codex_tier: ReviewTier;
     }
+  | {
+      type: "start_tandem_review";
+      tab: number;
+      prs: PrRef[];
+      claude_tier: ReviewTier;
+      co?: boolean;
+      first?: CliKind;
+      codex_tier?: ReviewTier;
+    }
   | { type: "save_review"; tab: number; content: string }
   | { type: "load_panel"; tab: number }
   | { type: "set_claude_permission"; mode: string }

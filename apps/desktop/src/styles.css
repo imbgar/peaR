@@ -1051,6 +1051,13 @@ body.tiling-drag .terminal-host { cursor: grabbing; }
 
 /* ── tandem review modal (⋔): manual multi-select of PRs ── */
 .tandem-card { width: 420px; }
+.tandem-mode { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.tandem-mode span { font-family: var(--font-ui); font-size: 12px; color: var(--dim); }
+.tandem-mode-sel {
+  flex: 1; background: var(--bg); border: 1px solid var(--bd2); border-radius: var(--r-sm);
+  color: var(--tx); font-family: var(--font-ui); font-size: 12px; padding: 5px 8px; outline: none;
+}
+.tandem-mode-sel:focus { border-color: var(--accent-d); }
 .tandem-rows { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; max-height: 40vh; overflow-y: auto; }
 .tandem-row { display: flex; align-items: center; gap: 6px; }
 .tandem-input {
