@@ -684,7 +684,7 @@ const ENGINE_TIERS: Record<string, ReadonlySet<string>> = {
 
 // Curated model presets per engine (the launcher also offers a free-text "custom…").
 const MODEL_PRESETS: Record<string, string[]> = {
-  claude: ["opus", "sonnet", "haiku"],
+  claude: ["fable", "opus", "sonnet", "haiku"],
   codex: ["gpt-5.5", "gpt-5", "gpt-5-codex", "o3"],
   aider: [],
 };
