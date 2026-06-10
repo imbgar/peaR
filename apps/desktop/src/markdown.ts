@@ -16,8 +16,16 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   }
 });
 
+let imageHook: ((el: HTMLElement) => void) | null = null;
+/** Register a post-render hook that proxies images the webview can't load itself (private-repo
+ *  GitHub comment attachments). Runs on the container after every markdown render. */
+export function setImageProxy(fn: (el: HTMLElement) => void) {
+  imageHook = fn;
+}
+
 /** Render markdown `src` into `el` as sanitized HTML. */
 export function renderMarkdown(el: HTMLElement, src: string) {
   const html = marked.parse(src ?? "", { async: false }) as string;
   el.innerHTML = DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+  imageHook?.(el);
 }

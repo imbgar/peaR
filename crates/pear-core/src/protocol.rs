@@ -619,6 +619,9 @@ pub enum Command {
         #[serde(default)]
         path: Option<String>,
     },
+    /// Fetch a GitHub-hosted image (e.g. a private-repo comment attachment the webview can't load)
+    /// with auth and return it as a data URL via `Event::Image`.
+    FetchImage { url: String },
 }
 
 /// Events the engine emits to the frontend.
@@ -705,6 +708,9 @@ pub enum Event {
         tab: TabId,
         summaries: Vec<FileSummary>,
     },
+    /// A proxied image (reply to `FetchImage`): the original `url` + a `data:` URL the webview can
+    /// render. Only emitted on success.
+    Image { url: String, data_url: String },
     /// A non-fatal problem the UI should surface (toast).
     Notice { tab: Option<TabId>, message: String },
     /// A fatal-for-this-command error.

@@ -19,7 +19,7 @@ import "@fontsource-variable/hanken-grotesk";
 import "@fontsource-variable/jetbrains-mono";
 import { marked } from "marked";
 import { parse as parseSearchQuery, type SearchParserResult } from "search-query-parser";
-import { renderMarkdown } from "./markdown";
+import { renderMarkdown, setImageProxy } from "./markdown";
 import { initUpdater } from "./update";
 import {
   renderDiff,
@@ -627,6 +627,34 @@ async function send(cmd: Command) {
   } catch (e) {
     setStatus(`⚠ ${e}`, true);
   }
+}
+
+// ── proxy private GitHub comment images ─────────────────────────────────────────
+// The webview can't load private-repo attachments (no GitHub session); when such an <img>
+// fails, ask the backend to fetch it with auth and swap in the returned data URL.
+const imageCache = new Map<string, string>(); // original URL → data: URL
+function isGithubImage(url: string): boolean {
+  return /^https?:\/\/([\w.-]*\.)?(github\.com\/user-attachments|githubusercontent\.com)/i.test(url);
+}
+function wireCommentImages(el: HTMLElement) {
+  el.querySelectorAll<HTMLImageElement>("img").forEach((img) => {
+    const orig = img.getAttribute("src") ?? "";
+    if (!orig || img.dataset.proxyDone || !isGithubImage(orig)) return;
+    const cached = imageCache.get(orig);
+    if (cached) {
+      img.src = cached;
+      img.dataset.proxyDone = "1";
+      return;
+    }
+    img.dataset.origSrc = orig;
+    const proxy = () => {
+      if (img.dataset.proxyReq) return;
+      img.dataset.proxyReq = "1";
+      send({ type: "fetch_image", url: orig });
+    };
+    if (img.complete && img.naturalWidth === 0) proxy(); // already failed before we attached
+    img.addEventListener("error", proxy, { once: true });
+  });
 }
 
 // ── launcher state (segmented engine + intensity chips) ──────────────────────
@@ -2466,6 +2494,16 @@ function handle(ev: CoreEvent) {
       panelBodyEl
         .querySelectorAll<HTMLElement>(".dt-file-sum.busy")
         .forEach((b) => b.classList.remove("busy"));
+      break;
+    }
+    case "image": {
+      imageCache.set(ev.url, ev.data_url);
+      document.querySelectorAll<HTMLImageElement>("img[data-orig-src]").forEach((img) => {
+        if (img.dataset.origSrc === ev.url) {
+          img.src = ev.data_url;
+          img.dataset.proxyDone = "1";
+        }
+      });
       break;
     }
     case "skills_status": {
@@ -4603,6 +4641,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   new ResizeObserver(refit).observe(terminalsEl);
 
   initNotifications(); // wire the bell + polling before the (Tauri-only) event listener
+  setImageProxy(wireCommentImages); // proxy private GitHub comment images that fail to load
   $("#settings-btn").addEventListener("click", openSettings);
   applyPrefs(); // apply persisted appearance/notification/behavior prefs on startup
 
