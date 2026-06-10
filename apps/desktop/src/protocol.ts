@@ -151,6 +151,13 @@ export type Command =
   | { type: "resize"; tab: number; cols: number; rows: number }
   | { type: "button"; tab: number; button: ReviewButton; agent?: CliKind }
   | { type: "start_review"; tab: number; tier: ReviewTier; agent?: CliKind }
+  | {
+      type: "start_co_review";
+      tab: number;
+      first: CliKind;
+      claude_tier: ReviewTier;
+      codex_tier: ReviewTier;
+    }
   | { type: "save_review"; tab: number; content: string }
   | { type: "load_panel"; tab: number }
   | { type: "set_claude_permission"; mode: string }

@@ -400,6 +400,13 @@ interface Prefs {
   restoreTiling: boolean; // rebuild split layouts on restore (vs one window per tab)
   diffSort: string;
   commentMode: string; // "inline" thread under the line, or "hover" pop-out bubble
+  // co-review: claude + codex on one PR. "pipeline" = ONE claude tab orchestrates both
+  // engines, structured findings handed between them (/pr-coreview skill); "panes" = two
+  // isolated reviews tiled side-by-side (the v0 behavior, kept as a variant).
+  coReviewMode: string;
+  coReviewOrder: string; // "claude_codex" (claude reviews first / sits left) | "codex_claude"
+  coReviewClaudeTier: string; // light | standard | complex
+  coReviewCodexTier: string;
 }
 const DEFAULT_PREFS: Prefs = {
   translucent: true,
@@ -418,6 +425,10 @@ const DEFAULT_PREFS: Prefs = {
   restoreTiling: true,
   diffSort: "default",
   commentMode: "inline",
+  coReviewMode: "pipeline",
+  coReviewOrder: "claude_codex",
+  coReviewClaudeTier: "standard",
+  coReviewCodexTier: "standard",
 };
 const PREFS_KEY = "pear.prefs.v1";
 function loadPrefs(): Prefs {
@@ -673,7 +684,7 @@ const ENGINE_TIERS: Record<string, ReadonlySet<string>> = {
 
 // Curated model presets per engine (the launcher also offers a free-text "custom…").
 const MODEL_PRESETS: Record<string, string[]> = {
-  claude: ["opus", "sonnet", "haiku"],
+  claude: ["fable", "opus", "sonnet", "haiku"],
   codex: ["gpt-5.5", "gpt-5", "gpt-5-codex", "o3"],
   aider: [],
 };
@@ -786,9 +797,9 @@ function renderToolbar() {
 
 /** Open a PR tab. Default = resume the PR's most recent session; `fresh` forces a
  *  new one; `session_id` resumes that exact session. */
-// A review to auto-run on the next opened PR tab: a tier, or "ultra" (the paid cloud
-// review, dispatched as a button rather than a tier).
-type LaunchReview = ReviewTier | "ultra";
+// A review to auto-run on the next opened PR tab: a tier, "ultra" (the paid cloud
+// review, dispatched as a button), or "coreview" (the two-engine pipeline skill).
+type LaunchReview = ReviewTier | "ultra" | "coreview";
 // Auto-review intent for the NEXT tab to open, set per-open so it only applies to
 // a fresh Open-box launch — never to a Resume / session-restore.
 let pendingAutoReview: LaunchReview | null = null;
@@ -808,6 +819,37 @@ function openPr(
     session_id: opts.session_id ?? null,
   });
   closeSessionPop();
+}
+
+// ── co-review (claude + codex on one PR) ──────────────────────────────────────────
+// Pipeline mode (default): ONE claude tab runs the /pr-coreview skill — reviewer A emits
+// structured findings, reviewer B (codex, headless via `codex exec`) cross-examines them,
+// claude distills a single merged verdict. Panes mode: the v0 behavior — when the FIRST
+// engine's tab opens, the tab_opened handler opens the SECOND engine as a split pane
+// beside it (via `pendingSplit`) and auto-reviews both, isolated.
+let coReviewSecond: { pr: PrRef; engine: CliKind; tier: LaunchReview } | null = null;
+
+/** A pipeline depth from a co-review tier pref (older saved prefs may hold "ultra"). */
+const coreviewDepth = (v: string): ReviewTier =>
+  v === "light" || v === "standard" || v === "complex" ? v : "complex";
+
+function startCoReview(pr: PrRef) {
+  const codexFirst = prefs.coReviewOrder === "codex_claude";
+  if (prefs.coReviewMode === "panes") {
+    const first: CliKind = codexFirst ? "codex" : "claude";
+    const second: CliKind = codexFirst ? "claude" : "codex";
+    const tierOf = (e: CliKind): LaunchReview =>
+      coreviewDepth(e === "claude" ? prefs.coReviewClaudeTier : prefs.coReviewCodexTier);
+    coReviewSecond = { pr, engine: second, tier: tierOf(second) };
+    setStatus(`co-review (panes): ${first} | ${second} on ${pr.repo}#${pr.number}`);
+    openPr(pr, first, { fresh: true, autoReview: tierOf(first) });
+    return;
+  }
+  // Pipeline: the orchestrator tab is always claude (it drives codex itself).
+  setStatus(
+    `co-review pipeline: ${codexFirst ? "codex → claude" : "claude → codex"} on ${pr.repo}#${pr.number}`,
+  );
+  openPr(pr, "claude", { fresh: true, autoReview: "coreview" });
 }
 
 // ── auto-review readiness ─────────────────────────────────────────────────────
@@ -832,6 +874,14 @@ function fireReview(tab: number) {
   const agent = v ? resolveAgent(v) : undefined;
   setStatus(`auto-review (${p.sel}) → ${v?.title ?? `tab ${tab}`}`);
   if (p.sel === "ultra") send({ type: "button", tab, button: "ultra", agent });
+  else if (p.sel === "coreview")
+    send({
+      type: "start_co_review",
+      tab,
+      first: prefs.coReviewOrder === "codex_claude" ? "codex" : "claude",
+      claude_tier: coreviewDepth(prefs.coReviewClaudeTier),
+      codex_tier: coreviewDepth(prefs.coReviewCodexTier),
+    });
   else send({ type: "start_review", tab, tier: p.sel, agent });
 }
 
@@ -2386,6 +2436,14 @@ function handle(ev: CoreEvent) {
         scheduleAutoReview(ev.tab, pendingAutoReview);
       }
       pendingAutoReview = null; // consume — resumes/new opens never carry it
+      // Co-review: the first engine's tab just opened — open the second engine as a split pane
+      // beside it (it lands via pendingSplit on its own tab_opened) and auto-review it too.
+      if (coReviewSecond) {
+        const sec = coReviewSecond;
+        coReviewSecond = null;
+        pendingSplit = { source: ev.tab, dir: "row", before: false };
+        openPr(sec.pr, sec.engine, { fresh: true, autoReview: sec.tier });
+      }
       break;
     }
     case "pr_meta": {
@@ -4044,6 +4102,19 @@ const COMMENTMODE_OPTS: [string, string][] = [
   ["inline", "Inline threads"],
   ["hover", "Hover bubbles"],
 ];
+const COREVIEW_MODE_OPTS: [string, string][] = [
+  ["pipeline", "Pipeline (findings handed between engines)"],
+  ["panes", "Side-by-side panes (isolated)"],
+];
+const COREVIEW_ORDER_OPTS: [string, string][] = [
+  ["claude_codex", "claude → codex"],
+  ["codex_claude", "codex → claude"],
+];
+const COREVIEW_TIER_OPTS: [string, string][] = [
+  ["light", "Light"],
+  ["standard", "Standard"],
+  ["complex", "Complex"],
+];
 const POLL_OPTS: [string, string][] = [
   ["30", "every 30s"],
   ["60", "every 60s"],
@@ -4201,7 +4272,15 @@ function openSettings() {
     sRow("Diff comments", sSelect(COMMENTMODE_OPTS, () => prefs.commentMode, (v) => (prefs.commentMode = v)), "inline thread vs hover bubble"),
   );
 
-  body.append(ap, nt, bh);
+  const cr = sSection("Co-review");
+  cr.append(
+    sRow("Mode", sSelect(COREVIEW_MODE_OPTS, () => prefs.coReviewMode, (v) => (prefs.coReviewMode = v)), "pipeline = cross-examined merged verdict"),
+    sRow("Order", sSelect(COREVIEW_ORDER_OPTS, () => prefs.coReviewOrder, (v) => (prefs.coReviewOrder = v)), "who reviews first (pipeline) / sits left (panes)"),
+    sRow("Claude depth", sSelect(COREVIEW_TIER_OPTS, () => coreviewDepth(prefs.coReviewClaudeTier), (v) => (prefs.coReviewClaudeTier = v))),
+    sRow("Codex depth", sSelect(COREVIEW_TIER_OPTS, () => coreviewDepth(prefs.coReviewCodexTier), (v) => (prefs.coReviewCodexTier = v))),
+  );
+
+  body.append(ap, nt, bh, cr);
   sheet.append(head, body);
   back.appendChild(sheet);
   document.body.appendChild(back);
@@ -4261,6 +4340,16 @@ window.addEventListener("DOMContentLoaded", async () => {
     // The Open box always starts a FRESH session; History is where you resume.
     // selectedTier null = open without a review.
     openPr(pr, selectedEngine, { fresh: true, autoReview: selectedTier });
+    prInput.value = "";
+  });
+
+  $("#co-review-btn").addEventListener("click", () => {
+    const pr = parsePrRef(prInput.value);
+    if (!pr) {
+      setStatus("⚠ enter owner/repo#NUMBER for co-review", true);
+      return;
+    }
+    startCoReview(pr);
     prInput.value = "";
   });
 

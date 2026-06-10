@@ -429,6 +429,16 @@ pub enum Command {
         #[serde(default)]
         agent: Option<CliKind>,
     },
+    /// Launch the two-engine co-review PIPELINE (`/pr-coreview` skill) in a claude
+    /// tab: reviewer A emits structured findings, reviewer B cross-examines them via
+    /// `codex exec`, claude distills one merged verdict. `first` picks reviewer A;
+    /// the tiers are each engine's depth inside the pipeline.
+    StartCoReview {
+        tab: TabId,
+        first: CliKind,
+        claude_tier: ReviewTier,
+        codex_tier: ReviewTier,
+    },
     /// Persist an arbitrary review artifact (e.g. captured agent output).
     SaveReview { tab: TabId, content: String },
     /// Load the latest persisted review for the tab's PR into the Insight panel

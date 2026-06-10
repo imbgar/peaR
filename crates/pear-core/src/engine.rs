@@ -166,6 +166,12 @@ impl Engine {
             Command::Resize { tab, cols, rows } => self.resize(tab, cols, rows),
             Command::Button { tab, button, agent } => self.button(tab, button, agent),
             Command::StartReview { tab, tier, agent } => self.start_review(tab, tier, agent),
+            Command::StartCoReview {
+                tab,
+                first,
+                claude_tier,
+                codex_tier,
+            } => self.start_co_review(tab, first, claude_tier, codex_tier),
             Command::SaveReview { tab, content } => self.save_review(tab, &content),
             Command::LoadPanel { tab } => self.load_panel(tab),
             Command::SetClaudePermission { mode } => {
@@ -946,6 +952,46 @@ impl Engine {
             self.emit(Event::Notice {
                 tab: Some(tab),
                 message: format!("review: {e}"),
+            });
+        }
+    }
+
+    /// Type the `/pr-coreview` pipeline macro into a CLAUDE tab. The skill orchestrates
+    /// both engines itself (claude reviews/distills, codex runs headless via `codex exec`),
+    /// so unlike `start_review` there is no agent override — a non-claude tab is an error.
+    fn start_co_review(
+        &mut self,
+        tab: TabId,
+        first: CliKind,
+        claude_tier: ReviewTier,
+        codex_tier: ReviewTier,
+    ) {
+        let (cli, pr) = match self.tabs.get(&tab) {
+            Some(t) => (t.cli, t.pr.clone()),
+            None => {
+                self.emit(Event::Notice {
+                    tab: Some(tab),
+                    message: "co-review: unknown tab".into(),
+                });
+                return;
+            }
+        };
+        if cli != CliKind::Claude {
+            self.emit(Event::Notice {
+                tab: Some(tab),
+                message: format!("co-review needs a claude tab (this is {:?})", cli),
+            });
+            return;
+        }
+        let keys = dispatch::coreview_keystrokes(first, claude_tier, codex_tier, pr.as_ref());
+        let err = self
+            .tabs
+            .get_mut(&tab)
+            .and_then(|t| t.session.write_then_submit(keys.as_bytes()).err());
+        if let Some(e) = err {
+            self.emit(Event::Notice {
+                tab: Some(tab),
+                message: format!("co-review: {e}"),
             });
         }
     }
