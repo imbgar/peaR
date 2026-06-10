@@ -63,6 +63,34 @@ fn save_review_prompt(pr: Option<&PrRef>) -> String {
     )
 }
 
+/// The co-review pipeline macro — typed into a CLAUDE tab only (claude is the
+/// orchestrator: it reviews, drives codex headlessly via `codex exec`, and distills).
+/// `first` is which engine does the first-pass review; the tiers are each engine's
+/// review depth inside the pipeline (the paid cloud "ultra" is not a pipeline depth).
+pub fn coreview_keystrokes(
+    first: CliKind,
+    claude_tier: ReviewTier,
+    codex_tier: ReviewTier,
+    pr: Option<&PrRef>,
+) -> String {
+    let depth = |t: ReviewTier| match t {
+        ReviewTier::Light => "light",
+        ReviewTier::Standard => "standard",
+        ReviewTier::Complex => "complex",
+    };
+    let first = if first == CliKind::Codex {
+        "codex"
+    } else {
+        "claude"
+    };
+    let target = pr.map(|p| format!("{} ", p.number)).unwrap_or_default();
+    format!(
+        "/pr-coreview {target}first={first} claude={} codex={}\r",
+        depth(claude_tier),
+        depth(codex_tier)
+    )
+}
+
 /// Keystrokes for an action [`ReviewButton`] under `cli`, targeting `pr` (trailing CR).
 pub fn keystrokes(button: ReviewButton, cli: CliKind, pr: Option<&PrRef>) -> Option<String> {
     use CliKind::*;
@@ -218,6 +246,30 @@ mod tests {
         assert!(
             complex.contains("gh pr diff 42"),
             "complex must pin the exact diff"
+        );
+    }
+
+    #[test]
+    fn coreview_names_pr_order_and_depths() {
+        let p = pr();
+        assert_eq!(
+            coreview_keystrokes(
+                CliKind::Codex,
+                ReviewTier::Standard,
+                ReviewTier::Light,
+                Some(&p)
+            ),
+            "/pr-coreview 42 first=codex claude=standard codex=light\r"
+        );
+        // No PR known → the skill self-detects from the checked-out branch.
+        assert_eq!(
+            coreview_keystrokes(
+                CliKind::Claude,
+                ReviewTier::Complex,
+                ReviewTier::Complex,
+                None
+            ),
+            "/pr-coreview first=claude claude=complex codex=complex\r"
         );
     }
 
