@@ -852,6 +852,129 @@ function startCoReview(pr: PrRef) {
   openPr(pr, "claude", { fresh: true, autoReview: "coreview" });
 }
 
+// ── tandem review (several related PRs together, tiled) ──────────────────────────
+// The user multi-selects PRs (the ⋔ modal); each opens with the launcher's current
+// engine + tier. Tabs chain through tab_opened: each newly-opened tab sets pendingSplit
+// for the next queued PR, tiling them all into ONE window. Split direction alternates
+// row/col so 3-4 PRs land in a grid-ish spiral instead of ever-thinner strips.
+let tandemQueue: { pr: PrRef; dir: "row" | "col" }[] = [];
+
+function startTandem(prs: PrRef[]) {
+  if (!prs.length) return;
+  const [first, ...rest] = prs;
+  tandemQueue = rest.map((pr, i) => ({ pr, dir: i % 2 === 0 ? "row" : "col" }));
+  setStatus(
+    `tandem review: ${prs.length} PRs (${prs.map((p) => `#${p.number}`).join(", ")}) — ${selectedEngine}`,
+  );
+  openPr(first, selectedEngine, { fresh: true, autoReview: selectedTier });
+}
+
+/** The ⋔ modal: a manual multi-select of PRs — input boxes with "+ add" for more. */
+function openTandemModal() {
+  const scrim = document.createElement("div");
+  scrim.className = "pop-scrim";
+  const card = document.createElement("div");
+  card.className = "tile-confirm tandem-card";
+  const title = document.createElement("div");
+  title.className = "tc-msg";
+  title.innerHTML = `<b>⋔ Tandem review</b> — open related PRs together, tiled, each auto-reviewing (${escapeHtml(selectedEngine)} · ${escapeHtml(String(selectedTier ?? "no review"))})`;
+  const rows = document.createElement("div");
+  rows.className = "tandem-rows";
+
+  const addRow = (value = "") => {
+    const row = document.createElement("div");
+    row.className = "tandem-row";
+    const input = document.createElement("input");
+    input.className = "tandem-input";
+    input.placeholder = "owner/repo#123  ·  or a GitHub URL";
+    input.spellcheck = false;
+    input.value = value;
+    // Typing in the last row sprouts a fresh one; Enter from any row launches.
+    input.addEventListener("input", () => {
+      input.classList.remove("bad");
+      if (row === rows.lastElementChild && input.value.trim()) addRow();
+    });
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        launch();
+      }
+    });
+    const del = document.createElement("button");
+    del.className = "tandem-del";
+    del.title = "Remove";
+    del.textContent = "✕";
+    del.onclick = () => {
+      row.remove();
+      if (!rows.children.length) addRow();
+    };
+    row.append(input, del);
+    rows.appendChild(row);
+    return input;
+  };
+
+  const actions = document.createElement("div");
+  actions.className = "tc-actions";
+  const more = document.createElement("button");
+  more.className = "tc-cancel";
+  more.textContent = "+ Add PR";
+  more.onclick = () => addRow().focus();
+  const cancel = document.createElement("button");
+  cancel.className = "tc-cancel";
+  cancel.textContent = "Cancel";
+  const ok = document.createElement("button");
+  ok.className = "primary tc-ok";
+  ok.textContent = "⋔ Open all & review";
+  actions.append(more, cancel, ok);
+  card.append(title, rows, actions);
+  scrim.appendChild(card);
+
+  const close = () => {
+    scrim.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  const launch = () => {
+    const inputs = [...rows.querySelectorAll<HTMLInputElement>(".tandem-input")];
+    const prs: PrRef[] = [];
+    let bad = false;
+    for (const inp of inputs) {
+      const v = inp.value.trim();
+      if (!v) continue;
+      const pr = parsePrRef(v);
+      if (pr && !prs.some((p) => p.owner === pr.owner && p.repo === pr.repo && p.number === pr.number)) {
+        prs.push(pr);
+      } else if (!pr) {
+        inp.classList.add("bad");
+        bad = true;
+      }
+    }
+    if (bad) return; // invalid rows are flagged red — fix or clear them
+    if (!prs.length) {
+      setStatus("⚠ tandem: enter at least one owner/repo#NUMBER", true);
+      return;
+    }
+    close();
+    prInput.value = "";
+    startTandem(prs);
+  };
+  const onKey = (ev: KeyboardEvent) => {
+    if (ev.key === "Escape") close();
+  };
+  cancel.onclick = close;
+  ok.onclick = launch;
+  scrim.addEventListener("click", (ev) => {
+    if (ev.target === scrim) close();
+  });
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(scrim);
+  positionPopover(card); // centered (no anchor)
+
+  // Seed: the launcher box's PR (if any) in row 1, then an empty row ready for the next.
+  const seeded = addRow(parsePrRef(prInput.value) ? prInput.value.trim() : "");
+  addRow();
+  (seeded.value ? rows.children[1]?.querySelector("input") ?? seeded : seeded).focus();
+}
+
 // ── auto-review readiness ─────────────────────────────────────────────────────
 // Fire the review when the agent's boot output goes QUIET (prompt rendered, idle),
 // not on a fixed delay that can type into a not-yet-ready CLI. Bounded by a min (don't
@@ -2443,6 +2566,11 @@ function handle(ev: CoreEvent) {
         coReviewSecond = null;
         pendingSplit = { source: ev.tab, dir: "row", before: false };
         openPr(sec.pr, sec.engine, { fresh: true, autoReview: sec.tier });
+      } else if (tandemQueue.length) {
+        // Tandem chain: tile the next queued PR beside the tab that just landed.
+        const next = tandemQueue.shift()!;
+        pendingSplit = { source: ev.tab, dir: next.dir, before: false };
+        openPr(next.pr, selectedEngine, { fresh: true, autoReview: selectedTier });
       }
       break;
     }
@@ -4352,6 +4480,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     startCoReview(pr);
     prInput.value = "";
   });
+
+  $("#tandem-btn").addEventListener("click", () => openTandemModal());
 
   $("#new-shell").addEventListener("click", () =>
     send({ type: "open_scratch", cli: "shell", cwd: null }),
