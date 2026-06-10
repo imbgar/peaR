@@ -296,6 +296,7 @@ impl Engine {
             }
             Command::LoadTeamPrs => self.load_team_prs(),
             Command::SummarizeDiff { tab, path } => self.summarize_diff(tab, path),
+            Command::FetchImage { url } => self.fetch_image(url),
             Command::CheckSkills => self.emit(Event::SkillsStatus {
                 installed: crate::skills_install::skills_installed(),
             }),
@@ -1139,6 +1140,20 @@ impl Engine {
     }
 
     /// Summarize each changed file in the tab's PR diff via Haiku (worker thread).
+    /// Proxy-fetch a GitHub-hosted image with auth (off the engine lock) and reply with a data URL
+    /// the webview can render — for private-repo comment attachments it can't load itself.
+    fn fetch_image(&mut self, url: String) {
+        let Some(gh) = self.github() else { return };
+        let sink = self.sink.clone();
+        std::thread::spawn(move || {
+            if let Ok((bytes, ct)) = gh.fetch_image(&url) {
+                let data_url = format!("data:{ct};base64,{}", crate::github::base64_encode(&bytes));
+                sink(Event::Image { url, data_url });
+            }
+            // On failure, stay silent — the <img> just remains broken.
+        });
+    }
+
     fn summarize_diff(&mut self, tab: TabId, path: Option<String>) {
         let pr = self.tabs.get(&tab).and_then(|t| t.pr.clone());
         let Some(pr) = pr else {

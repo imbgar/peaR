@@ -43,6 +43,32 @@ pub fn resolve_token() -> Option<String> {
     None
 }
 
+/// Minimal standard base64 (with padding) — avoids a dependency for the one data-URL use
+/// (proxied comment images, see `GitHub::fetch_image`).
+pub fn base64_encode(data: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(T[((n >> 18) & 63) as usize] as char);
+        out.push(T[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            T[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            T[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
 #[derive(Clone)]
 pub struct GitHub {
     token: String,
@@ -118,6 +144,40 @@ impl GitHub {
                 body.chars().take(200).collect::<String>()
             )))
         }
+    }
+
+    /// Fetch a GitHub-hosted image URL with auth → `(bytes, content_type)`. Private-repo comment
+    /// attachments (`github.com/user-attachments/…`) require auth the webview doesn't have, so the
+    /// frontend proxies them through here. Follows redirects to the signed asset host.
+    pub fn fetch_image(&self, url: &str) -> Result<(Vec<u8>, String)> {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .build()
+            .into();
+        let mut resp = agent
+            .get(url)
+            .header("Authorization", &format!("Bearer {}", self.token))
+            .header("User-Agent", UA)
+            .call()
+            .map_err(|e| CoreError::GitHub(e.to_string()))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(CoreError::GitHub(format!(
+                "HTTP {} fetching image",
+                status.as_u16()
+            )));
+        }
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_string();
+        let bytes = resp
+            .body_mut()
+            .read_to_vec()
+            .map_err(|e| CoreError::GitHub(e.to_string()))?;
+        Ok((bytes, ct))
     }
 
     /// POST a JSON body to a REST path, surfacing GitHub's error message on failure.
