@@ -35,6 +35,7 @@ import {
   setApproveHandler,
   setFileSummarizeHandler,
   setDiffSort,
+  setCommentMode,
   applyFileSummaries,
   jumpToThread,
   type TreeLevel,
@@ -398,6 +399,7 @@ interface Prefs {
   confirmNest: boolean; // confirm before nesting a whole multi-pane tab on drag-to-tile
   restoreTiling: boolean; // rebuild split layouts on restore (vs one window per tab)
   diffSort: string;
+  commentMode: string; // "inline" thread under the line, or "hover" pop-out bubble
 }
 const DEFAULT_PREFS: Prefs = {
   translucent: true,
@@ -415,6 +417,7 @@ const DEFAULT_PREFS: Prefs = {
   confirmNest: true,
   restoreTiling: true,
   diffSort: "default",
+  commentMode: "inline",
 };
 const PREFS_KEY = "pear.prefs.v1";
 function loadPrefs(): Prefs {
@@ -436,6 +439,14 @@ function savePrefs() {
 }
 let notifTimer = 0;
 let appliedMaterial = ""; // avoid re-invoking the native material swap needlessly
+let appliedCommentMode = ""; // re-render the open diff only when the comment mode actually changes
+/** Re-render the diff panel if it's currently showing (e.g. after a comment-mode switch). */
+function rerenderOpenDiff() {
+  if (!panelBodyEl?.classList.contains("diff-mode")) return;
+  const a = diffAnchor();
+  const c = a != null ? diffCache.get(a) : undefined;
+  if (a != null && c) showDiff(a, c.diff, c.comments);
+}
 /** Apply every live-applicable pref to the running app (CSS vars, body classes, terminal
  *  font, diff sort, notification cadence, native vibrancy material). Idempotent. */
 function applyPrefs() {
@@ -457,6 +468,12 @@ function applyPrefs() {
     }
   }
   setDiffSort(prefs.diffSort);
+  // Diff comment display mode — re-render the open diff only when it changed (not on every tick).
+  if (prefs.commentMode !== appliedCommentMode) {
+    appliedCommentMode = prefs.commentMode;
+    setCommentMode(prefs.commentMode);
+    rerenderOpenDiff();
+  }
   // Notification cadence.
   if (notifTimer) clearInterval(notifTimer);
   notifTimer = window.setInterval(pollNotifications, Math.max(15, prefs.pollSecs) * 1000);
@@ -1908,9 +1925,25 @@ function createTabView(id: number, title: string, cli: CliKind, pr: PrRef | null
   term.open(el);
   queueMicrotask(() => fit.fit());
 
-  term.onData((data) =>
-    send({ type: "input", tab: id, bytes: Array.from(new TextEncoder().encode(data)) }),
-  );
+  // Shift+Enter inserts a newline instead of submitting. xterm can't distinguish it (legacy mode
+  // sends CR for both), so the key handler records when Shift was held for the next Enter, and
+  // onData rewrites that one CR (\r = submit) to LF (\n = newline, the seq Claude/Codex accept).
+  // Doing the rewrite in onData keeps it a SINGLE ordered write — no separate send racing the
+  // suppressed default (the previous double-send was the source of the inconsistency).
+  let shiftEnterPending = false;
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.type === "keydown" && e.key === "Enter")
+      shiftEnterPending = e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey;
+    return true;
+  });
+  term.onData((data) => {
+    let out = data;
+    if (shiftEnterPending) {
+      shiftEnterPending = false;
+      if (data === "\r") out = "\n";
+    }
+    send({ type: "input", tab: id, bytes: Array.from(new TextEncoder().encode(out)) });
+  });
   term.onResize(({ cols, rows }) => send({ type: "resize", tab: id, cols, rows }));
 
   const view: TabView = {
@@ -3969,6 +4002,10 @@ const DIFFSORT_OPTS: [string, string][] = [
   ["additions", "Most additions"],
   ["removals", "Most removals"],
 ];
+const COMMENTMODE_OPTS: [string, string][] = [
+  ["inline", "Inline threads"],
+  ["hover", "Hover bubbles"],
+];
 const POLL_OPTS: [string, string][] = [
   ["30", "every 30s"],
   ["60", "every 60s"],
@@ -4123,6 +4160,7 @@ function openSettings() {
     sRow("Confirm before nesting tabs", sToggle(() => prefs.confirmNest, (v) => (prefs.confirmNest = v)), "on drag-to-tile"),
     sRow("Restore tiling layout", sToggle(() => prefs.restoreTiling, (v) => (prefs.restoreTiling = v))),
     sRow("Default diff sort", sSelect(DIFFSORT_OPTS, () => prefs.diffSort, (v) => (prefs.diffSort = v))),
+    sRow("Diff comments", sSelect(COMMENTMODE_OPTS, () => prefs.commentMode, (v) => (prefs.commentMode = v)), "inline thread vs hover bubble"),
   );
 
   body.append(ap, nt, bh);
