@@ -140,9 +140,9 @@ export interface JourneyOpts {
   getDiff: () => string | null;
   /** Ask the main window to fetch the diff (it owns the GitHub client). */
   requestDiff: () => void;
-  /** Ask the backend (via the main window) to synthesize narration — Kokoro TTS.
-   *  The WAV comes back through `JourneyHandle.handleSpeech`. */
-  requestTts: (id: string, text: string) => void;
+  /** Ask the backend (via the main window) to synthesize narration — Kokoro or
+   *  Chatterbox (emotion dial). The WAV comes back through `JourneyHandle.handleSpeech`. */
+  requestTts: (id: string, text: string, backend: string, intensity: number) => void;
   onAsk: (f: RdFinding, text: string) => void;
   onExport: (markdown: string, count: number) => void;
 }
@@ -165,8 +165,36 @@ export function startJourney(
   for (const id of selected) handle.setSelected(id, true);
   let idx = 0;
   let voiceOn = localStorage.getItem("pear.journey.voice") !== "0";
+  // Narration backend: kokoro (fast, neutral) or chatterbox (the skill's v5 emotion
+  // dial — severity drives the exaggeration, see intensityFor).
+  let ttsBackend = localStorage.getItem("pear.journey.tts") === "chatterbox" ? "chatterbox" : "kokoro";
   let autoOn = false;
   let parsedDiff: DFile[] | null = null;
+
+  /** The emotion dial: how theatrically a beat is narrated (chatterbox only).
+   *  0.25 deadpan · 0.5 neutral · 1.0 theatrical — severity earns drama. */
+  const intensityFor = (s: Step): number => {
+    switch (s.kind) {
+      case "arrival":
+        return 0.6; // welcoming
+      case "departure":
+        return 0.55;
+      case "chapter": {
+        const r = doc.understanding.walkthrough[s.beatIdx]?.risk;
+        return r === "high" ? 0.7 : r === "medium" ? 0.55 : 0.45;
+      }
+      case "finding":
+        if (s.f.type === "praise") return 0.7; // warm
+        if (s.f.type === "question") return 0.55; // curious
+        return s.f.severity === "blocker"
+          ? 0.92 // alarmed
+          : s.f.severity === "fix_before_merge"
+            ? 0.72
+            : s.f.severity === "follow_up"
+              ? 0.5
+              : 0.38; // nits stay deadpan
+    }
+  };
 
   handle.setJourneyMode(true);
   if (!opts.getDiff()) opts.requestDiff();
@@ -180,6 +208,7 @@ export function startJourney(
       <span class="jr-selcount"></span>
       <span class="jr-spacer"></span>
       <button class="jr-btn jr-voice" title="toggle narration (V)"></button>
+      <button class="jr-btn jr-tts" title="narration voice: kokoro (fast) / chatterbox (emotion dial — severity earns drama) (B)"></button>
       <button class="jr-btn jr-auto" title="auto-play: advance when narration ends (A)"></button>
       <button class="jr-btn jr-keys" title="key bindings (?)">⌨ keys</button>
       <button class="jr-btn jr-exit" title="exit journey (esc)">✕ exit</button>
@@ -199,6 +228,7 @@ export function startJourney(
         <kbd>←</kbd><span>previous step</span>
         <kbd>␣</kbd><span>select / deselect finding → your review</span>
         <kbd>V</kbd><span>voice narration on/off</span>
+        <kbd>B</kbd><span>voice backend: kokoro ↔ chatterbox (emotion dial)</span>
         <kbd>A</kbd><span>auto-play (advance when narration ends)</span>
         <kbd>D</kbd><span>open the full detail card</span>
         <kbd>E</kbd><span>export your review draft</span>
@@ -260,26 +290,31 @@ export function startJourney(
     utter.onend = onNarrationEnd;
     speechSynthesis.speak(utter);
   };
-  const narrate = (text: string) => {
+  const narrate = (text: string, intensity: number) => {
     stopNarration();
     if (!voiceOn) return;
-    const id = nid(text);
+    const id = nid(`${ttsBackend}:${intensity}:${text}`);
     const cached = ttsCache.get(id);
     if (cached) return playWav(cached);
     if (cached === "" || ttsDead) return sysSpeak(text);
     currentReq = { id, text };
-    opts.requestTts(id, text);
-    // First synth includes the one-time model load; don't leave silence forever.
-    fallbackTimer = window.setTimeout(() => {
-      if (currentReq?.id === id) sysSpeak(text);
-    }, 15000);
+    opts.requestTts(id, text, ttsBackend, intensity);
+    // First synth includes the one-time model load (chatterbox's is the slow one);
+    // don't leave silence forever.
+    fallbackTimer = window.setTimeout(
+      () => {
+        if (currentReq?.id === id) sysSpeak(text);
+      },
+      ttsBackend === "chatterbox" ? 45000 : 15000,
+    );
   };
   /** Prefetch a step's narration into the cache so navigation is gapless. */
   const prefetch = (i: number) => {
     if (ttsDead || !voiceOn || i < 0 || i >= steps.length) return;
     const text = narrationFor(doc, steps[i], selected);
-    const id = nid(text);
-    if (!ttsCache.has(id)) opts.requestTts(id, text);
+    const intensity = intensityFor(steps[i]);
+    const id = nid(`${ttsBackend}:${intensity}:${text}`);
+    if (!ttsCache.has(id)) opts.requestTts(id, text, ttsBackend, intensity);
   };
   const handleSpeech = (id: string, b64: string) => {
     if (id === "__dead__") {
@@ -362,6 +397,8 @@ export function startJourney(
     $(".jr-progress").textContent = `${idx + 1} / ${steps.length}`;
     $(".jr-selcount").textContent = selected.size ? `✓ ${selected.size} in your review` : "";
     $(".jr-voice").textContent = voiceOn ? "🔊 voice on" : "🔇 voice off";
+    $(".jr-tts").textContent = ttsBackend === "chatterbox" ? "🎭 chatterbox" : "🎙 kokoro";
+    $(".jr-tts").classList.toggle("on", ttsBackend === "chatterbox");
     $(".jr-auto").textContent = autoOn ? "▶ auto" : "⏸ manual";
     $(".jr-auto").classList.toggle("on", autoOn);
     $(".jr-voice").classList.toggle("on", voiceOn);
@@ -456,7 +493,7 @@ export function startJourney(
       card.appendChild(ex);
     }
     refreshHud();
-    narrate(narrationFor(doc, s, selected));
+    narrate(narrationFor(doc, s, selected), intensityFor(s));
     prefetch(idx + 1); // warm the next beat so navigation is gapless
   };
 
@@ -513,14 +550,21 @@ export function startJourney(
         voiceOn = !voiceOn;
         localStorage.setItem("pear.journey.voice", voiceOn ? "1" : "0");
         if (!voiceOn) stopNarration();
-        else narrate(narrationFor(doc, steps[idx], selected));
+        else narrate(narrationFor(doc, steps[idx], selected), intensityFor(steps[idx]));
         refreshHud();
         break;
       case "a":
       case "A":
         autoOn = !autoOn;
         refreshHud();
-        if (autoOn && voiceOn) narrate(narrationFor(doc, steps[idx], selected));
+        if (autoOn && voiceOn) narrate(narrationFor(doc, steps[idx], selected), intensityFor(steps[idx]));
+        break;
+      case "b":
+      case "B":
+        ttsBackend = ttsBackend === "kokoro" ? "chatterbox" : "kokoro";
+        localStorage.setItem("pear.journey.tts", ttsBackend);
+        refreshHud();
+        if (voiceOn) narrate(narrationFor(doc, steps[idx], selected), intensityFor(steps[idx]));
         break;
       case "d":
       case "D": {
@@ -544,6 +588,7 @@ export function startJourney(
   $(".jr-prev").addEventListener("click", () => go(idx - 1));
   $(".jr-next").addEventListener("click", () => go(idx + 1));
   $(".jr-voice").addEventListener("click", () => onKey(new KeyboardEvent("keydown", { key: "v" })));
+  $(".jr-tts").addEventListener("click", () => onKey(new KeyboardEvent("keydown", { key: "b" })));
   $(".jr-auto").addEventListener("click", () => onKey(new KeyboardEvent("keydown", { key: "a" })));
   $(".jr-keys").addEventListener("click", () => legend.classList.toggle("hidden"));
   $(".jr-exit").addEventListener("click", () => exit());

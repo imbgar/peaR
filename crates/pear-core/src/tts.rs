@@ -1,10 +1,17 @@
-//! Local TTS for the review journey — a persistent Kokoro-82M worker (the proven
-//! fast backend from the video-explainer skill: ~9× realtime on CPU after a one-time
-//! ~2s model load), spoken to over JSON lines on stdin/stdout.
+//! Local TTS for the review journey — persistent worker subprocesses speaking a
+//! JSON-lines protocol, modeled on the video-explainer skill's engine:
 //!
-//! `Command::Speak { id, text }` → worker synth → `Event::Speech { id, wav_b64 }`.
-//! Failure surfaces as `Event::Speech` with an empty `wav_b64` (+ a Notice once), so
-//! the frontend can fall back to the webview's speechSynthesis without stalling.
+//! - **kokoro** (default): Kokoro-82M on the system python — proven, fast (~9×
+//!   realtime after a ~2s model load), voice `af_heart`.
+//! - **chatterbox** (optional): Resemble Chatterbox from the skill's isolated venv
+//!   (`~/.cache/video-explainer/chatterbox-env` — chatterbox pins torch 2.6/numpy 1.x,
+//!   so it must NOT run in the system env). The fun one: an `exaggeration` dial from
+//!   deadpan (~0.25) through neutral (0.5) to theatrical (1.0) — the journey maps
+//!   finding severity onto it. Output carries Resemble's inaudible PerTh watermark.
+//!
+//! `Command::Speak { id, text, backend?, intensity? }` → `Event::Speech { id, wav_b64 }`.
+//! Failures degrade: chatterbox-unavailable reroutes to kokoro (engine-side); kokoro-
+//! unavailable emits an empty Speech so the frontend uses the system voice.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command as PCommand, Stdio};
@@ -12,15 +19,9 @@ use std::process::{Child, ChildStdin, Command as PCommand, Stdio};
 use crate::protocol::Event;
 use crate::session::EventSink;
 
-/// JSON-lines worker: loads Kokoro ONCE, then synthesizes each request to a 16-bit
-/// 24 kHz WAV, base64 on stdout. Light text normalization (the skill's rule: Kokoro
-/// wants pre-expanded numbers/symbols). Non-JSON stdout lines are ignored reader-side.
-const WORKER_PY: &str = r#"
-import sys, json, io, base64, re
-import numpy as np
-import soundfile as sf
-from kokoro import KPipeline
-pipe = KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M")
+/// Shared normalization (the skill's rule: pre-expand numbers/symbols for TTS).
+const NORM_PY: &str = r#"
+import re
 try:
     from num2words import num2words
     def _num(m):
@@ -32,6 +33,15 @@ def norm(t):
     t = t.replace("%", " percent").replace("&", " and ").replace("->", " to ")
     t = t.replace("/", " slash ").replace("_", " ").replace("`", "")
     return re.sub(r"\b\d{1,6}\b", _num, t)
+"#;
+
+/// Kokoro worker: loads once, synthesizes each request to 16-bit 24 kHz WAV base64.
+const KOKORO_PY: &str = r#"
+import sys, json, io, base64
+import numpy as np
+import soundfile as sf
+from kokoro import KPipeline
+pipe = KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M")
 print(json.dumps({"id": "__ready__"}), flush=True)
 for line in sys.stdin:
     rid = "?"
@@ -49,25 +59,92 @@ for line in sys.stdin:
         print(json.dumps({"id": rid, "error": str(e)[:200]}), flush=True)
 "#;
 
+/// Chatterbox worker (runs inside the skill's isolated venv): `intensity` maps onto
+/// the exaggeration dial; an optional `ref` wav voice-clones the narrator.
+const CHATTERBOX_PY: &str = r#"
+import sys, json, base64, os, tempfile
+import torch, torchaudio
+from chatterbox.tts import ChatterboxTTS
+device = "mps" if torch.backends.mps.is_available() else "cpu"
+model = ChatterboxTTS.from_pretrained(device=device)
+print(json.dumps({"id": "__ready__"}), flush=True)
+tmp = tempfile.mkdtemp(prefix="pear-cb-")
+for line in sys.stdin:
+    rid = "?"
+    try:
+        req = json.loads(line)
+        rid = req["id"]
+        kwargs = {"exaggeration": float(req.get("intensity") or 0.5), "cfg_weight": 0.5}
+        if req.get("ref"):
+            kwargs["audio_prompt_path"] = req["ref"]
+        wav = model.generate(norm(req["text"]), **kwargs)
+        out = os.path.join(tmp, "u.wav")
+        torchaudio.save(out, wav.cpu(), model.sr)
+        with open(out, "rb") as fh:
+            b64 = base64.b64encode(fh.read()).decode()
+        os.remove(out)
+        print(json.dumps({"id": rid, "b64": b64}), flush=True)
+    except Exception as e:
+        print(json.dumps({"id": rid, "error": str(e)[:200]}), flush=True)
+"#;
+
+/// Where the video-explainer skill provisions its chatterbox venv.
+fn chatterbox_python() -> Option<String> {
+    let home = std::env::var_os("HOME")?;
+    let py =
+        std::path::PathBuf::from(home).join(".cache/video-explainer/chatterbox-env/bin/python");
+    py.exists().then(|| py.display().to_string())
+}
+
+/// A reference voice clip cached by the skill (`ref_<kokoro-voice>.wav`), if present.
+fn chatterbox_ref(voice: &str) -> Option<String> {
+    let home = std::env::var_os("HOME")?;
+    let p = std::path::PathBuf::from(home)
+        .join(".cache/video-explainer")
+        .join(format!("ref_{voice}.wav"));
+    p.exists().then(|| p.display().to_string())
+}
+
 pub struct Tts {
     stdin: ChildStdin,
     _child: Child,
 }
 
 impl Tts {
-    /// Spawn the worker and a reader thread that turns its output lines into
-    /// `Event::Speech`. Returns an error if no python with kokoro is startable
-    /// (the import error itself arrives async via the reader's EOF → Notice).
-    pub fn spawn(sink: EventSink) -> std::io::Result<Tts> {
+    pub fn spawn_kokoro(sink: EventSink) -> std::io::Result<Tts> {
         let path = crate::shellenv::login_path();
         let py = ["python3.12", "python3.13", "python3"]
             .iter()
             .map(|p| crate::shellenv::resolve_program(p, path))
             .find(|p| p.contains('/'))
             .unwrap_or_else(|| "python3".to_string());
+        Self::spawn(py, format!("{NORM_PY}\n{KOKORO_PY}"), "kokoro", sink)
+    }
+
+    pub fn spawn_chatterbox(sink: EventSink) -> std::io::Result<Tts> {
+        let py = chatterbox_python().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "chatterbox env not provisioned (video-explainer --setup-chatterbox)",
+            )
+        })?;
+        Self::spawn(
+            py,
+            format!("{NORM_PY}\n{CHATTERBOX_PY}"),
+            "chatterbox",
+            sink,
+        )
+    }
+
+    fn spawn(
+        py: String,
+        script: String,
+        name: &'static str,
+        sink: EventSink,
+    ) -> std::io::Result<Tts> {
         let mut child = PCommand::new(&py)
-            .args(["-u", "-c", WORKER_PY])
-            .env("PATH", path)
+            .args(["-u", "-c", &script])
+            .env("PATH", crate::shellenv::login_path())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null()) // model-load progress bars etc.
@@ -76,19 +153,14 @@ impl Tts {
         let stdout = child.stdout.take().expect("piped stdout");
         std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
-            let mut ready = false;
             for line in reader.lines() {
                 let Ok(line) = line else { break };
-                // kokoro/hf may chat on stdout — only honor well-formed worker replies.
+                // Libraries may chat on stdout — only honor well-formed worker replies.
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
                     continue;
                 };
                 let id = v["id"].as_str().unwrap_or_default().to_string();
-                if id == "__ready__" {
-                    ready = true;
-                    continue;
-                }
-                if id.is_empty() {
+                if id == "__ready__" || id.is_empty() {
                     continue;
                 }
                 let wav = v["b64"].as_str().unwrap_or_default().to_string();
@@ -96,28 +168,18 @@ impl Tts {
                     sink(Event::Notice {
                         tab: None,
                         message: format!(
-                            "tts: {}",
+                            "tts({name}): {}",
                             v["error"].as_str().unwrap_or("synthesis failed")
                         ),
                     });
                 }
                 sink(Event::Speech { id, wav_b64: wav });
             }
-            // EOF: the worker died (missing deps, crash). Tell the frontend once so
-            // narration falls back to the system voice.
+            // EOF: worker died (missing deps, crash). The engine reroutes the NEXT
+            // request; in-flight ones are covered by the frontend's fallback timer.
             sink(Event::Notice {
                 tab: None,
-                message: if ready {
-                    "tts worker exited — narration falls back to the system voice".into()
-                } else {
-                    "tts unavailable (python kokoro not importable) — narration falls back \
-                     to the system voice"
-                        .into()
-                },
-            });
-            sink(Event::Speech {
-                id: "__dead__".into(),
-                wav_b64: String::new(),
+                message: format!("tts({name}) worker exited"),
             });
         });
         Ok(Tts {
@@ -127,8 +189,20 @@ impl Tts {
     }
 
     /// Queue one utterance. An I/O error means the worker is gone.
-    pub fn speak(&mut self, id: &str, text: &str) -> std::io::Result<()> {
-        let req = serde_json::json!({ "id": id, "text": text });
+    pub fn speak(
+        &mut self,
+        id: &str,
+        text: &str,
+        intensity: Option<f32>,
+        voice: Option<&str>,
+    ) -> std::io::Result<()> {
+        let req = serde_json::json!({
+            "id": id,
+            "text": text,
+            "intensity": intensity,
+            "voice": voice,
+            "ref": voice.and_then(chatterbox_ref),
+        });
         writeln!(self.stdin, "{req}")?;
         self.stdin.flush()
     }

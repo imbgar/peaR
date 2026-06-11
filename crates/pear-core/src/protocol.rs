@@ -651,9 +651,18 @@ pub enum Command {
     /// Fetch a GitHub-hosted image (e.g. a private-repo comment attachment the webview can't load)
     /// with auth and return it as a data URL via `Event::Image`.
     FetchImage { url: String },
-    /// Synthesize narration locally (Kokoro worker) for the review journey.
+    /// Synthesize narration locally for the review journey. `backend` is `"kokoro"`
+    /// (default) or `"chatterbox"` (the skill's emotion-dial model; `intensity` maps
+    /// onto its exaggeration: ~0.25 deadpan · 0.5 neutral · 1.0 theatrical).
     /// Replied via `Event::Speech` (empty `wav_b64` = unavailable, use a fallback).
-    Speak { id: String, text: String },
+    Speak {
+        id: String,
+        text: String,
+        #[serde(default)]
+        backend: Option<String>,
+        #[serde(default)]
+        intensity: Option<f32>,
+    },
 }
 
 /// Events the engine emits to the frontend.

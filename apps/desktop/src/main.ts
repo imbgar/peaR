@@ -4134,10 +4134,11 @@ function initMapChannel() {
       | { kind: "jump"; path: string; line: number | null }
       | { kind: "ask"; finding: RdFinding; text: string }
       | { kind: "need-diff" }
-      | { kind: "tts"; id: string; text: string }
+      | { kind: "tts"; id: string; text: string; backend?: string; intensity?: number }
       | { kind: "draft"; markdown: string; count: number };
     if (m.kind === "tts") {
-      send({ type: "speak", id: m.id, text: m.text }); // → Event::Speech → back over the channel
+      // → Event::Speech → back over the channel
+      send({ type: "speak", id: m.id, text: m.text, backend: m.backend, intensity: m.intensity });
     } else if (m.kind === "need-diff") {
       const tab = diffAnchor();
       if (tab !== null) send({ type: "load_diff", tab }); // lands in localStorage via the diff event

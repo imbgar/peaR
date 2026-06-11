@@ -73,7 +73,8 @@ function mountJourneyButton(host: HTMLElement) {
     journey = startJourney(stage, handle, currentDoc, {
       getDiff: () => localStorage.getItem(MAP_DIFF_KEY),
       requestDiff: () => chan.postMessage({ kind: "need-diff" }),
-      requestTts: (id, text) => chan.postMessage({ kind: "tts", id, text }),
+      requestTts: (id, text, backend, intensity) =>
+        chan.postMessage({ kind: "tts", id, text, backend, intensity }),
       onAsk,
       onExport: (markdown, count) => {
         void navigator.clipboard.writeText(markdown).catch(() => {});
