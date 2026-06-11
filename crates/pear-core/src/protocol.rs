@@ -651,6 +651,9 @@ pub enum Command {
     /// Fetch a GitHub-hosted image (e.g. a private-repo comment attachment the webview can't load)
     /// with auth and return it as a data URL via `Event::Image`.
     FetchImage { url: String },
+    /// Synthesize narration locally (Kokoro worker) for the review journey.
+    /// Replied via `Event::Speech` (empty `wav_b64` = unavailable, use a fallback).
+    Speak { id: String, text: String },
 }
 
 /// Events the engine emits to the frontend.
@@ -747,6 +750,9 @@ pub enum Event {
         doc: crate::review_doc::ReviewDoc,
         warnings: Vec<String>,
     },
+    /// Synthesized narration audio (reply to `Speak`): a base64 16-bit 24 kHz WAV.
+    /// Empty `wav_b64` = synthesis unavailable/failed — fall back to a system voice.
+    Speech { id: String, wav_b64: String },
     /// A non-fatal problem the UI should surface (toast).
     Notice { tab: Option<TabId>, message: String },
     /// A fatal-for-this-command error.

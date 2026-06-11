@@ -227,7 +227,8 @@ export type Command =
   | { type: "load_team_prs" }
   | { type: "summarize_diff"; tab: number; path?: string }
   | { type: "fetch_image"; url: string }
-  | { type: "load_review_doc"; tab: number };
+  | { type: "load_review_doc"; tab: number }
+  | { type: "speak"; id: string; text: string };
 
 export interface FileSummary {
   path: string;
@@ -318,6 +319,7 @@ export type Event =
   | { type: "diff_summaries"; tab: number; summaries: FileSummary[] }
   | { type: "image"; url: string; data_url: string }
   | { type: "review_doc"; tab: number; doc: ReviewDoc; warnings: string[] }
+  | { type: "speech"; id: string; wav_b64: string }
   | { type: "notice"; tab: number | null; message: string }
   | { type: "error"; tab: number | null; message: string };
 

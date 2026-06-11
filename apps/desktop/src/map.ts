@@ -7,7 +7,7 @@
 
 import "./styles.css";
 import { renderReviewMap, type MapHandle } from "./reviewmap";
-import { startJourney } from "./journey";
+import { startJourney, type JourneyHandle } from "./journey";
 import type { RdFinding, ReviewDoc } from "./protocol";
 
 export const MAP_DOC_KEY = "pear.reviewmap.doc";
@@ -16,7 +16,14 @@ const chan = new BroadcastChannel("pear-map");
 
 let handle: MapHandle | null = null;
 let currentDoc: ReviewDoc | null = null;
+let journey: JourneyHandle | null = null;
 let exitJourney: (() => void) | null = null;
+
+// Narration WAVs synthesized by the backend arrive via the main window.
+chan.addEventListener("message", (ev) => {
+  const m = ev.data as { kind: string; id?: string; b64?: string };
+  if (m.kind === "speech" && m.id !== undefined) journey?.handleSpeech(m.id, m.b64 ?? "");
+});
 
 const onAsk = (f: RdFinding, text: string) => chan.postMessage({ kind: "ask", finding: f, text });
 
@@ -63,9 +70,10 @@ function mountJourneyButton(host: HTMLElement) {
   btn.addEventListener("click", () => {
     if (!handle || !currentDoc) return;
     btn.classList.add("hidden");
-    const exit = startJourney(stage, handle, currentDoc, {
+    journey = startJourney(stage, handle, currentDoc, {
       getDiff: () => localStorage.getItem(MAP_DIFF_KEY),
       requestDiff: () => chan.postMessage({ kind: "need-diff" }),
+      requestTts: (id, text) => chan.postMessage({ kind: "tts", id, text }),
       onAsk,
       onExport: (markdown, count) => {
         void navigator.clipboard.writeText(markdown).catch(() => {});
@@ -73,7 +81,8 @@ function mountJourneyButton(host: HTMLElement) {
       },
     });
     exitJourney = () => {
-      exit();
+      journey?.exit();
+      journey = null;
       btn.classList.remove("hidden");
       exitJourney = null;
     };
@@ -81,6 +90,7 @@ function mountJourneyButton(host: HTMLElement) {
     const obs = new MutationObserver(() => {
       if (!stage.querySelector(".jr")) {
         btn.classList.remove("hidden");
+        journey = null;
         exitJourney = null;
         obs.disconnect();
       }

@@ -55,6 +55,9 @@ pub struct Engine {
     reaper_rx: Receiver<TabId>,
     /// Stop flags for active brain (thinking-tail) watchers, keyed by tab.
     brain_watchers: HashMap<TabId, Arc<AtomicBool>>,
+    /// Lazy local-TTS worker (journey narration); `tts_dead` stops respawn storms.
+    tts: Option<crate::tts::Tts>,
+    tts_dead: bool,
 }
 
 /// Per-engine launch options chosen in the launcher (empty = engine default).
@@ -106,6 +109,8 @@ impl Engine {
             reaper_tx,
             reaper_rx,
             brain_watchers: HashMap::new(),
+            tts: None,
+            tts_dead: false,
         })
     }
 
@@ -183,6 +188,7 @@ impl Engine {
             Command::SaveReview { tab, content } => self.save_review(tab, &content),
             Command::LoadPanel { tab } => self.load_panel(tab),
             Command::LoadReviewDoc { tab } => self.load_review_doc(tab),
+            Command::Speak { id, text } => self.speak(id, text),
             Command::SetClaudePermission { mode } => {
                 let mode = if CLAUDE_PERM_MODES.contains(&mode.as_str()) {
                     mode
@@ -1145,6 +1151,44 @@ impl Engine {
                 tab: Some(tab),
                 message: format!("review.json invalid: {e}"),
             }),
+        }
+    }
+
+    /// Journey narration: synthesize `text` on the lazy local Kokoro worker. Any
+    /// failure path emits an empty `Event::Speech` so the frontend falls back to the
+    /// system voice instead of waiting forever.
+    fn speak(&mut self, id: String, text: String) {
+        let fallback = |sink: &EventSink, id: String| {
+            sink(Event::Speech {
+                id,
+                wav_b64: String::new(),
+            })
+        };
+        if self.tts_dead {
+            fallback(&self.sink, id);
+            return;
+        }
+        if self.tts.is_none() {
+            match crate::tts::Tts::spawn(self.sink.clone()) {
+                Ok(t) => self.tts = Some(t),
+                Err(e) => {
+                    self.tts_dead = true;
+                    self.emit(Event::Notice {
+                        tab: None,
+                        message: format!("tts unavailable ({e}) — using the system voice"),
+                    });
+                    fallback(&self.sink, id);
+                    return;
+                }
+            }
+        }
+        if let Some(t) = self.tts.as_mut() {
+            if t.speak(&id, &text).is_err() {
+                // Worker gone mid-flight; its reader thread already notified.
+                self.tts = None;
+                self.tts_dead = true;
+                fallback(&self.sink, id);
+            }
         }
     }
 

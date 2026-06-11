@@ -2628,6 +2628,11 @@ function handle(ev: CoreEvent) {
       setStatus(`review map → theater — ${ev.doc.findings.length} findings`);
       break;
     }
+    case "speech": {
+      // Narration audio for the journey — relay to the theater window.
+      mapChan.postMessage({ kind: "speech", id: ev.id, b64: ev.wav_b64 });
+      break;
+    }
     case "diff": {
       const prev = diffCache.get(ev.tab);
       diffCache.set(ev.tab, { diff: ev.diff, comments: ev.comments });
@@ -4121,15 +4126,19 @@ function openReviewTheater(doc: ReviewDoc, warnings: string[]) {
   void invoke("open_map_window").catch((e) => setStatus(`review map: ${e}`, true));
 }
 
+const mapChan = new BroadcastChannel("pear-map");
 function initMapChannel() {
-  const chan = new BroadcastChannel("pear-map");
+  const chan = mapChan;
   chan.addEventListener("message", (ev) => {
     const m = ev.data as
       | { kind: "jump"; path: string; line: number | null }
       | { kind: "ask"; finding: RdFinding; text: string }
       | { kind: "need-diff" }
+      | { kind: "tts"; id: string; text: string }
       | { kind: "draft"; markdown: string; count: number };
-    if (m.kind === "need-diff") {
+    if (m.kind === "tts") {
+      send({ type: "speak", id: m.id, text: m.text }); // → Event::Speech → back over the channel
+    } else if (m.kind === "need-diff") {
       const tab = diffAnchor();
       if (tab !== null) send({ type: "load_diff", tab }); // lands in localStorage via the diff event
     } else if (m.kind === "draft") {

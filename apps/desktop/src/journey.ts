@@ -140,8 +140,17 @@ export interface JourneyOpts {
   getDiff: () => string | null;
   /** Ask the main window to fetch the diff (it owns the GitHub client). */
   requestDiff: () => void;
+  /** Ask the backend (via the main window) to synthesize narration — Kokoro TTS.
+   *  The WAV comes back through `JourneyHandle.handleSpeech`. */
+  requestTts: (id: string, text: string) => void;
   onAsk: (f: RdFinding, text: string) => void;
   onExport: (markdown: string, count: number) => void;
+}
+
+export interface JourneyHandle {
+  exit: () => void;
+  /** Deliver a synthesized narration WAV (base64; empty = synth unavailable). */
+  handleSpeech: (id: string, b64: string) => void;
 }
 
 export function startJourney(
@@ -149,7 +158,7 @@ export function startJourney(
   handle: MapHandle,
   doc: ReviewDoc,
   opts: JourneyOpts,
-): () => void {
+): JourneyHandle {
   const steps = buildSteps(doc);
   const selKey = `pear.journey.sel.${doc.subjects.map((s) => s.ref).join("+")}`;
   const selected = new Set<string>(JSON.parse(localStorage.getItem(selKey) ?? "[]") as string[]);
@@ -202,8 +211,38 @@ export function startJourney(
   const card = $(".jr-card");
   const legend = $(".jr-legend");
 
-  // ── narration engine (speechSynthesis; audio-first auto-advance) ──
-  let utter: SpeechSynthesisUtterance | null = null;
+  // ── narration engine: Kokoro TTS (the video-explainer skill's fast backend),
+  //    audio-first auto-advance; system speechSynthesis only as a last-resort fallback ──
+  let autoTimer = 0;
+  let audio: HTMLAudioElement | null = null;
+  const ttsCache = new Map<string, string>(); // narration-id → wav b64 ("" = synth failed)
+  let ttsDead = false; // backend said it can't synth — stop asking
+  let currentReq: { id: string; text: string } | null = null;
+  let fallbackTimer = 0;
+
+  const nid = (s: string) => {
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+    return `n${(h >>> 0).toString(36)}`;
+  };
+  const onNarrationEnd = () => {
+    if (autoOn && idx < steps.length - 1) autoTimer = window.setTimeout(() => go(idx + 1), 450);
+  };
+  const stopNarration = () => {
+    if (audio) {
+      audio.onended = null;
+      audio.pause();
+      audio = null;
+    }
+    speechSynthesis.cancel();
+    clearTimeout(fallbackTimer);
+    currentReq = null;
+  };
+  const playWav = (b64: string) => {
+    audio = new Audio(`data:audio/wav;base64,${b64}`);
+    audio.onended = onNarrationEnd;
+    void audio.play().catch(() => {});
+  };
   const pickVoice = (): SpeechSynthesisVoice | null => {
     const vs = speechSynthesis.getVoices().filter((v) => v.lang.startsWith("en"));
     return (
@@ -213,20 +252,55 @@ export function startJourney(
       null
     );
   };
-  const narrate = (text: string) => {
-    speechSynthesis.cancel();
-    if (!voiceOn) return;
-    utter = new SpeechSynthesisUtterance(text);
+  const sysSpeak = (text: string) => {
+    const utter = new SpeechSynthesisUtterance(text);
     const v = pickVoice();
     if (v) utter.voice = v;
     utter.rate = 1.04;
-    utter.pitch = 1.0;
-    utter.onend = () => {
-      if (autoOn && idx < steps.length - 1) autoTimer = window.setTimeout(() => go(idx + 1), 450);
-    };
+    utter.onend = onNarrationEnd;
     speechSynthesis.speak(utter);
   };
-  let autoTimer = 0;
+  const narrate = (text: string) => {
+    stopNarration();
+    if (!voiceOn) return;
+    const id = nid(text);
+    const cached = ttsCache.get(id);
+    if (cached) return playWav(cached);
+    if (cached === "" || ttsDead) return sysSpeak(text);
+    currentReq = { id, text };
+    opts.requestTts(id, text);
+    // First synth includes the one-time model load; don't leave silence forever.
+    fallbackTimer = window.setTimeout(() => {
+      if (currentReq?.id === id) sysSpeak(text);
+    }, 15000);
+  };
+  /** Prefetch a step's narration into the cache so navigation is gapless. */
+  const prefetch = (i: number) => {
+    if (ttsDead || !voiceOn || i < 0 || i >= steps.length) return;
+    const text = narrationFor(doc, steps[i], selected);
+    const id = nid(text);
+    if (!ttsCache.has(id)) opts.requestTts(id, text);
+  };
+  const handleSpeech = (id: string, b64: string) => {
+    if (id === "__dead__") {
+      ttsDead = true;
+      if (currentReq) {
+        const { text } = currentReq;
+        clearTimeout(fallbackTimer);
+        currentReq = null;
+        sysSpeak(text);
+      }
+      return;
+    }
+    ttsCache.set(id, b64);
+    if (currentReq?.id === id) {
+      const { text } = currentReq;
+      clearTimeout(fallbackTimer);
+      currentReq = null;
+      if (b64) playWav(b64);
+      else sysSpeak(text);
+    }
+  };
 
   // ── diff excerpt for a finding ──
   const diffExcerpt = (f: RdFinding): HTMLElement | null => {
@@ -383,6 +457,7 @@ export function startJourney(
     }
     refreshHud();
     narrate(narrationFor(doc, s, selected));
+    prefetch(idx + 1); // warm the next beat so navigation is gapless
   };
 
   const go = (i: number) => {
@@ -437,7 +512,7 @@ export function startJourney(
       case "V":
         voiceOn = !voiceOn;
         localStorage.setItem("pear.journey.voice", voiceOn ? "1" : "0");
-        if (!voiceOn) speechSynthesis.cancel();
+        if (!voiceOn) stopNarration();
         else narrate(narrationFor(doc, steps[idx], selected));
         refreshHud();
         break;
@@ -479,7 +554,7 @@ export function startJourney(
 
   const exit = () => {
     clearTimeout(autoTimer);
-    speechSynthesis.cancel();
+    stopNarration();
     document.removeEventListener("keydown", onKey);
     handle.setJourneyMode(false);
     hud.remove();
@@ -492,7 +567,7 @@ export function startJourney(
     window.setTimeout(() => legend.classList.add("hidden"), 6000);
   }
   renderStep();
-  return exit;
+  return { exit, handleSpeech };
 }
 
 function esc(s: string): string {
