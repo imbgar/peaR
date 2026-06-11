@@ -1206,8 +1206,11 @@ impl Engine {
                 // Worker died (MPS can SIGBUS under GPU contention) — respawn ONCE and
                 // retry this request; latch dead only if the respawn also fails.
                 self.tts_cb = None;
-                match crate::tts::Tts::spawn_chatterbox(self.sink.clone()) {
-                    Ok(mut t2) if t2.speak(&id, &text, intensity, None).is_ok() => {
+                let retried = crate::tts::Tts::spawn_chatterbox(self.sink.clone())
+                    .ok()
+                    .and_then(|mut t2| t2.speak(&id, &text, intensity, None).ok().map(|()| t2));
+                match retried {
+                    Some(t2) => {
                         self.emit(Event::Notice {
                             tab: None,
                             message: "chatterbox worker crashed — respawned (re-warming ~15s)"
@@ -1216,7 +1219,7 @@ impl Engine {
                         self.tts_cb = Some(t2);
                         return;
                     }
-                    _ => {
+                    None => {
                         self.tts_cb_dead = true; // gone for good this session
                         self.emit(Event::Notice {
                             tab: None,
