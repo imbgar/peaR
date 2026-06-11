@@ -180,7 +180,7 @@ export function renderReviewMap(
   const CW = 6.6;
   const CH = 12;
   let W = Math.max(host.clientWidth || 460, 340) - 24;
-  let H = cb.stageHeight ?? 470;
+  const H = cb.stageHeight ?? 470;
   let cols = 0;
   let rows = 0;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
