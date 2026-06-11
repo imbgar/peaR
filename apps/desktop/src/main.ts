@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
-import { listen } from "@tauri-apps/api/event";
+import { emitTo, listen } from "@tauri-apps/api/event";
 import {
   isPermissionGranted,
   requestPermission,
@@ -2630,7 +2630,7 @@ function handle(ev: CoreEvent) {
     }
     case "speech": {
       // Narration audio for the journey — relay to the theater window.
-      mapChan.postMessage({ kind: "speech", id: ev.id, b64: ev.wav_b64 });
+      void emitTo("review-map", "pear-map-back", { kind: "speech", id: ev.id, b64: ev.wav_b64 });
       break;
     }
     case "diff": {
@@ -4126,11 +4126,11 @@ function openReviewTheater(doc: ReviewDoc, warnings: string[]) {
   void invoke("open_map_window").catch((e) => setStatus(`review map: ${e}`, true));
 }
 
-const mapChan = new BroadcastChannel("pear-map");
+// Theater↔main messaging rides Tauri events through the Rust core (BroadcastChannel
+// does NOT cross WKWebView windows): theater emits "pear-map", we reply "pear-map-back".
 function initMapChannel() {
-  const chan = mapChan;
-  chan.addEventListener("message", (ev) => {
-    const m = ev.data as
+  void listen("pear-map", (tev) => {
+    const m = tev.payload as
       | { kind: "jump"; path: string; line: number | null }
       | { kind: "ask"; finding: RdFinding; text: string }
       | { kind: "need-diff" }
