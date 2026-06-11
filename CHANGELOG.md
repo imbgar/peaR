@@ -6,6 +6,37 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.14] — 2026-06-10
+
+Multi-engine review workflows: a pipelined claude ⇄ codex co-review, tandem review of
+a group of related PRs, plus hover diff comments, terminal Shift+Enter, and private-repo
+image attachments.
+
+### Added
+- **Co-review pipeline (`/pr-coreview`).** The launcher's ⊟ Co-review opens ONE claude
+  tab that orchestrates both engines: reviewer A emits structured findings JSON,
+  reviewer B (codex, headless via `codex exec` over the same PR snapshot) independently
+  reviews AND adversarially cross-examines every finding, then claude distills a merged
+  verdict — confirmed / disputed-adjudicated / single-engine-spot-checked. Settings →
+  Co-review: mode (pipeline | side-by-side panes), order, per-engine depth. (#65)
+- **⋔ Tandem review (`/pr-tandem`).** Review a group of *related* PRs as a group: map
+  the relationships first (stacked bases, shared files, cross-PR contracts, merge-order
+  DAG), review each PR in group context, lead with cross-PR findings, and verdict per
+  PR + group. Optionally runs the whole group through the co-review pipeline. The ⋔
+  modal multi-selects PRs with addable input boxes. (#66)
+- **Hover diff comments.** An alternate comment display (Settings → Behavior): a 💬 icon
+  centered in the line-number gutter pops the thread out in a bubble to its left; click
+  pins it. Jump-to-thread works in both modes. (#63)
+- **Terminal Shift+Enter.** Inserts a newline instead of submitting, across all agent
+  CLIs. (#63)
+- **`fable`** in the claude model presets. (#65)
+
+### Fixed
+- **Private-repo comment images.** GitHub `user-attachments` images in PR conversations
+  need auth the webview lacks — they now proxy through the backend with the GitHub
+  token and render as data URLs. (#64)
+- The two "See Threads" buttons (conversation + diff) now share one style. (#63)
+
 ## [0.1.10] — 2026-06-06
 
 Off-thread "Ask Claude", a diff file-tree, a reworked History (tree · favorites ·
