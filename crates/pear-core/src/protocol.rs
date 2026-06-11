@@ -459,6 +459,10 @@ pub enum Command {
     /// Load the latest persisted review for the tab's PR into the Insight panel
     /// (replied via `Event::Panel`).
     LoadPanel { tab: TabId },
+    /// Load the structured `review.json` for the tab's PR (peaRview): read the
+    /// /tmp drop-box, validate, archive a revision, and reply `Event::ReviewDoc`
+    /// — falling back to the latest archived revision when the drop-box is empty.
+    LoadReviewDoc { tab: TabId },
     /// Set the permission mode used when launching Claude tabs. One of
     /// `"full"` (bypass — no prompts), `"edits"` (auto-accept edits, default),
     /// `"ask"` (default prompts), `"plan"` (read-only). Applies to future opens.
@@ -736,6 +740,13 @@ pub enum Event {
     /// A proxied image (reply to `FetchImage`): the original `url` + a `data:` URL the webview can
     /// render. Only emitted on success.
     Image { url: String, data_url: String },
+    /// The validated structured review (peaRview) for a tab's PR — reply to
+    /// `LoadReviewDoc`. `warnings` are the non-fatal validation notes.
+    ReviewDoc {
+        tab: TabId,
+        doc: crate::review_doc::ReviewDoc,
+        warnings: Vec<String>,
+    },
     /// A non-fatal problem the UI should surface (toast).
     Notice { tab: Option<TabId>, message: String },
     /// A fatal-for-this-command error.

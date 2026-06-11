@@ -226,11 +226,64 @@ export type Command =
   | { type: "watch_team"; org: string; team: string; on: boolean }
   | { type: "load_team_prs" }
   | { type: "summarize_diff"; tab: number; path?: string }
-  | { type: "fetch_image"; url: string };
+  | { type: "fetch_image"; url: string }
+  | { type: "load_review_doc"; tab: number };
 
 export interface FileSummary {
   path: string;
   summary: string;
+}
+
+// ── review.pear.v1 (peaRview) — mirror of crates/pear-core/src/review_doc.rs ──
+export type FindingTypeId =
+  | "bug" | "test" | "api" | "docs" | "clarity" | "style" | "error_handling"
+  | "design" | "compat" | "perf" | "security" | "observability"
+  | "question" | "praise";
+export type SeverityId = "blocker" | "fix_before_merge" | "follow_up" | "take_or_leave";
+export type VerdictStateId = "ready" | "ready_with_nits" | "needs_work" | "blocked";
+export type EngineVerdictId = "found" | "agree" | "dispute" | "uncertain";
+export type FindingStatusId = "open" | "fixed" | "declined" | "deferred" | "obsolete";
+
+export interface RdAnchor {
+  subject: number;
+  path: string;
+  line: number | null;
+}
+export interface RdBeat {
+  id: string;
+  title: string;
+  body: string;
+  risk: "low" | "medium" | "high";
+  anchors: RdAnchor[];
+}
+export interface RdFinding {
+  id: string;
+  type: FindingTypeId;
+  severity: SeverityId;
+  confidence: number;
+  rule: { id: string; why: string; link: string | null } | null;
+  title: string;
+  evidence: string;
+  anchor: RdAnchor | null;
+  suggestion: { patch: string } | null;
+  engines: Record<string, EngineVerdictId>;
+  status: FindingStatusId;
+  status_note: string;
+}
+export interface ReviewDoc {
+  schema: string;
+  mode: "single" | "group";
+  engines: { name: string; role: string; depth: string }[];
+  subjects: { ref: string; title: string; head_sha: string }[];
+  understanding: { purpose: string; walkthrough: RdBeat[]; verified: string[] };
+  relationships: { kind: "stacked" | "shared_file" | "contract" | "intent"; from: number; to: number; detail: string }[];
+  merge_order: number[];
+  findings: RdFinding[];
+  verdict: {
+    ledger: Record<string, number>;
+    per_subject: { subject: number; state: VerdictStateId; blocked_by: string[]; scope: string; justification: string }[];
+    group: { state: VerdictStateId; summary: string } | null;
+  };
 }
 
 /** Serialized pane tree for tile persistence. Leaves carry live TabIds on save (the engine
@@ -264,6 +317,7 @@ export type Event =
   | { type: "team_prs"; prs: PrStatus[] }
   | { type: "diff_summaries"; tab: number; summaries: FileSummary[] }
   | { type: "image"; url: string; data_url: string }
+  | { type: "review_doc"; tab: number; doc: ReviewDoc; warnings: string[] }
   | { type: "notice"; tab: number | null; message: string }
   | { type: "error"; tab: number | null; message: string };
 

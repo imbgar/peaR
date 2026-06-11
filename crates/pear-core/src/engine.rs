@@ -182,6 +182,7 @@ impl Engine {
             } => self.start_tandem_review(tab, prs, claude_tier, co, first, codex_tier),
             Command::SaveReview { tab, content } => self.save_review(tab, &content),
             Command::LoadPanel { tab } => self.load_panel(tab),
+            Command::LoadReviewDoc { tab } => self.load_review_doc(tab),
             Command::SetClaudePermission { mode } => {
                 let mode = if CLAUDE_PERM_MODES.contains(&mode.as_str()) {
                     mode
@@ -1089,6 +1090,60 @@ impl Engine {
             None => self.emit(Event::Notice {
                 tab: Some(tab),
                 message: "no saved review yet for this PR".into(),
+            }),
+        }
+    }
+
+    /// Ingest the structured `review.json` (peaRview) for the tab's PR: prefer the
+    /// /tmp drop-box (what a skill just wrote), validate via `ReviewDoc::parse`,
+    /// archive the revision into the store, and emit `Event::ReviewDoc`. When the
+    /// drop-box is empty (reboot, old PR), fall back to the latest archived revision.
+    fn load_review_doc(&mut self, tab: TabId) {
+        let pr = match self.tabs.get(&tab) {
+            Some(t) => t.pr.clone(),
+            None => None,
+        };
+        let Some(pr) = pr else {
+            self.emit(Event::Notice {
+                tab: Some(tab),
+                message: "review map: tab is not a PR".into(),
+            });
+            return;
+        };
+        let drop = crate::review_doc::drop_path(&pr);
+        let (json, fresh) = match std::fs::read_to_string(&drop) {
+            Ok(s) => (s, true),
+            Err(_) => match self.store.latest_review_doc(&pr) {
+                Some((_, s)) => (s, false),
+                None => {
+                    self.emit(Event::Notice {
+                        tab: Some(tab),
+                        message: format!(
+                            "no review.json yet for {} — run a review that emits one",
+                            pr.short_label()
+                        ),
+                    });
+                    return;
+                }
+            },
+        };
+        match crate::review_doc::ReviewDoc::parse(&json) {
+            Ok((doc, warnings)) => {
+                // Archive only fresh drop-box content (re-loading history shouldn't
+                // duplicate revisions).
+                if fresh {
+                    if let Err(e) = self.store.save_review_doc(&pr, &json, &now_file_stamp()) {
+                        self.emit(Event::Notice {
+                            tab: Some(tab),
+                            message: format!("review map: archive failed: {e}"),
+                        });
+                    }
+                }
+                self.emit(Event::ReviewDoc { tab, doc, warnings });
+            }
+            Err(e) => self.emit(Event::Notice {
+                tab: Some(tab),
+                message: format!("review.json invalid: {e}"),
             }),
         }
     }

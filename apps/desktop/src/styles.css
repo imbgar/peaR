@@ -1073,6 +1073,36 @@ body.tiling-drag .terminal-host { cursor: grabbing; }
 }
 .tandem-del:hover { color: var(--tx); background: var(--elev2, rgba(255,255,255,0.06)); }
 
+/* ── peaRview structured-review readout (step-2; the map widget replaces this) ── */
+.rdoc { font-family: var(--font-ui); font-size: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.rdoc-verdict {
+  font-family: var(--font-mono); font-size: 12px; padding: 7px 10px;
+  border: 1px solid var(--bd2); border-radius: var(--r-sm); background: var(--bg);
+}
+.rdoc-ready, .rdoc-ready_with_nits { border-color: color-mix(in srgb, #3fb950 45%, transparent); }
+.rdoc-needs_work { border-color: color-mix(in srgb, #d29922 55%, transparent); }
+.rdoc-blocked { border-color: color-mix(in srgb, #e5534b 55%, transparent); }
+.rdoc-scope { color: var(--dim); font-size: 11px; font-style: italic; margin-top: -4px; }
+.rdoc-purpose { color: var(--tx); line-height: 1.5; }
+.rdoc-walkthrough { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 3px; }
+.rdoc-beat { color: var(--tx); }
+.rdoc-risk-high { color: #e5534b; }
+.rdoc-risk-medium { color: #d29922; }
+.rdoc-verified { color: var(--dim); font-size: 11px; }
+.rdoc-finding {
+  border: 1px solid var(--bd); border-left-width: 3px; border-radius: var(--r-sm);
+  padding: 7px 10px; display: flex; flex-direction: column; gap: 3px; background: var(--bg);
+}
+.rdoc-sev-blocker { border-left-color: #e5534b; }
+.rdoc-sev-fix_before_merge { border-left-color: #d29922; }
+.rdoc-sev-follow_up { border-left-color: #58a6ff; }
+.rdoc-sev-take_or_leave { border-left-color: var(--bd2); }
+.rdoc-f-head { color: var(--tx); font-weight: 600; }
+.rdoc-f-meta { font-family: var(--font-mono); font-size: 11px; color: var(--dim); }
+.rdoc-f-why { font-size: 11px; color: var(--accent); }
+.rdoc-f-evidence { font-size: 11px; color: var(--dim); line-height: 1.45; }
+.rdoc-warnings { font-size: 11px; color: #d29922; }
+
 #panel {
   border-left: 1px solid var(--bd);
   background: var(--panel);
