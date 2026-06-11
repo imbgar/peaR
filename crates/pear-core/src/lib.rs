@@ -22,6 +22,7 @@ pub mod github;
 pub mod insight;
 pub mod macproc;
 pub mod protocol;
+pub mod review_doc;
 pub mod session;
 pub mod shellenv;
 pub mod skills_install;
