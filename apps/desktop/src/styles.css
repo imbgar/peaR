@@ -1095,12 +1095,6 @@ body.tiling-drag .terminal-host { cursor: grabbing; }
 .rmap-stage canvas { display: block; }
 .rmap-labels { position: absolute; inset: 0; cursor: grab; }
 .rmap-labels:active { cursor: grabbing; }
-.rmap3d-label {
-  font-family: var(--font-mono); font-size: 10.5px; color: rgba(230, 237, 243, 0.88);
-  background: rgba(13, 17, 23, 0.55); border: 1px solid rgba(48, 54, 61, 0.8);
-  padding: 2px 8px; border-radius: 10px; pointer-events: none; white-space: nowrap;
-  max-width: 230px; overflow: hidden; text-overflow: ellipsis; backdrop-filter: blur(4px);
-}
 /* ── the review JOURNEY (narrated interactive flight; journey.ts) ── */
 .jr-launch {
   position: absolute; top: 12px; right: 12px; z-index: 6;

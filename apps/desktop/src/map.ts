@@ -1,12 +1,12 @@
-// Entry for the review-map THEATER window (map.html) — the WebGL review galaxy at
-// full size, plus the narrated interactive JOURNEY through it. The doc (and the PR's
+// Entry for the review-map THEATER window (map.html) — the animated-ASCII review
+// map at full size, plus the narrated interactive JOURNEY through it. The doc (and the PR's
 // unified diff, for inline excerpts) arrive via localStorage (the WKWebView data store
 // IS shared between windows); live messaging (jump/ask/draft/tts) rides Tauri events
 // through the Rust core — BroadcastChannel does NOT cross WKWebView windows.
 
 import "./styles.css";
 import { emit, listen } from "@tauri-apps/api/event";
-import { renderReviewMap, type MapHandle } from "./reviewmap";
+import { renderReviewMap, type MapHandle } from "./asciimap";
 import { startJourney, type JourneyHandle } from "./journey";
 import type { RdFinding, ReviewDoc } from "./protocol";
 

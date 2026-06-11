@@ -1,4 +1,4 @@
-// The review JOURNEY — a narrated, interactive flight through the review galaxy
+// The review JOURNEY — a narrated, interactive flight through the review map
 // (learning-ladder level 2, docs/PEARVIEW.md + context/memory/pearview-learning-ladder.md).
 //
 // Sequencing is borrowed from the video-explainer skill's beat model, adapted live:
@@ -15,7 +15,7 @@
 
 import { parseDiff, type DFile } from "./diff";
 import type { RdFinding, ReviewDoc } from "./protocol";
-import type { MapHandle } from "./reviewmap";
+import type { MapHandle } from "./asciimap";
 
 const SEV_GLYPH: Record<string, string> = {
   blocker: "⛔",
