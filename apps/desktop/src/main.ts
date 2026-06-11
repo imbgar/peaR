@@ -2631,6 +2631,9 @@ function handle(ev: CoreEvent) {
     case "diff": {
       const prev = diffCache.get(ev.tab);
       diffCache.set(ev.tab, { diff: ev.diff, comments: ev.comments });
+      // Keep the review-theater's copy fresh (journey diff excerpts read it cross-window).
+      if (ev.tab === diffAnchor() && localStorage.getItem("pear.reviewmap.doc"))
+        localStorage.setItem("pear.reviewmap.diff", ev.diff);
       // Only (re)render if this tab is showing and the content actually changed — keeps
       // scroll position + collapse state on a background refresh.
       const changed =
@@ -4107,6 +4110,14 @@ function renderPanel(p: PanelPayload) {
 // panel + terminals live).
 function openReviewTheater(doc: ReviewDoc, warnings: string[]) {
   localStorage.setItem("pear.reviewmap.doc", JSON.stringify({ doc, warnings }));
+  // Ship the PR's unified diff alongside (the journey renders inline excerpts).
+  const anchor = diffAnchor();
+  const cached = anchor !== null ? diffCache.get(anchor) : undefined;
+  if (cached) localStorage.setItem("pear.reviewmap.diff", cached.diff);
+  else {
+    localStorage.removeItem("pear.reviewmap.diff");
+    if (anchor !== null) send({ type: "load_diff", tab: anchor }); // arrives via the diff event
+  }
   void invoke("open_map_window").catch((e) => setStatus(`review map: ${e}`, true));
 }
 
@@ -4115,8 +4126,16 @@ function initMapChannel() {
   chan.addEventListener("message", (ev) => {
     const m = ev.data as
       | { kind: "jump"; path: string; line: number | null }
-      | { kind: "ask"; finding: RdFinding; text: string };
-    if (m.kind === "jump") {
+      | { kind: "ask"; finding: RdFinding; text: string }
+      | { kind: "need-diff" }
+      | { kind: "draft"; markdown: string; count: number };
+    if (m.kind === "need-diff") {
+      const tab = diffAnchor();
+      if (tab !== null) send({ type: "load_diff", tab }); // lands in localStorage via the diff event
+    } else if (m.kind === "draft") {
+      void writeText(m.markdown);
+      setStatus(`review draft copied — ${m.count} finding${m.count === 1 ? "" : "s"} 📋`);
+    } else if (m.kind === "jump") {
       // Open the diff (anchored to the same PR) and scroll to the file's card.
       loadDiff();
       window.setTimeout(() => {

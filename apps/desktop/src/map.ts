@@ -1,17 +1,28 @@
 // Entry for the review-map THEATER window (map.html) — the WebGL review galaxy at
-// full size. Deliberately IPC-free: the doc arrives via localStorage (same origin as
-// the main window), refresh nudges come as a `pear-map-refresh` event or a cross-window
-// `storage` event, and jump/ask actions return to the main window over a
-// BroadcastChannel — the main window owns the diff panel + terminals.
+// full size, plus the narrated interactive JOURNEY through it. Deliberately IPC-free:
+// the doc (and the PR's unified diff, for inline excerpts) arrive via localStorage
+// (same origin as the main window), refresh nudges come as a `pear-map-refresh` event
+// or a cross-window `storage` event, and jump/ask/draft actions return to the main
+// window over a BroadcastChannel — the main window owns the diff panel + terminals.
 
 import "./styles.css";
-import { renderReviewMap } from "./reviewmap";
-import type { ReviewDoc } from "./protocol";
+import { renderReviewMap, type MapHandle } from "./reviewmap";
+import { startJourney } from "./journey";
+import type { RdFinding, ReviewDoc } from "./protocol";
 
 export const MAP_DOC_KEY = "pear.reviewmap.doc";
+export const MAP_DIFF_KEY = "pear.reviewmap.diff";
 const chan = new BroadcastChannel("pear-map");
 
+let handle: MapHandle | null = null;
+let currentDoc: ReviewDoc | null = null;
+let exitJourney: (() => void) | null = null;
+
+const onAsk = (f: RdFinding, text: string) => chan.postMessage({ kind: "ask", finding: f, text });
+
 function render() {
+  exitJourney?.();
+  exitJourney = null;
   const host = document.getElementById("map-root")!;
   const raw = localStorage.getItem(MAP_DOC_KEY);
   if (!raw) {
@@ -28,16 +39,55 @@ function render() {
     host.innerHTML = `<div class="map-empty">stored review doc is unreadable</div>`;
     return;
   }
+  currentDoc = doc;
   document.title = `peaR · review map — ${doc.subjects.map((s) => s.ref).join(" + ")}`;
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  renderReviewMap(host, doc, warnings, {
+  handle = renderReviewMap(host, doc, warnings, {
     reduceMotion,
     // Fill the window: everything that isn't the canvas (verdict strip, purpose,
     // footer) takes ~230px; keep a sane floor.
     stageHeight: Math.max(window.innerHeight - 240, 420),
     onJump: (path, line) => chan.postMessage({ kind: "jump", path, line }),
-    onAsk: (f, text) => chan.postMessage({ kind: "ask", finding: f, text }),
+    onAsk,
   });
+  mountJourneyButton(host);
+}
+
+function mountJourneyButton(host: HTMLElement) {
+  const stage = host.querySelector<HTMLElement>(".rmap-stage");
+  if (!stage) return;
+  const btn = document.createElement("button");
+  btn.className = "jr-launch";
+  btn.textContent = "▶ journey";
+  btn.title = "Narrated interactive flight through the review (esc exits)";
+  btn.addEventListener("click", () => {
+    if (!handle || !currentDoc) return;
+    btn.classList.add("hidden");
+    const exit = startJourney(stage, handle, currentDoc, {
+      getDiff: () => localStorage.getItem(MAP_DIFF_KEY),
+      requestDiff: () => chan.postMessage({ kind: "need-diff" }),
+      onAsk,
+      onExport: (markdown, count) => {
+        void navigator.clipboard.writeText(markdown).catch(() => {});
+        chan.postMessage({ kind: "draft", markdown, count });
+      },
+    });
+    exitJourney = () => {
+      exit();
+      btn.classList.remove("hidden");
+      exitJourney = null;
+    };
+    // startJourney's own exit (esc/✕) must also restore the launch button.
+    const obs = new MutationObserver(() => {
+      if (!stage.querySelector(".jr")) {
+        btn.classList.remove("hidden");
+        exitJourney = null;
+        obs.disconnect();
+      }
+    });
+    obs.observe(stage, { childList: true });
+  });
+  stage.appendChild(btn);
 }
 
 render();
@@ -45,10 +95,14 @@ render();
 window.addEventListener("pear-map-refresh", render);
 window.addEventListener("storage", (e) => {
   if (e.key === MAP_DOC_KEY) render();
+  // A diff arriving mid-journey: no re-render (that would eject the reviewer) — the
+  // next finding step picks it up via getDiff().
 });
-// Height is captured at render time; follow window resizes.
+// Height is captured at render time; follow window resizes (but never mid-journey).
 let resizeT = 0;
 window.addEventListener("resize", () => {
   clearTimeout(resizeT);
-  resizeT = window.setTimeout(render, 180);
+  resizeT = window.setTimeout(() => {
+    if (!document.querySelector(".jr")) render();
+  }, 180);
 });

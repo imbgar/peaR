@@ -87,6 +87,24 @@ export interface MapCallbacks {
   stageHeight?: number;
 }
 
+/** Handle the journey (guided tour) drives: camera flights, focus-follow, selection
+ *  rings, journey mode (idle motion paused for stable framing). */
+export interface MapHandle {
+  /** Fly to + follow an object (moon/planet/sun); `dist` = orbit distance. */
+  focus: (obj: THREE.Object3D, dist: number) => void;
+  /** Fly back to the wide establishing shot. */
+  focusWide: () => void;
+  /** Pause orbital motion (and auto-rotate) for stable framing. */
+  setJourneyMode: (on: boolean) => void;
+  moonOf: (findingId: string) => THREE.Object3D | undefined;
+  planetAt: (beatIndex: number) => THREE.Object3D | undefined;
+  sunObj: () => THREE.Object3D;
+  /** Toggle the gold "in your review" shell on a finding's moon. */
+  setSelected: (findingId: string, on: boolean) => void;
+  /** Open the detail card for a finding (same card the click path uses). */
+  showDetail: (f: RdFinding) => void;
+}
+
 // One live scene at a time — torn down before every render (and when detached).
 let teardown: (() => void) | null = null;
 
@@ -123,7 +141,7 @@ export function renderReviewMap(
   doc: ReviewDoc,
   warnings: string[],
   cb: MapCallbacks,
-): void {
+): MapHandle {
   teardown?.();
   host.innerHTML = "";
   const root = document.createElement("div");
@@ -251,6 +269,15 @@ export function renderReviewMap(
   const precess: THREE.Mesh[] = [];
   const pickables: THREE.Object3D[] = [];
   const intro: { obj: THREE.Object3D; at: number }[] = [];
+  // Journey machinery: finding-id → moon, beat-index → planet, selection shells.
+  const moonById = new Map<string, THREE.Object3D>();
+  const planetByIdx: THREE.Object3D[] = [];
+  const selShells = new Map<string, THREE.Mesh>();
+  let journeyPaused = false;
+  // Camera focus: follow `obj` (or a fixed point); the flight lerps the camera in for
+  // `flight` seconds, after which the user orbits freely while the target stays pinned.
+  let focusState: { obj: THREE.Object3D | null; pos: THREE.Vector3; dist: number; flight: number } | null =
+    null;
 
   const docked = dockFindings(doc);
   const beats = [...doc.understanding.walkthrough.map((b) => ({ title: b.title, body: b.body, risk: b.risk }))];
@@ -297,6 +324,7 @@ export function renderReviewMap(
     planet.userData.beat = beat;
     planetGroup.add(planet);
     pickables.push(planet);
+    planetByIdx.push(planetGroup);
     intro.push({ obj: planetGroup, at: introT });
     introT += 0.12;
 
@@ -337,6 +365,7 @@ export function renderReviewMap(
       moon.userData.finding = f;
       moonOrbit.add(moon);
       pickables.push(moon);
+      moonById.set(f.id, moon);
       intro.push({ obj: moon, at: introT + j * 0.06 });
       if (f.severity === "blocker") pulses.push(moon);
       // Engine-disputed → a precessing ring around the moon.
@@ -414,7 +443,9 @@ export function renderReviewMap(
       it.obj.scale.setScalar(Math.max(e, 0.0001));
     }
     if (!cb.reduceMotion) {
-      for (const s of spins) s.obj.rotation.y += s.speed * dt;
+      // Orbital revolution pauses during a journey so the framed object holds still;
+      // the "alive" motion (breathing, pulses, precession) keeps going.
+      if (!journeyPaused) for (const s of spins) s.obj.rotation.y += s.speed * dt;
       const breathe = 1 + Math.sin(elapsed * 1.7) * 0.04;
       sun.scale.setScalar(breathe);
       corona.scale.setScalar(breathe * (1 + Math.sin(elapsed * 0.9) * 0.06));
@@ -425,6 +456,23 @@ export function renderReviewMap(
       for (const r of precess) {
         r.rotation.z += dt * 0.9;
         r.rotation.x += dt * 0.35;
+      }
+      for (const s of selShells.values()) s.rotation.y += dt * 0.8;
+    }
+    // Camera focus-follow: target tracks the focused object every frame; the camera
+    // itself only flies during the flight window, then the user orbits freely.
+    if (focusState) {
+      const tp = new THREE.Vector3();
+      if (focusState.obj) focusState.obj.getWorldPosition(tp);
+      else tp.copy(focusState.pos);
+      const k = 1 - Math.exp(-dt * 4.2);
+      controls.target.lerp(tp, k);
+      if (focusState.flight > 0) {
+        focusState.flight -= dt;
+        const dir = camera.position.clone().sub(tp);
+        dir.normalize().multiplyScalar(focusState.dist);
+        dir.y += focusState.dist * 0.18; // slight crane for a cinematic angle
+        camera.position.lerp(tp.clone().add(dir), k);
       }
     }
     controls.update();
@@ -477,6 +525,53 @@ export function renderReviewMap(
   // starting it pre-attach would dispose the scene on frame one (black canvas).
   host.appendChild(root);
   tick();
+
+  return {
+    focus(obj, dist) {
+      focusState = { obj, pos: new THREE.Vector3(), dist, flight: 1.6 };
+    },
+    focusWide() {
+      focusState = { obj: null, pos: new THREE.Vector3(0, 0, 0), dist: 16, flight: 1.6 };
+    },
+    setJourneyMode(on) {
+      journeyPaused = on;
+      controls.autoRotate = !on && !cb.reduceMotion;
+      if (!on) focusState = null;
+    },
+    moonOf: (id) => moonById.get(id),
+    planetAt: (i) => planetByIdx[i],
+    sunObj: () => sun,
+    setSelected(id, on) {
+      const moon = moonById.get(id) as THREE.Mesh | undefined;
+      if (!moon) return;
+      const existing = selShells.get(id);
+      if (!on) {
+        if (existing) {
+          moon.remove(existing);
+          existing.geometry.dispose();
+          (existing.material as THREE.Material).dispose();
+          selShells.delete(id);
+        }
+        return;
+      }
+      if (existing) return;
+      const r = (moon.geometry as THREE.IcosahedronGeometry).parameters.radius ?? 0.25;
+      const shell = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(r + 0.12, 1),
+        new THREE.MeshBasicMaterial({
+          color: 0xffd866,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.85,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        }),
+      );
+      moon.add(shell);
+      selShells.set(id, shell);
+    },
+    showDetail: (f) => detail.show(f),
+  };
 }
 
 /** The click-through detail card: evidence, the rule's teaching block, the committable
