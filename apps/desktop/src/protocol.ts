@@ -319,7 +319,7 @@ export type Event =
   | { type: "diff_summaries"; tab: number; summaries: FileSummary[] }
   | { type: "image"; url: string; data_url: string }
   | { type: "review_doc"; tab: number; doc: ReviewDoc; warnings: string[] }
-  | { type: "speech"; id: string; wav_b64: string }
+  | { type: "speech"; id: string; wav_b64: string; more?: boolean }
   | { type: "notice"; tab: number | null; message: string }
   | { type: "error"; tab: number | null; message: string };
 

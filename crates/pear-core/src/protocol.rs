@@ -759,9 +759,16 @@ pub enum Event {
         doc: crate::review_doc::ReviewDoc,
         warnings: Vec<String>,
     },
-    /// Synthesized narration audio (reply to `Speak`): a base64 16-bit 24 kHz WAV.
-    /// Empty `wav_b64` = synthesis unavailable/failed — fall back to a system voice.
-    Speech { id: String, wav_b64: String },
+    /// Synthesized narration audio (reply to `Speak`): a base64 WAV chunk. Streaming
+    /// backends (chatterbox) send one chunk per sentence with `more: true` until the
+    /// last. Empty `wav_b64` on the final chunk = synthesis unavailable/failed — fall
+    /// back to a system voice.
+    Speech {
+        id: String,
+        wav_b64: String,
+        #[serde(default)]
+        more: bool,
+    },
     /// A non-fatal problem the UI should surface (toast).
     Notice { tab: Option<TabId>, message: String },
     /// A fatal-for-this-command error.

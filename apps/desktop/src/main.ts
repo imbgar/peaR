@@ -2630,7 +2630,12 @@ function handle(ev: CoreEvent) {
     }
     case "speech": {
       // Narration audio for the journey — relay to the theater window.
-      void emitTo("review-map", "pear-map-back", { kind: "speech", id: ev.id, b64: ev.wav_b64 });
+      void emitTo("review-map", "pear-map-back", {
+        kind: "speech",
+        id: ev.id,
+        b64: ev.wav_b64,
+        more: ev.more ?? false,
+      });
       break;
     }
     case "diff": {

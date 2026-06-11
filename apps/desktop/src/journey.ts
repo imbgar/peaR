@@ -149,8 +149,9 @@ export interface JourneyOpts {
 
 export interface JourneyHandle {
   exit: () => void;
-  /** Deliver a synthesized narration WAV (base64; empty = synth unavailable). */
-  handleSpeech: (id: string, b64: string) => void;
+  /** Deliver a synthesized narration WAV chunk (base64; empty final = synth failed).
+   *  Streaming backends send one chunk per sentence, `more` until the last. */
+  handleSpeech: (id: string, b64: string, more: boolean) => void;
 }
 
 export function startJourney(
@@ -241,20 +242,55 @@ export function startJourney(
   const card = $(".jr-card");
   const legend = $(".jr-legend");
 
-  // ── narration engine: Kokoro TTS (the video-explainer skill's fast backend),
-  //    audio-first auto-advance; system speechSynthesis only as a last-resort fallback ──
+  // ── narration engine ───────────────────────────────────────────────────────────
+  // Kokoro replies with ONE wav; chatterbox is ~realtime, so it STREAMS one wav per
+  // sentence — the player runs a chunk queue (start speaking after sentence one).
+  // A priority scheduler keeps exactly ONE request in flight: the current step always
+  // beats prefetch, and superseded wants are simply dropped (no FIFO starvation).
   let autoTimer = 0;
   let audio: HTMLAudioElement | null = null;
-  const ttsCache = new Map<string, string>(); // narration-id → wav b64 ("" = synth failed)
+  interface CacheEntry {
+    chunks: string[];
+    done: boolean;
+    failed: boolean;
+  }
+  const ttsCache = new Map<string, CacheEntry>(); // narration-id → chunks
   let ttsDead = false; // backend said it can't synth — stop asking
-  let currentReq: { id: string; text: string } | null = null;
   let fallbackTimer = 0;
+
+  // Player state: the narration currently being voiced (chunks may still stream in).
+  let play: { id: string; queue: string[]; playing: boolean; done: boolean } | null = null;
+  // Scheduler state.
+  interface TtsReq {
+    id: string;
+    text: string;
+    intensity: number;
+  }
+  let inFlight: string | null = null;
+  let wantNow: TtsReq | null = null; // current step — priority
+  let wantNext: TtsReq | null = null; // prefetch — best effort
 
   const nid = (s: string) => {
     let h = 5381;
     for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
     return `n${(h >>> 0).toString(36)}`;
   };
+  const reqFor = (i: number): TtsReq => {
+    const text = narrationFor(doc, steps[i], selected);
+    const intensity = intensityFor(steps[i]);
+    return { id: nid(`${ttsBackend}:${intensity}:${text}`), text, intensity };
+  };
+  const pump = () => {
+    if (inFlight || ttsDead) return;
+    const r = wantNow ?? wantNext;
+    if (!r) return;
+    if (r === wantNow) wantNow = null;
+    else wantNext = null;
+    if (ttsCache.get(r.id)?.done) return pump(); // already cached — next want
+    inFlight = r.id;
+    opts.requestTts(r.id, r.text, ttsBackend, r.intensity);
+  };
+
   const onNarrationEnd = () => {
     if (autoOn && idx < steps.length - 1) autoTimer = window.setTimeout(() => go(idx + 1), 450);
   };
@@ -266,12 +302,27 @@ export function startJourney(
     }
     speechSynthesis.cancel();
     clearTimeout(fallbackTimer);
-    currentReq = null;
+    play = null;
+    wantNow = null;
   };
-  const playWav = (b64: string) => {
-    audio = new Audio(`data:audio/wav;base64,${b64}`);
-    audio.onended = onNarrationEnd;
-    void audio.play().catch(() => {});
+  const playNextChunk = () => {
+    if (!play) return;
+    const b64 = play.queue.shift();
+    if (b64 !== undefined) {
+      play.playing = true;
+      audio = new Audio(`data:audio/wav;base64,${b64}`);
+      audio.onended = playNextChunk;
+      void audio.play().catch(() => {
+        if (play) play.playing = false;
+      });
+    } else {
+      play.playing = false;
+      if (play.done) {
+        play = null;
+        onNarrationEnd();
+      }
+      // else: drained ahead of the synth — the next arriving chunk resumes playback.
+    }
   };
   const pickVoice = (): SpeechSynthesisVoice | null => {
     const vs = speechSynthesis.getVoices().filter((v) => v.lang.startsWith("en"));
@@ -294,46 +345,70 @@ export function startJourney(
     stopNarration();
     if (!voiceOn) return;
     const id = nid(`${ttsBackend}:${intensity}:${text}`);
-    const cached = ttsCache.get(id);
-    if (cached) return playWav(cached);
-    if (cached === "" || ttsDead) return sysSpeak(text);
-    currentReq = { id, text };
-    opts.requestTts(id, text, ttsBackend, intensity);
-    // First synth includes the one-time model load (chatterbox's is the slow one);
-    // don't leave silence forever.
-    fallbackTimer = window.setTimeout(
-      () => {
-        if (currentReq?.id === id) sysSpeak(text);
-      },
-      ttsBackend === "chatterbox" ? 45000 : 15000,
-    );
+    const entry = ttsCache.get(id);
+    if (entry?.failed || ttsDead) return sysSpeak(text);
+    // Attach the player to this id — cached/streamed chunks play in order.
+    play = { id, queue: [...(entry?.chunks ?? [])], playing: false, done: entry?.done ?? false };
+    playNextChunk();
+    if (!entry?.done && inFlight !== id) {
+      wantNow = { id, text, intensity };
+      pump();
+    }
+    if (!entry?.done) {
+      // Don't leave silence forever (first synth includes the one-time model load).
+      fallbackTimer = window.setTimeout(
+        () => {
+          if (play?.id === id && !play.playing && play.queue.length === 0) sysSpeak(text);
+        },
+        ttsBackend === "chatterbox" ? 45000 : 15000,
+      );
+    }
   };
-  /** Prefetch a step's narration into the cache so navigation is gapless. */
+  /** Queue a prefetch of step `i` (one ahead) — never preempts the current step. */
   const prefetch = (i: number) => {
     if (ttsDead || !voiceOn || i < 0 || i >= steps.length) return;
-    const text = narrationFor(doc, steps[i], selected);
-    const intensity = intensityFor(steps[i]);
-    const id = nid(`${ttsBackend}:${intensity}:${text}`);
-    if (!ttsCache.has(id)) opts.requestTts(id, text, ttsBackend, intensity);
+    const r = reqFor(i);
+    if (ttsCache.get(r.id)?.done || inFlight === r.id) return;
+    wantNext = r;
+    pump();
   };
-  const handleSpeech = (id: string, b64: string) => {
+  const handleSpeech = (id: string, b64: string, more: boolean) => {
     if (id === "__dead__") {
       ttsDead = true;
-      if (currentReq) {
-        const { text } = currentReq;
-        clearTimeout(fallbackTimer);
-        currentReq = null;
-        sysSpeak(text);
-      }
       return;
     }
-    ttsCache.set(id, b64);
-    if (currentReq?.id === id) {
-      const { text } = currentReq;
-      clearTimeout(fallbackTimer);
-      currentReq = null;
-      if (b64) playWav(b64);
-      else sysSpeak(text);
+    let entry = ttsCache.get(id);
+    if (!entry) {
+      entry = { chunks: [], done: false, failed: false };
+      ttsCache.set(id, entry);
+    }
+    if (b64) entry.chunks.push(b64);
+    if (!more) {
+      entry.done = true;
+      entry.failed = entry.chunks.length === 0;
+    }
+    if (inFlight === id && !more) {
+      inFlight = null;
+      pump(); // serve the next want (current step first)
+    }
+    if (play?.id === id) {
+      if (b64) {
+        play.queue.push(b64);
+        clearTimeout(fallbackTimer);
+        if (!play.playing) playNextChunk();
+      }
+      if (!more) {
+        play.done = true;
+        if (entry.failed) {
+          // Synthesis produced nothing — speak the step with the system voice.
+          const cur = steps[idx];
+          play = null;
+          sysSpeak(narrationFor(doc, cur, selected));
+        } else if (!play.playing && play.queue.length === 0) {
+          play = null;
+          onNarrationEnd();
+        }
+      }
     }
   };
 

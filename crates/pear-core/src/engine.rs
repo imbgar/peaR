@@ -1174,6 +1174,7 @@ impl Engine {
             sink(Event::Speech {
                 id,
                 wav_b64: String::new(),
+                more: false,
             })
         };
         // Chatterbox path (reroutes to kokoro on any unavailability).

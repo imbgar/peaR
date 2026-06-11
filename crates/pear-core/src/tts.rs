@@ -61,14 +61,20 @@ for line in sys.stdin:
 
 /// Chatterbox worker (runs inside the skill's isolated venv): `intensity` maps onto
 /// the exaggeration dial; an optional `ref` wav voice-clones the narrator.
+/// Chatterbox is ~realtime (≈15 sampling-it/s), so a multi-sentence beat takes tens of
+/// seconds — it STREAMS one WAV per sentence (`"more": true` until the last), letting
+/// playback start after the first sentence while the rest synthesize.
 const CHATTERBOX_PY: &str = r#"
-import sys, json, base64, os, tempfile
+import sys, json, base64, os, re as _re, tempfile
 import torch, torchaudio
 from chatterbox.tts import ChatterboxTTS
 device = "mps" if torch.backends.mps.is_available() else "cpu"
 model = ChatterboxTTS.from_pretrained(device=device)
 print(json.dumps({"id": "__ready__"}), flush=True)
 tmp = tempfile.mkdtemp(prefix="pear-cb-")
+def sentences(t):
+    parts = [s.strip() for s in _re.split(r"(?<=[.!?])\s+", t) if s.strip()]
+    return parts or [t]
 for line in sys.stdin:
     rid = "?"
     try:
@@ -77,15 +83,17 @@ for line in sys.stdin:
         kwargs = {"exaggeration": float(req.get("intensity") or 0.5), "cfg_weight": 0.5}
         if req.get("ref"):
             kwargs["audio_prompt_path"] = req["ref"]
-        wav = model.generate(norm(req["text"]), **kwargs)
-        out = os.path.join(tmp, "u.wav")
-        torchaudio.save(out, wav.cpu(), model.sr)
-        with open(out, "rb") as fh:
-            b64 = base64.b64encode(fh.read()).decode()
-        os.remove(out)
-        print(json.dumps({"id": rid, "b64": b64}), flush=True)
+        sents = sentences(norm(req["text"]))
+        for i, s in enumerate(sents):
+            wav = model.generate(s, **kwargs)
+            out = os.path.join(tmp, "u.wav")
+            torchaudio.save(out, wav.cpu(), model.sr)
+            with open(out, "rb") as fh:
+                b64 = base64.b64encode(fh.read()).decode()
+            os.remove(out)
+            print(json.dumps({"id": rid, "b64": b64, "more": i + 1 < len(sents)}), flush=True)
     except Exception as e:
-        print(json.dumps({"id": rid, "error": str(e)[:200]}), flush=True)
+        print(json.dumps({"id": rid, "error": str(e)[:200], "more": False}), flush=True)
 "#;
 
 /// Where the video-explainer skill provisions its chatterbox venv.
@@ -178,7 +186,11 @@ impl Tts {
                         ),
                     });
                 }
-                sink(Event::Speech { id, wav_b64: wav });
+                sink(Event::Speech {
+                    id,
+                    wav_b64: wav,
+                    more: v["more"].as_bool().unwrap_or(false),
+                });
             }
             // EOF: worker died (missing deps, crash). The engine reroutes the NEXT
             // request; in-flight ones are covered by the frontend's fallback timer.

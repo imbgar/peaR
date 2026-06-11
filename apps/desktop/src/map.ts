@@ -20,10 +20,11 @@ let currentDoc: ReviewDoc | null = null;
 let journey: JourneyHandle | null = null;
 let exitJourney: (() => void) | null = null;
 
-// main window → theater: narration WAVs synthesized by the backend.
-void listen<{ kind: string; id?: string; b64?: string }>("pear-map-back", (ev) => {
+// main window → theater: narration WAV chunks synthesized by the backend.
+void listen<{ kind: string; id?: string; b64?: string; more?: boolean }>("pear-map-back", (ev) => {
   const m = ev.payload;
-  if (m.kind === "speech" && m.id !== undefined) journey?.handleSpeech(m.id, m.b64 ?? "");
+  if (m.kind === "speech" && m.id !== undefined)
+    journey?.handleSpeech(m.id, m.b64 ?? "", m.more ?? false);
 });
 
 const onAsk = (f: RdFinding, text: string) => post({ kind: "ask", finding: f, text });
