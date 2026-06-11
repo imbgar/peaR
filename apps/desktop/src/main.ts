@@ -4691,9 +4691,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   panelToggleBtn.addEventListener("click", togglePanel);
   $("#panel-close").addEventListener("click", () => setPanel(false));
   $("#panel-load").addEventListener("click", loadPanel);
-  $("#panel-map").addEventListener("click", () => {
-    if (active !== null) send({ type: "load_review_doc", tab: active });
-  });
+  const loadReviewDoc = () => {
+    const anchor = diffAnchor(); // PR of the parent tab, same anchoring as the diff
+    if (anchor !== null) send({ type: "load_review_doc", tab: anchor });
+  };
+  $("#panel-map").addEventListener("click", loadReviewDoc);
+  $("#map-btn").addEventListener("click", loadReviewDoc);
   $("#diff-btn").addEventListener("click", loadDiff);
   $("#comments-btn").addEventListener("click", loadComments);
   $("#approve-btn").addEventListener("click", (e) =>
