@@ -283,15 +283,22 @@ export function startJourney(
     const intensity = intensityFor(steps[i]);
     return { id: nid(`${ttsBackend}:${intensity}:${text}`), text, intensity };
   };
+  // Drop the galaxy to half-rate rendering while chatterbox is on the GPU.
+  const syncPower = () =>
+    handle.setLowPower(inFlight !== null && ttsBackend === "chatterbox");
   const pump = () => {
     if (inFlight || ttsDead) return;
     const r = wantNow ?? wantNext ?? wantBulk[0] ?? null;
-    if (!r) return;
+    if (!r) {
+      syncPower();
+      return;
+    }
     if (r === wantNow) wantNow = null;
     else if (r === wantNext) wantNext = null;
     else wantBulk.shift();
     if (ttsCache.get(r.id)?.done) return pump(); // already cached — next want
     inFlight = r.id;
+    syncPower();
     opts.requestTts(r.id, r.text, ttsBackend, r.intensity);
   };
 
@@ -426,6 +433,7 @@ export function startJourney(
     }
     if (inFlight === id && !more) {
       inFlight = null;
+      syncPower();
       pump(); // serve the next want (current step first)
       updatePreloadUi();
     }
@@ -725,6 +733,7 @@ export function startJourney(
     clearTimeout(autoTimer);
     stopNarration();
     document.removeEventListener("keydown", onKey);
+    handle.setLowPower(false);
     handle.setJourneyMode(false);
     hud.remove();
   };

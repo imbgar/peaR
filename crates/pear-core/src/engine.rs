@@ -1203,8 +1203,28 @@ impl Engine {
                 if t.speak(&id, &text, intensity, None).is_ok() {
                     return;
                 }
+                // Worker died (MPS can SIGBUS under GPU contention) — respawn ONCE and
+                // retry this request; latch dead only if the respawn also fails.
                 self.tts_cb = None;
-                self.tts_cb_dead = true; // worker gone; fall through to kokoro
+                match crate::tts::Tts::spawn_chatterbox(self.sink.clone()) {
+                    Ok(mut t2) if t2.speak(&id, &text, intensity, None).is_ok() => {
+                        self.emit(Event::Notice {
+                            tab: None,
+                            message: "chatterbox worker crashed — respawned (re-warming ~15s)"
+                                .into(),
+                        });
+                        self.tts_cb = Some(t2);
+                        return;
+                    }
+                    _ => {
+                        self.tts_cb_dead = true; // gone for good this session
+                        self.emit(Event::Notice {
+                            tab: None,
+                            message: "chatterbox keeps dying — narration falls back to kokoro"
+                                .into(),
+                        });
+                    }
+                }
             }
         }
         if self.tts_dead {

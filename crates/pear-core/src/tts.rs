@@ -158,6 +158,9 @@ impl Tts {
         let mut child = PCommand::new(&py)
             .args(["-u", "-c", &script])
             .env("PATH", crate::shellenv::login_path())
+            // MPS occasionally SIGBUSes under GPU contention (the WebGL galaxy shares
+            // the GPU); let unsupported/flaky ops fall back to CPU instead of dying.
+            .env("PYTORCH_ENABLE_MPS_FALLBACK", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(log)
