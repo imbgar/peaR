@@ -268,7 +268,10 @@ export function startJourney(
     text: string;
     intensity: number;
   }
-  let inFlight: string | null = null;
+  // Up to 4 requests in flight on chatterbox (the backend runs a worker POOL — model
+  // copies synthesize in parallel); kokoro is near-instant, one is plenty.
+  const inFlight = new Set<string>();
+  const flightLimit = () => (ttsBackend === "chatterbox" ? 4 : 1);
   let wantNow: TtsReq | null = null; // current step — priority
   let wantNext: TtsReq | null = null; // prefetch — best effort
   let wantBulk: TtsReq[] = []; // background preload of the whole journey (chatterbox)
@@ -284,22 +287,21 @@ export function startJourney(
     return { id: nid(`${ttsBackend}:${intensity}:${text}`), text, intensity };
   };
   // Drop the galaxy to half-rate rendering while chatterbox is on the GPU.
-  const syncPower = () =>
-    handle.setLowPower(inFlight !== null && ttsBackend === "chatterbox");
+  const syncPower = () => handle.setLowPower(inFlight.size > 0 && ttsBackend === "chatterbox");
   const pump = () => {
-    if (inFlight || ttsDead) return;
-    const r = wantNow ?? wantNext ?? wantBulk[0] ?? null;
-    if (!r) {
-      syncPower();
-      return;
+    if (!ttsDead) {
+      while (inFlight.size < flightLimit()) {
+        const r = wantNow ?? wantNext ?? wantBulk[0] ?? null;
+        if (!r) break;
+        if (r === wantNow) wantNow = null;
+        else if (r === wantNext) wantNext = null;
+        else wantBulk.shift();
+        if (ttsCache.get(r.id)?.done || inFlight.has(r.id)) continue; // cached/dup — next
+        inFlight.add(r.id);
+        opts.requestTts(r.id, r.text, ttsBackend, r.intensity);
+      }
     }
-    if (r === wantNow) wantNow = null;
-    else if (r === wantNext) wantNext = null;
-    else wantBulk.shift();
-    if (ttsCache.get(r.id)?.done) return pump(); // already cached — next want
-    inFlight = r.id;
     syncPower();
-    opts.requestTts(r.id, r.text, ttsBackend, r.intensity);
   };
 
   // ── background preload (the whole journey's narration, chatterbox) ──
@@ -310,7 +312,7 @@ export function startJourney(
     wantBulk = [];
     for (const i of preloadable()) {
       const r = reqFor(i);
-      if (!ttsCache.get(r.id)?.done && inFlight !== r.id) wantBulk.push(r);
+      if (!ttsCache.get(r.id)?.done && !inFlight.has(r.id)) wantBulk.push(r);
     }
     updatePreloadUi();
     pump();
@@ -324,7 +326,7 @@ export function startJourney(
     if (!el) return;
     const ids = preloadable().map((i) => reqFor(i).id);
     const done = ids.filter((id) => ttsCache.get(id)?.done).length;
-    const active = ttsBackend === "chatterbox" && done < ids.length && (wantBulk.length > 0 || inFlight !== null);
+    const active = ttsBackend === "chatterbox" && done < ids.length && (wantBulk.length > 0 || inFlight.size > 0);
     if (!active) {
       el.classList.toggle("hidden", true);
       return;
@@ -394,7 +396,7 @@ export function startJourney(
     // Attach the player to this id — cached/streamed chunks play in order.
     play = { id, queue: [...(entry?.chunks ?? [])], playing: false, done: entry?.done ?? false };
     playNextChunk();
-    if (!entry?.done && inFlight !== id) {
+    if (!entry?.done && !inFlight.has(id)) {
       wantNow = { id, text, intensity };
       pump();
     }
@@ -412,7 +414,7 @@ export function startJourney(
   const prefetch = (i: number) => {
     if (ttsDead || !voiceOn || i < 0 || i >= steps.length) return;
     const r = reqFor(i);
-    if (ttsCache.get(r.id)?.done || inFlight === r.id) return;
+    if (ttsCache.get(r.id)?.done || inFlight.has(r.id)) return;
     wantNext = r;
     pump();
   };
@@ -431,8 +433,8 @@ export function startJourney(
       entry.done = true;
       entry.failed = entry.chunks.length === 0;
     }
-    if (inFlight === id && !more) {
-      inFlight = null;
+    if (inFlight.has(id) && !more) {
+      inFlight.delete(id);
       syncPower();
       pump(); // serve the next want (current step first)
       updatePreloadUi();

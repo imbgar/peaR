@@ -15,6 +15,8 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command as PCommand, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use crate::protocol::Event;
 use crate::session::EventSink;
@@ -116,6 +118,8 @@ fn chatterbox_ref(voice: &str) -> Option<String> {
 pub struct Tts {
     stdin: ChildStdin,
     _child: Child,
+    /// Requests written but not yet finally-replied (the pool routes to the least busy).
+    pending: Arc<AtomicUsize>,
 }
 
 impl Tts {
@@ -150,9 +154,13 @@ impl Tts {
         name: &'static str,
         sink: EventSink,
     ) -> std::io::Result<Tts> {
+        let pending = Arc::new(AtomicUsize::new(0));
+        let pending_reader = pending.clone();
         // Worker stderr (model-load progress, tracebacks) goes to a log file — the
-        // only way to see WHY a worker died.
-        let log = std::fs::File::create(format!("/tmp/pear-tts-{name}.log"))
+        // only way to see WHY a worker died. Unique per worker (pools spawn several).
+        static WORKER_N: AtomicUsize = AtomicUsize::new(0);
+        let n = WORKER_N.fetch_add(1, Ordering::Relaxed);
+        let log = std::fs::File::create(format!("/tmp/pear-tts-{name}-{n}.log"))
             .map(Stdio::from)
             .unwrap_or_else(|_| Stdio::null());
         let mut child = PCommand::new(&py)
@@ -189,10 +197,14 @@ impl Tts {
                         ),
                     });
                 }
+                let more = v["more"].as_bool().unwrap_or(false);
+                if !more {
+                    pending_reader.fetch_sub(1, Ordering::Relaxed);
+                }
                 sink(Event::Speech {
                     id,
                     wav_b64: wav,
-                    more: v["more"].as_bool().unwrap_or(false),
+                    more,
                 });
             }
             // EOF: worker died (missing deps, crash). The engine reroutes the NEXT
@@ -205,6 +217,7 @@ impl Tts {
         Ok(Tts {
             stdin,
             _child: child,
+            pending,
         })
     }
 
@@ -224,6 +237,69 @@ impl Tts {
             "ref": voice.and_then(chatterbox_ref),
         });
         writeln!(self.stdin, "{req}")?;
-        self.stdin.flush()
+        self.stdin.flush()?;
+        self.pending.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+/// A pool of chatterbox workers — the model is ~realtime, so parallel workers cut the
+/// journey-preload wall clock (sub-linearly: they share the GPU, but CPU/GPU phases
+/// overlap). Requests route to the least-busy live worker; dead workers are skipped.
+/// Size: `PEAR_TTS_POOL` (default 4). Each worker holds its own model copy (~2-3 GB).
+pub struct TtsPool {
+    workers: Vec<Tts>,
+}
+
+impl TtsPool {
+    pub fn pool_size() -> usize {
+        std::env::var("PEAR_TTS_POOL")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|n| (1..=8).contains(n))
+            .unwrap_or(4)
+    }
+
+    /// Spawn the pool (model loads run in parallel). Errors only if NO worker starts.
+    pub fn spawn_chatterbox(sink: EventSink) -> std::io::Result<TtsPool> {
+        let mut workers = Vec::new();
+        let mut last_err = None;
+        for _ in 0..Self::pool_size() {
+            match Tts::spawn_chatterbox(sink.clone()) {
+                Ok(t) => workers.push(t),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        if workers.is_empty() {
+            return Err(
+                last_err.unwrap_or_else(|| std::io::Error::other("no chatterbox workers started"))
+            );
+        }
+        Ok(TtsPool { workers })
+    }
+
+    /// Route to the least-busy worker; a write failure marks that worker dead and the
+    /// next one is tried. Errors only when every worker is gone.
+    pub fn speak(
+        &mut self,
+        id: &str,
+        text: &str,
+        intensity: Option<f32>,
+        voice: Option<&str>,
+    ) -> std::io::Result<()> {
+        while !self.workers.is_empty() {
+            let i = self
+                .workers
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, w)| w.pending.load(Ordering::Relaxed))
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            if self.workers[i].speak(id, text, intensity, voice).is_ok() {
+                return Ok(());
+            }
+            self.workers.remove(i); // dead — try the next-least-busy
+        }
+        Err(std::io::Error::other("all chatterbox workers dead"))
     }
 }

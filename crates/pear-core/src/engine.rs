@@ -60,7 +60,7 @@ pub struct Engine {
     /// (frontend falls back to the system voice).
     tts: Option<crate::tts::Tts>,
     tts_dead: bool,
-    tts_cb: Option<crate::tts::Tts>,
+    tts_cb: Option<crate::tts::TtsPool>,
     tts_cb_dead: bool,
 }
 
@@ -1180,14 +1180,16 @@ impl Engine {
         // Chatterbox path (reroutes to kokoro on any unavailability).
         if backend.as_deref() == Some("chatterbox") && !self.tts_cb_dead {
             if self.tts_cb.is_none() {
-                match crate::tts::Tts::spawn_chatterbox(self.sink.clone()) {
+                match crate::tts::TtsPool::spawn_chatterbox(self.sink.clone()) {
                     Ok(t) => {
                         self.tts_cb = Some(t);
                         self.emit(Event::Notice {
                             tab: None,
-                            message: "🎭 chatterbox warming up — first narration takes ~15s \
-                                      (log: /tmp/pear-tts-chatterbox.log)"
-                                .into(),
+                            message: format!(
+                                "🎭 chatterbox warming up ({} workers, ~15s; \
+                                 log: /tmp/pear-tts-chatterbox.log)",
+                                crate::tts::TtsPool::pool_size()
+                            ),
                         });
                     }
                     Err(e) => {
@@ -1203,18 +1205,17 @@ impl Engine {
                 if t.speak(&id, &text, intensity, None).is_ok() {
                     return;
                 }
-                // Worker died (MPS can SIGBUS under GPU contention) — respawn ONCE and
-                // retry this request; latch dead only if the respawn also fails.
+                // Whole pool died (MPS can SIGBUS under GPU contention) — respawn ONCE
+                // and retry this request; latch dead only if the respawn also fails.
                 self.tts_cb = None;
-                let retried = crate::tts::Tts::spawn_chatterbox(self.sink.clone())
+                let retried = crate::tts::TtsPool::spawn_chatterbox(self.sink.clone())
                     .ok()
                     .and_then(|mut t2| t2.speak(&id, &text, intensity, None).ok().map(|()| t2));
                 match retried {
                     Some(t2) => {
                         self.emit(Event::Notice {
                             tab: None,
-                            message: "chatterbox worker crashed — respawned (re-warming ~15s)"
-                                .into(),
+                            message: "chatterbox pool crashed — respawned (re-warming ~15s)".into(),
                         });
                         self.tts_cb = Some(t2);
                         return;
