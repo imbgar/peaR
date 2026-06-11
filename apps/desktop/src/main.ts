@@ -20,6 +20,7 @@ import "@fontsource-variable/jetbrains-mono";
 import { marked } from "marked";
 import { parse as parseSearchQuery, type SearchParserResult } from "search-query-parser";
 import { renderMarkdown, setImageProxy } from "./markdown";
+import { renderReviewMap } from "./reviewmap";
 import { initUpdater } from "./update";
 import {
   renderDiff,
@@ -4099,121 +4100,32 @@ function renderPanel(p: PanelPayload) {
   setPanel(true);
 }
 
-// ── peaRview structured review (step-2 readout; the map widget replaces this) ────
-// Severity → display: glyph + order. Type → chip label. The type→display mapping
-// lives HERE (one table) so collapsing 12 types to fewer buckets later is a remap,
-// never a schema change (resolved spec decision).
-const SEV_DISPLAY: Record<string, { glyph: string; label: string }> = {
-  blocker: { glyph: "⛔", label: "blocker" },
-  fix_before_merge: { glyph: "🔶", label: "fix before merge" },
-  follow_up: { glyph: "⏳", label: "follow-up" },
-  take_or_leave: { glyph: "💭", label: "take or leave" },
-};
-const VERDICT_DISPLAY: Record<string, string> = {
-  ready: "✅ ready",
-  ready_with_nits: "✅ ready (with nits)",
-  needs_work: "🔧 needs work",
-  blocked: "⛔ blocked",
-};
-
 function renderReviewDoc(doc: ReviewDoc, warnings: string[]) {
   panelTitleEl.textContent = `⊞ Review map — ${doc.subjects.map((s) => s.ref).join(" + ")}`;
   panelBodyEl.classList.remove("diff-mode");
   panelBodyEl.innerHTML = "";
-  const root = document.createElement("div");
-  root.className = "rdoc";
-
-  // Verdict strip (always first — the visual grammar starts here).
-  for (const v of doc.verdict.per_subject) {
-    const strip = document.createElement("div");
-    strip.className = `rdoc-verdict rdoc-${v.state}`;
-    const subj = doc.subjects[v.subject]?.ref ?? `subject ${v.subject}`;
-    const ledger = Object.entries(doc.verdict.ledger)
-      .filter(([, n]) => n > 0)
-      .map(([k, n]) => `${n} ${SEV_DISPLAY[k]?.glyph ?? k}`)
-      .join(" · ");
-    strip.textContent = `${VERDICT_DISPLAY[v.state] ?? v.state} — ${subj}${ledger ? `   ${ledger}` : ""}`;
-    if (v.justification) strip.title = v.justification;
-    root.appendChild(strip);
-    if (v.scope) {
-      const scope = document.createElement("div");
-      scope.className = "rdoc-scope";
-      scope.textContent = `scope: ${v.scope}`;
-      root.appendChild(scope);
-    }
-  }
-
-  // Understanding — the narrative spine.
-  const purpose = document.createElement("div");
-  purpose.className = "rdoc-purpose";
-  purpose.textContent = doc.understanding.purpose;
-  root.appendChild(purpose);
-  if (doc.understanding.walkthrough.length) {
-    const wt = document.createElement("ol");
-    wt.className = "rdoc-walkthrough";
-    for (const b of doc.understanding.walkthrough) {
-      const li = document.createElement("li");
-      li.className = `rdoc-beat rdoc-risk-${b.risk}`;
-      li.textContent = b.title;
-      if (b.body) li.title = b.body;
-      wt.appendChild(li);
-    }
-    root.appendChild(wt);
-  }
-  if (doc.understanding.verified.length) {
-    const ver = document.createElement("div");
-    ver.className = "rdoc-verified";
-    ver.textContent = `verified: ${doc.understanding.verified.join(" · ")}`;
-    root.appendChild(ver);
-  }
-
-  // Findings, severity-ordered.
-  const sevOrder = ["blocker", "fix_before_merge", "follow_up", "take_or_leave"];
-  const sorted = [...doc.findings].sort(
-    (a, b) => sevOrder.indexOf(a.severity) - sevOrder.indexOf(b.severity),
-  );
-  for (const f of sorted) {
-    const row = document.createElement("div");
-    row.className = `rdoc-finding rdoc-sev-${f.severity}`;
-    const head = document.createElement("div");
-    head.className = "rdoc-f-head";
-    const disputed = Object.values(f.engines).includes("dispute");
-    head.textContent = `${SEV_DISPLAY[f.severity]?.glyph ?? ""} [${f.type}] ${f.title}${disputed ? " ⚔️" : ""}`;
-    row.appendChild(head);
-    const meta = document.createElement("div");
-    meta.className = "rdoc-f-meta";
-    const bits = [];
-    if (f.anchor) bits.push(`${f.anchor.path}${f.anchor.line ? `:${f.anchor.line}` : ""}`);
-    bits.push(`confidence ${Math.round(f.confidence * 100)}%`);
-    const eng = Object.entries(f.engines).map(([e, verd]) => `${e}:${verd}`).join(" ");
-    if (eng) bits.push(eng);
-    if (f.status !== "open") bits.push(f.status);
-    meta.textContent = bits.join("  ·  ");
-    row.appendChild(meta);
-    if (f.rule?.why) {
-      const why = document.createElement("div");
-      why.className = "rdoc-f-why";
-      why.textContent = `why: ${f.rule.why}`;
-      row.appendChild(why);
-    }
-    if (f.evidence) {
-      const ev = document.createElement("div");
-      ev.className = "rdoc-f-evidence";
-      ev.textContent = f.evidence;
-      row.appendChild(ev);
-    }
-    root.appendChild(row);
-  }
-
-  if (warnings.length) {
-    const warn = document.createElement("div");
-    warn.className = "rdoc-warnings";
-    warn.textContent = `⚠ schema warnings: ${warnings.join("; ")}`;
-    root.appendChild(warn);
-  }
-  panelBodyEl.appendChild(root);
+  renderReviewMap(panelBodyEl, doc, warnings, {
+    reduceMotion: prefs.reduceMotion,
+    onJump: (path) => {
+      // Open the diff (anchored to the same PR) and scroll to the file's card.
+      loadDiff();
+      window.setTimeout(() => {
+        const card = document.querySelector(`[data-path="${CSS.escape(path)}"]`);
+        card?.scrollIntoView({ behavior: prefs.reduceMotion ? "auto" : "smooth", block: "start" });
+      }, 350);
+    },
+    onAsk: (f, text) => {
+      const tab = diffAnchor();
+      if (tab === null) return;
+      const where = f.anchor ? ` at ${f.anchor.path}${f.anchor.line ? `:${f.anchor.line}` : ""}` : "";
+      const prompt = `Regarding review question ${f.id}${where} ("${f.title}"): ${text}\r`;
+      send({ type: "input", tab, bytes: Array.from(new TextEncoder().encode(prompt)) });
+      setStatus(`asked the agent about ${f.id}`);
+    },
+  });
   setPanel(true);
 }
+
 
 // ── launcher wiring (segmented engine + intensity chips) ─────────────────────
 // Engine pill bar drives which intensities are offered; an intensity chip selects the
