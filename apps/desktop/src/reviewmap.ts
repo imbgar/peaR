@@ -1,41 +1,56 @@
-// The peaRview review map — the rich rendering of a review.pear.v1 doc (step 3 of
-// docs/PEARVIEW.md). The visual grammar is IDENTICAL every review (that consistency is
-// the v1 learning model): verdict strip → purpose → the walkthrough SPINE down the
-// page, each beat carrying its findings as SATELLITES packed by golden-angle
-// phyllotaxis (sunflower spiral — organic, deterministic, density-stable, and
-// self-similar at the group level later). Encoding never varies:
-//   hue = finding type · size = severity · ring opacity = confidence ·
-//   spinning dashed ring = engine-disputed · outline-only = question · green = praise.
-// Zero deps: layout is pure math, animation is WAAPI (respects reduce-motion).
+// The peaRview review map — a WebGL review GALAXY (step 3 of docs/PEARVIEW.md).
+//
+// The visual grammar is IDENTICAL every review (that consistency is the v1 learning
+// model), now rendered as a three.js scene with bloom post-processing:
+//   · the VERDICT is the sun — its color/glow is the review's state, pulsing gently
+//   · each walkthrough BEAT is a planet on an orbit ring (ring # = narrative order,
+//     planet size/ring color = risk)
+//   · each FINDING is a moon of its beat-planet, placed on a golden-angle spherical
+//     Fibonacci lattice (the same phyllotaxis law at every scale — moons around
+//     planets now, subject-clusters around the group core in tandem mode later)
+//   · hue = type · size = severity · emissive = confidence · pulsing = blocker ·
+//     precessing ring = engine-disputed · wireframe = question · green = praise
+// Click a moon → the detail card (evidence, the rule's teaching block, committable
+// patch, engine attribution, anchor-jump; questions get the reply-to-terminal box).
+// Drag to orbit, scroll to zoom. reduce-motion freezes all idle motion.
 
-import type { RdAnchor, RdFinding, ReviewDoc } from "./protocol";
+import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import {
+  CSS2DObject,
+  CSS2DRenderer,
+} from "three/examples/jsm/renderers/CSS2DRenderer.js";
+import type { RdFinding, ReviewDoc } from "./protocol";
 
-const SVGNS = "http://www.w3.org/2000/svg";
-const GOLDEN = 137.50776405003785; // degrees
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5)); // radians
 
 // type → hue. ONE table (display-layer remap path to fewer buckets — spec decision).
 // Evolvability types sit in the warm-neutral band so the empirical 75% doesn't scream.
-const TYPE_COLOR: Record<string, string> = {
-  bug: "#f85149",
-  security: "#ff5d8f",
-  error_handling: "#f0883e",
-  test: "#e3b341",
-  api: "#58a6ff",
-  design: "#a371f7",
-  compat: "#8e96f0",
-  perf: "#56d4dd",
-  observability: "#39c5cf",
-  docs: "#9e9784",
-  clarity: "#c9b890",
-  style: "#8b949e",
-  question: "#7ee787",
-  praise: "#3fb950",
+const TYPE_COLOR: Record<string, number> = {
+  bug: 0xf85149,
+  security: 0xff5d8f,
+  error_handling: 0xf0883e,
+  test: 0xe3b341,
+  api: 0x58a6ff,
+  design: 0xa371f7,
+  compat: 0x8e96f0,
+  perf: 0x56d4dd,
+  observability: 0x39c5cf,
+  docs: 0x9e9784,
+  clarity: 0xc9b890,
+  style: 0x8b949e,
+  question: 0x7ee787,
+  praise: 0x3fb950,
 };
-const SEV_R: Record<string, number> = {
-  blocker: 10,
-  fix_before_merge: 8,
-  follow_up: 6.5,
-  take_or_leave: 5,
+const SEV_SIZE: Record<string, number> = {
+  blocker: 0.4,
+  fix_before_merge: 0.32,
+  follow_up: 0.25,
+  take_or_leave: 0.19,
 };
 const SEV_GLYPH: Record<string, string> = {
   blocker: "⛔",
@@ -43,12 +58,18 @@ const SEV_GLYPH: Record<string, string> = {
   follow_up: "⏳",
   take_or_leave: "💭",
 };
-const RISK_COLOR: Record<string, string> = {
-  low: "var(--bd2)",
-  medium: "#d29922",
-  high: "#f85149",
+const RISK_COLOR: Record<string, number> = {
+  low: 0x6e7681,
+  medium: 0xd29922,
+  high: 0xf85149,
 };
-const RISK_R: Record<string, number> = { low: 8, medium: 10, high: 12 };
+const RISK_SIZE: Record<string, number> = { low: 0.5, medium: 0.62, high: 0.76 };
+const VERDICT_COLOR: Record<string, number> = {
+  ready: 0x3fb950,
+  ready_with_nits: 0x7ee787,
+  needs_work: 0xd29922,
+  blocked: 0xf85149,
+};
 const VERDICT_LABEL: Record<string, string> = {
   ready: "✅ ready",
   ready_with_nits: "✅ ready · with nits",
@@ -64,31 +85,10 @@ export interface MapCallbacks {
   reduceMotion: boolean;
 }
 
-interface Sat {
-  f: RdFinding;
-  x: number;
-  y: number;
-  r: number;
-}
-interface BeatBlock {
-  id: string;
-  title: string;
-  body: string;
-  risk: string;
-  anchors: RdAnchor[];
-  y: number;
-  sats: Sat[];
-  height: number;
-}
+// One live scene at a time — torn down before every render (and when detached).
+let teardown: (() => void) | null = null;
 
-/** Golden-angle phyllotaxis offsets around a center: j → (dx, dy). */
-function phyllo(j: number, base: number): { dx: number; dy: number } {
-  const theta = ((j * GOLDEN) % 360) * (Math.PI / 180);
-  const r = base * Math.sqrt(j + 0.7);
-  return { dx: Math.cos(theta) * r, dy: Math.sin(theta) * r };
-}
-
-/** Dock each finding to the beat whose anchors best match its anchor (path, then dir). */
+/** Dock each finding to the beat whose anchors best match its anchor (path → dir). */
 function dockFindings(doc: ReviewDoc): Map<number, RdFinding[]> {
   const beats = doc.understanding.walkthrough;
   const out = new Map<number, RdFinding[]>();
@@ -98,12 +98,22 @@ function dockFindings(doc: ReviewDoc): Map<number, RdFinding[]> {
     if (f.anchor) {
       best = beats.findIndex((b) => b.anchors.some((a) => a.path === f.anchor!.path));
       if (best < 0)
-        best = beats.findIndex((b) => b.anchors.some((a) => dirOf(a.path) === dirOf(f.anchor!.path)));
+        best = beats.findIndex((b) =>
+          b.anchors.some((a) => dirOf(a.path) === dirOf(f.anchor!.path)),
+        );
     }
-    if (best < 0) best = beats.length; // the trailing "everything else" block
+    if (best < 0) best = beats.length; // trailing "everything else" planet
     (out.get(best) ?? out.set(best, []).get(best)!).push(f);
   }
   return out;
+}
+
+/** Spherical Fibonacci lattice point j of n on a sphere of radius r. */
+function sphereFib(j: number, n: number, r: number): THREE.Vector3 {
+  const y = n === 1 ? 0 : 1 - (2 * (j + 0.5)) / n;
+  const ring = Math.sqrt(Math.max(0, 1 - y * y));
+  const theta = GOLDEN_ANGLE * j;
+  return new THREE.Vector3(Math.cos(theta) * ring * r, y * r, Math.sin(theta) * ring * r);
 }
 
 export function renderReviewMap(
@@ -112,11 +122,13 @@ export function renderReviewMap(
   warnings: string[],
   cb: MapCallbacks,
 ): void {
+  teardown?.();
   host.innerHTML = "";
   const root = document.createElement("div");
   root.className = "rmap";
 
-  // ── verdict strip(s) — the grammar always starts here ──
+  // ── verdict strip(s) + purpose: readable text stays HTML ──
+  const state0 = doc.verdict.per_subject[0]?.state ?? "ready";
   for (const v of doc.verdict.per_subject) {
     const subj = doc.subjects[v.subject];
     const strip = document.createElement("div");
@@ -125,7 +137,8 @@ export function renderReviewMap(
       .filter(([k, n]) => n > 0 && SEV_GLYPH[k])
       .map(([k, n]) => `${n}${SEV_GLYPH[k]}`)
       .join(" ");
-    strip.innerHTML = `<b>${VERDICT_LABEL[v.state] ?? v.state}</b><span class="rmap-vref">${subj?.ref ?? ""}</span><span class="rmap-vledger">${ledger}</span>`;
+    strip.innerHTML = `<b>${VERDICT_LABEL[v.state] ?? v.state}</b><span class="rmap-vref">${subj?.ref ??
+      ""}</span><span class="rmap-vledger">${ledger}</span>`;
     if (v.justification) strip.title = v.justification;
     root.appendChild(strip);
     if (v.scope) {
@@ -135,218 +148,318 @@ export function renderReviewMap(
       root.appendChild(sc);
     }
   }
-
   const purpose = document.createElement("div");
   purpose.className = "rmap-purpose";
   purpose.textContent = doc.understanding.purpose;
   root.appendChild(purpose);
 
-  // ── layout ──
-  const W = Math.max(host.clientWidth || 420, 340);
-  const spineX = 30;
-  const docked = dockFindings(doc);
-  const beats: BeatBlock[] = doc.understanding.walkthrough.map((b) => ({
-    id: b.id,
-    title: b.title,
-    body: b.body,
-    risk: b.risk,
-    anchors: b.anchors,
-    y: 0,
-    sats: [],
-    height: 0,
-  }));
-  if (docked.has(beats.length) || beats.length === 0) {
-    beats.push({
-      id: "~",
-      title: beats.length ? "other findings" : "findings",
-      body: "",
-      risk: "low",
-      anchors: [],
-      y: 0,
-      sats: [],
-      height: 0,
-    });
-  }
-  let y = 26;
-  beats.forEach((blk, i) => {
-    blk.y = y;
-    const fs = docked.get(i) ?? [];
-    // Satellites spiral around a focus below-right of the beat node — phyllotaxis
-    // keeps any count readable without overlap logic.
-    const cx = spineX + 56;
-    const cy = blk.y + 40;
-    let maxY = blk.y + 30;
-    fs
-      .slice()
-      .sort((a, b) => (SEV_R[b.severity] ?? 5) - (SEV_R[a.severity] ?? 5)) // big first → center
-      .forEach((f, j) => {
-        const { dx, dy } = phyllo(j, 17);
-        const r = SEV_R[f.severity] ?? 5;
-        const x = Math.min(Math.max(cx + dx, spineX + 24), W - 20);
-        const yy = cy + dy;
-        blk.sats.push({ f, x, y: yy, r });
-        maxY = Math.max(maxY, yy + r);
-      });
-    blk.height = Math.max(fs.length ? maxY - blk.y + 26 : 44, 44);
-    y += blk.height;
-  });
-  const H = y + 12;
+  // ── the galaxy ──
+  const stage = document.createElement("div");
+  stage.className = "rmap-stage";
+  root.appendChild(stage);
 
-  // ── svg ──
-  const svg = document.createElementNS(SVGNS, "svg");
-  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
-  svg.setAttribute("width", "100%");
-  svg.classList.add("rmap-svg");
-  const defs = document.createElementNS(SVGNS, "defs");
-  defs.innerHTML = `
-    <linearGradient id="rmap-spine" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="var(--accent)" stop-opacity="0.9"/>
-      <stop offset="1" stop-color="var(--accent)" stop-opacity="0.25"/>
-    </linearGradient>
-    <filter id="rmap-glow" x="-80%" y="-80%" width="260%" height="260%">
-      <feGaussianBlur stdDeviation="3.5" result="b"/>
-      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>`;
-  svg.appendChild(defs);
+  const W = Math.max(host.clientWidth || 460, 340) - 24;
+  const H = 470;
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(W, H);
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.15;
+  stage.appendChild(renderer.domElement);
 
-  // Spine (draw-in animated).
-  const spine = document.createElementNS(SVGNS, "path");
-  spine.setAttribute("d", `M ${spineX} 8 V ${H - 16}`);
-  spine.setAttribute("stroke", "url(#rmap-spine)");
-  spine.setAttribute("stroke-width", "2");
-  spine.setAttribute("fill", "none");
-  svg.appendChild(spine);
+  const labelRenderer = new CSS2DRenderer();
+  labelRenderer.setSize(W, H);
+  labelRenderer.domElement.className = "rmap-labels";
+  stage.appendChild(labelRenderer.domElement);
 
-  const anim = !cb.reduceMotion;
-  if (anim) {
-    const len = H;
-    spine.setAttribute("stroke-dasharray", String(len));
-    spine.animate([{ strokeDashoffset: len }, { strokeDashoffset: 0 }], {
-      duration: 650,
-      easing: "ease-out",
-      fill: "both",
-    });
-  }
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x05070c);
+  scene.fog = new THREE.FogExp2(0x05070c, 0.016);
 
-  const detail = buildDetailCard(root, cb);
-  let beatDelay = 150;
-  beats.forEach((blk) => {
-    const g = document.createElementNS(SVGNS, "g");
-    // Beat node — risk ring on the spine.
-    const node = document.createElementNS(SVGNS, "circle");
-    node.setAttribute("cx", String(spineX));
-    node.setAttribute("cy", String(blk.y + 12));
-    node.setAttribute("r", String(RISK_R[blk.risk] ?? 8));
-    node.setAttribute("fill", "var(--elev)");
-    node.setAttribute("stroke", RISK_COLOR[blk.risk] ?? "var(--bd2)");
-    node.setAttribute("stroke-width", "2");
-    g.appendChild(node);
-    // Beat title (foreignObject so it wraps).
-    const fo = document.createElementNS(SVGNS, "foreignObject");
-    fo.setAttribute("x", String(spineX + 18));
-    fo.setAttribute("y", String(blk.y));
-    fo.setAttribute("width", String(W - spineX - 26));
-    fo.setAttribute("height", "30");
-    const t = document.createElement("div");
-    t.className = "rmap-beat-title";
-    t.textContent = blk.title;
-    if (blk.body) t.title = blk.body;
-    fo.appendChild(t);
-    g.appendChild(fo);
-    // Satellites + curved connectors.
-    blk.sats.forEach((s, j) => {
-      const conn = document.createElementNS(SVGNS, "path");
-      const bx = spineX;
-      const by = blk.y + 12;
-      conn.setAttribute(
-        "d",
-        `M ${bx} ${by} Q ${(bx + s.x) / 2} ${(by + s.y) / 2 + 14} ${s.x} ${s.y}`,
-      );
-      conn.setAttribute("stroke", "var(--bd)");
-      conn.setAttribute("stroke-width", "1");
-      conn.setAttribute("fill", "none");
-      conn.setAttribute("opacity", "0.6");
-      g.appendChild(conn);
+  const camera = new THREE.PerspectiveCamera(50, W / H, 0.1, 200);
+  camera.position.set(0, 7.5, 16);
 
-      const sg = document.createElementNS(SVGNS, "g");
-      sg.classList.add("rmap-sat");
-      const color = TYPE_COLOR[s.f.type] ?? "#8b949e";
-      const isQ = s.f.type === "question";
-      const blockerHalo = s.f.severity === "blocker";
-      if (blockerHalo) {
-        const halo = document.createElementNS(SVGNS, "circle");
-        halo.setAttribute("cx", String(s.x));
-        halo.setAttribute("cy", String(s.y));
-        halo.setAttribute("r", String(s.r + 4));
-        halo.setAttribute("fill", color);
-        halo.setAttribute("opacity", "0.25");
-        sg.appendChild(halo);
-        if (anim)
-          halo.animate(
-            [{ opacity: 0.3, transform: "scale(1)" }, { opacity: 0.06, transform: "scale(1.45)" }, { opacity: 0.3, transform: "scale(1)" }],
-            { duration: 1800, iterations: Infinity, easing: "ease-in-out" },
-          );
-        (halo.style as CSSStyleDeclaration).transformOrigin = `${s.x}px ${s.y}px`;
-      }
-      const c = document.createElementNS(SVGNS, "circle");
-      c.setAttribute("cx", String(s.x));
-      c.setAttribute("cy", String(s.y));
-      c.setAttribute("r", String(s.r));
-      c.setAttribute("fill", isQ ? "transparent" : color);
-      c.setAttribute("stroke", color);
-      c.setAttribute("stroke-width", isQ ? "2" : "1.5");
-      c.setAttribute("stroke-opacity", String(0.35 + 0.65 * (s.f.confidence ?? 1)));
-      if (s.f.severity === "blocker" || s.f.severity === "fix_before_merge")
-        c.setAttribute("filter", "url(#rmap-glow)");
-      if (s.f.status !== "open") c.setAttribute("fill-opacity", "0.25");
-      sg.appendChild(c);
-      // Engine-disputed → slowly spinning dashed ring.
-      if (Object.values(s.f.engines).includes("dispute")) {
-        const ring = document.createElementNS(SVGNS, "circle");
-        ring.setAttribute("cx", String(s.x));
-        ring.setAttribute("cy", String(s.y));
-        ring.setAttribute("r", String(s.r + 4.5));
-        ring.setAttribute("fill", "none");
-        ring.setAttribute("stroke", color);
-        ring.setAttribute("stroke-width", "1.2");
-        ring.setAttribute("stroke-dasharray", "3 4");
-        sg.appendChild(ring);
-        if (anim) {
-          (ring.style as CSSStyleDeclaration).transformOrigin = `${s.x}px ${s.y}px`;
-          ring.animate([{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }], {
-            duration: 9000,
-            iterations: Infinity,
-            easing: "linear",
-          });
-        }
-      }
-      const title = document.createElementNS(SVGNS, "title");
-      title.textContent = `${SEV_GLYPH[s.f.severity] ?? ""} [${s.f.type}] ${s.f.title}`;
-      sg.appendChild(title);
-      sg.addEventListener("click", () => detail.show(s.f, s.x, s.y));
-      if (anim) {
-        (sg.style as CSSStyleDeclaration).transformOrigin = `${s.x}px ${s.y}px`;
-        sg.animate(
-          [{ transform: "scale(0)", opacity: 0 }, { transform: "scale(1.15)", opacity: 1, offset: 0.7 }, { transform: "scale(1)", opacity: 1 }],
-          { duration: 360, delay: beatDelay + 140 + j * 55, easing: "ease-out", fill: "backwards" },
-        );
-      }
-      g.appendChild(sg);
-    });
-    if (anim) {
-      (g.style as CSSStyleDeclaration).transformOrigin = `${spineX}px ${blk.y + 12}px`;
-      g.animate([{ opacity: 0, transform: "translateY(8px)" }, { opacity: 1, transform: "translateY(0)" }], {
-        duration: 320,
-        delay: beatDelay,
-        easing: "ease-out",
-        fill: "backwards",
-      });
+  const controls = new OrbitControls(camera, labelRenderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.06;
+  controls.enablePan = false;
+  controls.minDistance = 4;
+  controls.maxDistance = 40;
+  controls.autoRotate = !cb.reduceMotion;
+  controls.autoRotateSpeed = 0.35;
+
+  scene.add(new THREE.AmbientLight(0x8899bb, 0.55));
+  const sunColor = VERDICT_COLOR[state0] ?? 0x3fb950;
+  const sunLight = new THREE.PointLight(0xffffff, 60, 0, 1.8);
+  scene.add(sunLight);
+
+  // Starfield.
+  {
+    const n = 1400;
+    const pos = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const v = new THREE.Vector3()
+        .randomDirection()
+        .multiplyScalar(28 + Math.random() * 32);
+      pos.set([v.x, v.y, v.z], i * 3);
     }
-    svg.appendChild(g);
-    beatDelay += 130;
-  });
-  root.appendChild(svg);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    const m = new THREE.PointsMaterial({
+      color: 0x99aacc,
+      size: 0.06,
+      transparent: true,
+      opacity: 0.7,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    scene.add(new THREE.Points(g, m));
+  }
 
+  // The verdict sun.
+  const sun = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(1.05, 3),
+    new THREE.MeshStandardMaterial({
+      color: sunColor,
+      emissive: sunColor,
+      emissiveIntensity: 2.2,
+      roughness: 0.35,
+    }),
+  );
+  scene.add(sun);
+  const corona = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(1.45, 3),
+    new THREE.MeshBasicMaterial({
+      color: sunColor,
+      transparent: true,
+      opacity: 0.14,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }),
+  );
+  scene.add(corona);
+
+  // Planets (beats) + moons (findings).
+  interface Spin {
+    obj: THREE.Object3D;
+    speed: number;
+  }
+  const spins: Spin[] = [];
+  const pulses: THREE.Mesh[] = [];
+  const precess: THREE.Mesh[] = [];
+  const pickables: THREE.Object3D[] = [];
+  const intro: { obj: THREE.Object3D; at: number }[] = [];
+
+  const docked = dockFindings(doc);
+  const beats = [...doc.understanding.walkthrough.map((b) => ({ title: b.title, body: b.body, risk: b.risk }))];
+  if (docked.has(beats.length) || beats.length === 0)
+    beats.push({ title: beats.length ? "other findings" : "findings", body: "", risk: "low" });
+
+  let introT = 0.25;
+  beats.forEach((beat, i) => {
+    const orbitR = 3.4 + i * 2.0;
+    // Orbit ring.
+    const ringGeo = new THREE.BufferGeometry().setFromPoints(
+      Array.from({ length: 129 }, (_, k) => {
+        const a = (k / 128) * Math.PI * 2;
+        return new THREE.Vector3(Math.cos(a) * orbitR, 0, Math.sin(a) * orbitR);
+      }),
+    );
+    scene.add(
+      new THREE.Line(
+        ringGeo,
+        new THREE.LineBasicMaterial({ color: 0x30363d, transparent: true, opacity: 0.55 }),
+      ),
+    );
+
+    const orbit = new THREE.Group(); // rotates → the planet revolves
+    orbit.rotation.y = i * 1.7; // deterministic phase
+    scene.add(orbit);
+    spins.push({ obj: orbit, speed: 0.05 / (1 + i * 0.6) });
+
+    const planetGroup = new THREE.Group();
+    planetGroup.position.x = orbitR;
+    orbit.add(planetGroup);
+
+    const pr = RISK_SIZE[beat.risk] ?? 0.5;
+    const pc = RISK_COLOR[beat.risk] ?? 0x6e7681;
+    const planet = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(pr, 2),
+      new THREE.MeshStandardMaterial({
+        color: 0x21262d,
+        emissive: pc,
+        emissiveIntensity: 0.5,
+        roughness: 0.5,
+      }),
+    );
+    planet.userData.beat = beat;
+    planetGroup.add(planet);
+    pickables.push(planet);
+    intro.push({ obj: planetGroup, at: introT });
+    introT += 0.12;
+
+    // Beat label (always faces camera; counter-rotation not needed with CSS2D).
+    const labelEl = document.createElement("div");
+    labelEl.className = "rmap3d-label";
+    labelEl.textContent = `${i + 1} · ${beat.title}`;
+    if (beat.body) labelEl.title = beat.body;
+    const label = new CSS2DObject(labelEl);
+    label.position.set(0, pr + 0.55, 0);
+    planetGroup.add(label);
+
+    // Moons on a spherical Fibonacci lattice (severity-major: big moons sit closest).
+    const moons = (docked.get(i) ?? [])
+      .slice()
+      .sort((a, b) => (SEV_SIZE[b.severity] ?? 0.2) - (SEV_SIZE[a.severity] ?? 0.2));
+    const moonOrbit = new THREE.Group();
+    planetGroup.add(moonOrbit);
+    spins.push({ obj: moonOrbit, speed: 0.28 / (1 + i * 0.25) });
+    moons.forEach((f, j) => {
+      const dist = pr + 0.75 + 0.22 * Math.sqrt(j);
+      const p = sphereFib(j, moons.length, dist);
+      const size = SEV_SIZE[f.severity] ?? 0.2;
+      const color = TYPE_COLOR[f.type] ?? 0x8b949e;
+      const conf = Math.max(0, Math.min(1, f.confidence ?? 1));
+      const isQ = f.type === "question";
+      const mat = new THREE.MeshStandardMaterial({
+        color: isQ ? 0x0d1117 : color,
+        emissive: color,
+        emissiveIntensity: (f.severity === "blocker" ? 2.6 : f.severity === "fix_before_merge" ? 1.8 : 0.9) * (0.35 + 0.65 * conf),
+        roughness: 0.4,
+        wireframe: isQ,
+        transparent: f.status !== "open",
+        opacity: f.status !== "open" ? 0.3 : 1,
+      });
+      const moon = new THREE.Mesh(new THREE.IcosahedronGeometry(size, 2), mat);
+      moon.position.copy(p);
+      moon.userData.finding = f;
+      moonOrbit.add(moon);
+      pickables.push(moon);
+      intro.push({ obj: moon, at: introT + j * 0.06 });
+      if (f.severity === "blocker") pulses.push(moon);
+      // Engine-disputed → a precessing ring around the moon.
+      if (Object.values(f.engines).includes("dispute")) {
+        const ring = new THREE.Mesh(
+          new THREE.TorusGeometry(size + 0.14, 0.018, 8, 48),
+          new THREE.MeshBasicMaterial({
+            color,
+            transparent: true,
+            opacity: 0.85,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+          }),
+        );
+        ring.rotation.x = Math.PI / 2.6;
+        moon.add(ring);
+        precess.push(ring);
+      }
+    });
+    introT += 0.1;
+  });
+
+  // Post-processing: bloom is what makes it glow.
+  const composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, camera));
+  const bloom = new UnrealBloomPass(new THREE.Vector2(W, H), 1.15, 0.65, 0.18);
+  composer.addPass(bloom);
+  composer.addPass(new OutputPass());
+
+  // Picking.
+  const ray = new THREE.Raycaster();
+  const mouse = new THREE.Vector2();
+  let hovered: THREE.Object3D | null = null;
+  const detail = buildDetailCard(root, cb);
+  const pick = (ev: PointerEvent): THREE.Object3D | null => {
+    const r = renderer.domElement.getBoundingClientRect();
+    mouse.set(((ev.clientX - r.left) / r.width) * 2 - 1, (-(ev.clientY - r.top) / r.height) * 2 + 1);
+    ray.setFromCamera(mouse, camera);
+    const hit = ray.intersectObjects(pickables, false)[0];
+    return hit?.object ?? null;
+  };
+  labelRenderer.domElement.addEventListener("pointermove", (ev) => {
+    const o = pick(ev);
+    if (hovered && hovered !== o) hovered.scale.setScalar(1);
+    hovered = o;
+    if (o) o.scale.setScalar(1.25);
+    labelRenderer.domElement.style.cursor = o ? "pointer" : "grab";
+  });
+  labelRenderer.domElement.addEventListener("pointerdown", (ev) => {
+    const o = pick(ev);
+    const f = o?.userData.finding as RdFinding | undefined;
+    if (f) detail.show(f);
+  });
+
+  // ── animation loop ──
+  const clock = new THREE.Clock();
+  let raf = 0;
+  let elapsed = 0;
+  const camStart = camera.position.clone().multiplyScalar(1.8);
+  const camEnd = camera.position.clone();
+  const tick = () => {
+    if (!renderer.domElement.isConnected) return dispose(); // panel content replaced
+    raf = requestAnimationFrame(tick);
+    const dt = clock.getDelta();
+    elapsed += dt;
+    // Intro: camera dolly + staggered scale-in.
+    if (!cb.reduceMotion && elapsed < 1.4) {
+      const t = Math.min(elapsed / 1.4, 1);
+      const e = 1 - Math.pow(1 - t, 3);
+      camera.position.lerpVectors(camStart, camEnd, e);
+    }
+    for (const it of intro) {
+      const t = cb.reduceMotion ? 1 : Math.max(0, Math.min((elapsed - it.at) / 0.45, 1));
+      const e = 1 - Math.pow(1 - t, 3);
+      it.obj.scale.setScalar(Math.max(e, 0.0001));
+    }
+    if (!cb.reduceMotion) {
+      for (const s of spins) s.obj.rotation.y += s.speed * dt;
+      const breathe = 1 + Math.sin(elapsed * 1.7) * 0.04;
+      sun.scale.setScalar(breathe);
+      corona.scale.setScalar(breathe * (1 + Math.sin(elapsed * 0.9) * 0.06));
+      for (const m of pulses) {
+        const mat = m.material as THREE.MeshStandardMaterial;
+        mat.emissiveIntensity = 2.2 + Math.sin(elapsed * 3.2) * 1.0;
+      }
+      for (const r of precess) {
+        r.rotation.z += dt * 0.9;
+        r.rotation.x += dt * 0.35;
+      }
+    }
+    controls.update();
+    composer.render();
+    labelRenderer.render(scene, camera);
+  };
+
+  // Resize with the panel.
+  const ro = new ResizeObserver(() => {
+    const w = Math.max(host.clientWidth - 24, 280);
+    camera.aspect = w / H;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, H);
+    composer.setSize(w, H);
+    labelRenderer.setSize(w, H);
+  });
+  ro.observe(host);
+
+  const dispose = () => {
+    cancelAnimationFrame(raf);
+    ro.disconnect();
+    controls.dispose();
+    scene.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.geometry) m.geometry.dispose();
+      const mat = m.material as THREE.Material | THREE.Material[] | undefined;
+      if (Array.isArray(mat)) mat.forEach((x) => x.dispose());
+      else mat?.dispose();
+    });
+    composer.dispose();
+    renderer.dispose();
+    teardown = null;
+  };
+  teardown = dispose;
+  tick();
+
+  // ── footer ──
   if (doc.understanding.verified.length) {
     const v = document.createElement("div");
     v.className = "rmap-verified";
@@ -373,17 +486,23 @@ function buildDetailCard(root: HTMLElement, cb: MapCallbacks) {
     if (e.key === "Escape") hide();
   });
   return {
-    show(f: RdFinding, _x: number, _y: number) {
+    show(f: RdFinding) {
       card.innerHTML = "";
-      const color = TYPE_COLOR[f.type] ?? "#8b949e";
+      const color = `#${(TYPE_COLOR[f.type] ?? 0x8b949e).toString(16).padStart(6, "0")}`;
       const head = document.createElement("div");
       head.className = "rmap-card-head";
-      head.innerHTML = `<span class="rmap-dot" style="background:${color}"></span><b>${SEV_GLYPH[f.severity] ?? ""} ${escapeText(f.title)}</b><button class="rmap-x">✕</button>`;
+      head.innerHTML = `<span class="rmap-dot" style="background:${color}"></span><b>${SEV_GLYPH[f.severity] ?? ""} ${escapeText(
+        f.title,
+      )}</b><button class="rmap-x">✕</button>`;
       head.querySelector(".rmap-x")!.addEventListener("click", hide);
       card.appendChild(head);
       const meta = document.createElement("div");
       meta.className = "rmap-card-meta";
-      const bits = [`[${f.type}]`, f.severity.replace(/_/g, " "), `confidence ${Math.round((f.confidence ?? 1) * 100)}%`];
+      const bits = [
+        `[${f.type}]`,
+        f.severity.replace(/_/g, " "),
+        `confidence ${Math.round((f.confidence ?? 1) * 100)}%`,
+      ];
       for (const [e, verd] of Object.entries(f.engines)) bits.push(`${e}:${verd}`);
       if (f.status !== "open") bits.push(`status: ${f.status}`);
       meta.textContent = bits.join("  ·  ");
