@@ -53,9 +53,8 @@ function render() {
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   handle = renderReviewMap(host, doc, warnings, {
     reduceMotion,
-    // Fill the window: everything that isn't the canvas (verdict strip, purpose,
-    // footer) takes ~230px; keep a sane floor.
-    stageHeight: Math.max(window.innerHeight - 240, 420),
+    // Split layout: the rail carries all the text — the canvas gets the full height.
+    stageHeight: Math.max(window.innerHeight, 420),
     onJump: (path, line) => post({ kind: "jump", path, line }),
     onAsk,
   });

@@ -84,19 +84,26 @@ export interface MapCallbacks {
   stageHeight?: number;
 }
 
-/** A node in grid space (cells). Opaque to callers — the journey passes them back. */
+/** A node in grid space (cells). Opaque to callers — the journey passes them back.
+ *  `x/y` are the LIVE (lerped) position; `tx/ty` the current layout's target — so
+ *  switching layouts morphs the whole graph instead of snapping. */
 export interface MapNode {
   id: string;
   kind: "core" | "beat" | "finding";
   x: number;
   y: number;
+  tx: number;
+  ty: number;
   r: number;
   color: string;
   finding?: RdFinding;
   label?: string;
+  beatIdx?: number;
 }
 
 export interface MapHandle {
+  /** The right-rail element journey/detail cards dock into (graph stays visible). */
+  side: HTMLElement;
   /** Pan/zoom flight to a node; `zoom` = target magnification (default by kind). */
   focus: (node: MapNode, zoom?: number) => void;
   focusWide: () => void;
@@ -140,9 +147,14 @@ export function renderReviewMap(
   teardown?.();
   host.innerHTML = "";
   const root = document.createElement("div");
-  root.className = "rmap";
+  root.className = "rmap rmap-split";
+  const main = document.createElement("div");
+  main.className = "rmap-main";
+  const side = document.createElement("div");
+  side.className = "rmap-side";
+  root.append(main, side);
 
-  // ── verdict strip(s) + purpose: readable text stays HTML ──
+  // ── the right rail: verdict strip(s) + purpose + the card slot ──
   const state0 = doc.verdict.per_subject[0]?.state ?? "ready";
   for (const v of doc.verdict.per_subject) {
     const subj = doc.subjects[v.subject];
@@ -154,32 +166,40 @@ export function renderReviewMap(
       .join(" ");
     strip.innerHTML = `<b>${VERDICT_LABEL[v.state] ?? v.state}</b><span class="rmap-vref">${subj?.ref ?? ""}</span><span class="rmap-vledger">${ledger}</span>`;
     if (v.justification) strip.title = v.justification;
-    root.appendChild(strip);
+    side.appendChild(strip);
     if (v.scope) {
       const sc = document.createElement("div");
       sc.className = "rmap-scope";
       sc.textContent = `pass scope: ${v.scope}`;
-      root.appendChild(sc);
+      side.appendChild(sc);
     }
   }
   const purpose = document.createElement("div");
   purpose.className = "rmap-purpose";
   purpose.textContent = doc.understanding.purpose;
-  root.appendChild(purpose);
+  side.appendChild(purpose);
+  // The slot journey/detail cards dock into (instead of floating over the graph).
+  const slot = document.createElement("div");
+  slot.className = "rmap-slot";
+  side.appendChild(slot);
 
-  // ── the stage ──
+  // ── the stage (left column — the graph stays visible while navigating) ──
   const stage = document.createElement("div");
   stage.className = "rmap-stage";
-  root.appendChild(stage);
+  main.appendChild(stage);
   const canvas = document.createElement("canvas");
   stage.appendChild(canvas);
   const ctx = canvas.getContext("2d")!;
+  const modeBtn = document.createElement("button");
+  modeBtn.className = "rmap-mode";
+  stage.appendChild(modeBtn);
 
   // Cell metrics (a tight terminal grid).
   const FONT = 11;
   const CW = 6.6;
   const CH = 12;
-  let W = Math.max(host.clientWidth || 460, 340) - 24;
+  const SIDE_W = 380;
+  let W = Math.max((host.clientWidth || 800) - SIDE_W - 12, 320);
   const H = cb.stageHeight ?? 470;
   let cols = 0;
   let rows = 0;
@@ -229,55 +249,110 @@ export function renderReviewMap(
   if (docked.has(beats.length) || beats.length === 0)
     beats.push({ title: beats.length ? "other findings" : "findings", body: "", risk: "low" });
 
-  const core: MapNode = {
-    id: "__core__",
-    kind: "core",
+  const mk = (partial: Omit<MapNode, "x" | "y" | "tx" | "ty">): MapNode => ({
+    ...partial,
     x: 0,
     y: 0,
-    r: 4.4,
-    color: VERDICT_COLOR[state0] ?? "#3fb950",
-  };
+    tx: 0,
+    ty: 0,
+  });
+  const core = mk({ id: "__core__", kind: "core", r: 4.4, color: VERDICT_COLOR[state0] ?? "#3fb950" });
   const beatNodes: MapNode[] = [];
   const findingNodes: MapNode[] = [];
   beats.forEach((b, i) => {
-    const ang = i * GOLDEN + 0.8;
-    const rad = 15 + 6.5 * Math.sqrt(i + 1);
-    const bn: MapNode = {
-      id: `__beat${i}__`,
-      kind: "beat",
-      x: Math.cos(ang) * rad * 1.9, // ×1.9: cells are taller than wide — circularize
-      y: Math.sin(ang) * rad,
-      r: RISK_R[b.risk] ?? 2.1,
-      color: RISK_COLOR[b.risk] ?? "#6e7681",
-      label: `${i + 1}·${b.title}`,
-    };
-    beatNodes.push(bn);
+    beatNodes.push(
+      mk({
+        id: `__beat${i}__`,
+        kind: "beat",
+        r: RISK_R[b.risk] ?? 2.1,
+        color: RISK_COLOR[b.risk] ?? "#6e7681",
+        label: `${i + 1}·${b.title}`,
+      }),
+    );
     const fs = (docked.get(i) ?? [])
       .slice()
       .sort((a, c) => (SEV_R[c.severity] ?? 1) - (SEV_R[a.severity] ?? 1));
-    fs.forEach((f, j) => {
-      const fa = j * GOLDEN + i * 1.3;
-      const fr = bn.r + 3.2 + 1.8 * Math.sqrt(j + 0.5);
-      findingNodes.push({
-        id: f.id,
-        kind: "finding",
-        x: bn.x + Math.cos(fa) * fr * 1.9,
-        y: bn.y + Math.sin(fa) * fr,
-        r: SEV_R[f.severity] ?? 1,
-        color: TYPE_COLOR[f.type] ?? "#8b949e",
-        finding: f,
-      });
+    fs.forEach((f) => {
+      findingNodes.push(
+        mk({
+          id: f.id,
+          kind: "finding",
+          r: SEV_R[f.severity] ?? 1,
+          color: TYPE_COLOR[f.type] ?? "#8b949e",
+          finding: f,
+          beatIdx: i,
+        }),
+      );
     });
   });
   const nodes = [core, ...beatNodes, ...findingNodes];
   const moonByFid = new Map(findingNodes.map((n) => [n.id, n]));
-  const beatOf = (n: MapNode): MapNode =>
-    beatNodes.reduce((a, b) => (dist2(n, a) < dist2(n, b) ? a : b), beatNodes[0]);
-  const dist2 = (a: MapNode, b: MapNode) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
+  const beatOf = (n: MapNode): MapNode => beatNodes[n.beatIdx ?? 0];
+
+  // ── two layouts over the same nodes; targets lerp → switching MORPHS ──
+  // "orbit": phyllotaxis at every scale (core-centric).
+  // "flow":  a left→right river — chapters are stations on a meandering spine,
+  //          findings fan off as severity-ordered tributaries (most severe nearest
+  //          the spine), and the whole stream debouches into the verdict basin.
+  type LayoutMode = "flow" | "orbit";
+  let layout: LayoutMode =
+    (localStorage.getItem("pear.map.layout") as LayoutMode) === "orbit" ? "orbit" : "flow";
+  const applyLayout = (mode: LayoutMode) => {
+    layout = mode;
+    localStorage.setItem("pear.map.layout", mode);
+    if (mode === "orbit") {
+      core.tx = 0;
+      core.ty = 0;
+      beatNodes.forEach((bn, i) => {
+        const ang = i * GOLDEN + 0.8;
+        const rad = 15 + 6.5 * Math.sqrt(i + 1);
+        bn.tx = Math.cos(ang) * rad * 1.9; // ×1.9: cells are taller than wide
+        bn.ty = Math.sin(ang) * rad;
+      });
+      const perBeat = new Map<number, number>();
+      findingNodes.forEach((fn) => {
+        const i = fn.beatIdx ?? 0;
+        const j = perBeat.get(i) ?? 0;
+        perBeat.set(i, j + 1);
+        const bn = beatNodes[i];
+        const fa = j * GOLDEN + i * 1.3;
+        const fr = bn.r + 3.2 + 1.8 * Math.sqrt(j + 0.5);
+        fn.tx = bn.tx + Math.cos(fa) * fr * 1.9;
+        fn.ty = bn.ty + Math.sin(fa) * fr;
+      });
+    } else {
+      // flow: stations along x, meandering y; verdict basin at the far right.
+      const STEP = 30;
+      const x0 = (-(beatNodes.length - 1) / 2) * STEP - 10;
+      beatNodes.forEach((bn, i) => {
+        bn.tx = x0 + i * STEP;
+        bn.ty = Math.sin(i * 0.9) * 7;
+      });
+      core.tx = x0 + beatNodes.length * STEP + 6;
+      core.ty = Math.sin(beatNodes.length * 0.9) * 7;
+      const perBeat = new Map<number, number>();
+      findingNodes.forEach((fn) => {
+        const i = fn.beatIdx ?? 0;
+        const j = perBeat.get(i) ?? 0;
+        perBeat.set(i, j + 1);
+        const bn = beatNodes[i];
+        const side = j % 2 ? 1 : -1; // alternate banks
+        const rank = Math.floor(j / 2);
+        fn.tx = bn.tx + (rank % 2 ? 5 : -4) + rank * 2.0;
+        fn.ty = bn.ty + side * (bn.r + 3.4 + rank * 2.6);
+      });
+    }
+  };
+  applyLayout(layout);
+  // First paint starts AT the layout (no fly-in from origin).
+  nodes.forEach((n) => {
+    n.x = n.tx;
+    n.y = n.ty;
+  });
 
   // ── camera (pan in world cells, zoom = magnification) ──
-  const extent = nodes.reduce((m, n) => Math.max(m, Math.abs(n.x) + 8, Math.abs(n.y) + 5), 20);
-  const fitZoom = () => Math.min(cols / (extent * 2.2), rows / (extent * 1.35));
+  const extent = () => nodes.reduce((m, n) => Math.max(m, Math.abs(n.tx) / 1.6 + 10, Math.abs(n.ty) + 6), 20);
+  const fitZoom = () => Math.min(cols / (extent() * 2.2), rows / (extent() * 1.35));
   const cam = { x: 0, y: 0, z: fitZoom() };
   let camTarget: { x: number; y: number; z: number } | null = null;
   const selected = new Set<string>();
@@ -378,6 +453,12 @@ export function renderReviewMap(
       fpsAt = now;
     }
 
+    // layout morph: every node eases toward its current layout target
+    const mk_ = 1 - Math.exp(-0.14);
+    for (const n of nodes) {
+      n.x += (n.tx - n.x) * mk_;
+      n.y += (n.ty - n.y) * mk_;
+    }
     // camera damping
     if (camTarget) {
       const k = 1 - Math.exp(-0.12);
@@ -420,8 +501,13 @@ export function renderReviewMap(
         put(col, row, FLOW[((phase % FLOW.length) + FLOW.length) % FLOW.length], color);
       }
     };
-    for (const bn of beatNodes) edge(core, bn, "#2b3344");
-    for (const fn of findingNodes) edge(beatOf(fn), fn, dim(fn.color));
+    if (layout === "orbit") {
+      for (const bn of beatNodes) edge(core, bn, "#2b3344");
+    } else {
+      for (let i = 0; i + 1 < beatNodes.length; i++) edge(beatNodes[i], beatNodes[i + 1], "#3a4358");
+      if (beatNodes.length) edge(beatNodes[beatNodes.length - 1], core, "#3a4358");
+    }
+    for (const fn of findingNodes) edge(layout === "flow" ? fn : beatOf(fn), layout === "flow" ? beatOf(fn) : fn, dim(fn.color));
 
     // 3 · nodes — glyph-ramp discs (one law, every scale)
     const disc = (n: MapNode, wob: number) => {
@@ -502,7 +588,7 @@ export function renderReviewMap(
   };
 
   const ro = new ResizeObserver(() => {
-    W = Math.max(host.clientWidth - 24, 280);
+    W = Math.max(host.clientWidth - SIDE_W - 12, 320);
     sizeCanvas();
   });
   ro.observe(host);
@@ -515,28 +601,42 @@ export function renderReviewMap(
   };
   teardown = dispose;
 
-  const detail = buildDetailCard(root, cb);
+  const detail = buildDetailCard(slot, cb);
+  const syncModeBtn = () => {
+    modeBtn.textContent = layout === "flow" ? "≋ flow" : "✿ orbit";
+    modeBtn.title = "toggle layout: flow river ⇄ phyllotaxis orbit (morphs live)";
+  };
+  syncModeBtn();
+  modeBtn.addEventListener("click", () => {
+    applyLayout(layout === "flow" ? "orbit" : "flow");
+    syncModeBtn();
+    camTarget = { x: 0, y: 0, z: fitZoom() }; // re-frame the new shape
+  });
 
   // ── footer ──
   if (doc.understanding.verified.length) {
     const v = document.createElement("div");
     v.className = "rmap-verified";
     v.textContent = `verified: ${doc.understanding.verified.join(" · ")}`;
-    root.appendChild(v);
+    side.appendChild(v);
   }
   if (warnings.length) {
     const w = document.createElement("div");
     w.className = "rmap-warnings";
     w.textContent = `⚠ ${warnings.join("; ")}`;
-    root.appendChild(w);
+    side.appendChild(w);
   }
   host.appendChild(root);
   t0 = performance.now();
   raf = requestAnimationFrame(draw);
 
+  let focusNode: MapNode | null = null;
   return {
+    side: slot,
     focus(node, zoom) {
-      camTarget = { x: node.x, y: node.y, z: zoom ?? (node.kind === "finding" ? 3.2 : node.kind === "beat" ? 1.9 : fitZoom()) };
+      focusNode = node;
+      camTarget = { x: node.tx, y: node.ty, z: zoom ?? (node.kind === "finding" ? 3.2 : node.kind === "beat" ? 1.9 : fitZoom()) };
+      void focusNode;
     },
     focusWide() {
       camTarget = { x: 0, y: 0, z: fitZoom() };
@@ -564,7 +664,7 @@ function dim(hex: string): string {
   return `rgb(${f((n >> 16) & 255)},${f((n >> 8) & 255)},${f(n & 255)})`;
 }
 
-/** The click-through detail card (unchanged surface from the galaxy version). */
+/** The click-through detail card — docks into the right rail (never over the graph). */
 function buildDetailCard(root: HTMLElement, cb: MapCallbacks) {
   const card = document.createElement("div");
   card.className = "rmap-card hidden";

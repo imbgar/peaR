@@ -210,9 +210,13 @@ export function startJourney(
       </div>
     </div>`;
   stage.appendChild(hud);
-  const $ = <T extends HTMLElement>(sel: string) => hud.querySelector<T>(sel)!;
-  const card = $(".jr-card");
-  const legend = $(".jr-legend");
+  const $ = <T extends HTMLElement>(sel: string) => hud.querySelector<T>(sel) ?? dialog.querySelector<T>(sel)!;
+  // The step dialog lives in the right rail — the graph stays visible while navigating.
+  const dialog = hud.querySelector<HTMLElement>(".jr-dialog")!;
+  dialog.classList.add("jr-dialog-side");
+  handle.side.prepend(dialog);
+  const card = dialog.querySelector<HTMLElement>(".jr-card")!;
+  const legend = hud.querySelector<HTMLElement>(".jr-legend")!;
 
   // ── narration engine ───────────────────────────────────────────────────────────
   // The player runs a chunk queue (the protocol supports streamed multi-chunk
@@ -641,6 +645,7 @@ export function startJourney(
     stopNarration();
     document.removeEventListener("keydown", onKey);
     handle.setJourneyMode(false);
+    dialog.remove();
     hud.remove();
   };
 
