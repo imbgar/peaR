@@ -98,6 +98,19 @@ for line in sys.stdin:
         print(json.dumps({"id": rid, "error": str(e)[:200], "more": False}), flush=True)
 "#;
 
+/// Physical memory in GB (macOS: sysctl hw.memsize).
+fn physical_mem_gb() -> Option<u64> {
+    let out = PCommand::new("sysctl")
+        .args(["-n", "hw.memsize"])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .map(|b| b / 1_073_741_824)
+}
+
 /// Where the video-explainer skill provisions its chatterbox venv.
 fn chatterbox_python() -> Option<String> {
     let home = std::env::var_os("HOME")?;
@@ -252,12 +265,24 @@ pub struct TtsPool {
 }
 
 impl TtsPool {
+    /// Pool size: `PEAR_TTS_POOL` override, else scaled to physical memory — each
+    /// worker holds a ~3 GB model copy, and over-provisioning froze a 64 GB machine
+    /// once the rest of the system had eaten its share.
     pub fn pool_size() -> usize {
-        std::env::var("PEAR_TTS_POOL")
+        if let Some(n) = std::env::var("PEAR_TTS_POOL")
             .ok()
             .and_then(|v| v.parse().ok())
             .filter(|n| (1..=8).contains(n))
-            .unwrap_or(4)
+        {
+            return n;
+        }
+        let gb = physical_mem_gb().unwrap_or(16);
+        match gb {
+            g if g >= 96 => 4,
+            g if g >= 48 => 3,
+            g if g >= 24 => 2,
+            _ => 1,
+        }
     }
 
     /// Spawn the pool (model loads run in parallel). Errors only if NO worker starts.

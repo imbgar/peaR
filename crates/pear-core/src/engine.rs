@@ -62,6 +62,10 @@ pub struct Engine {
     tts_dead: bool,
     tts_cb: Option<crate::tts::TtsPool>,
     tts_cb_dead: bool,
+    /// Last `Speak` per backend — idle workers are reaped (the chatterbox pool holds
+    /// gigabytes of model copies; it once survived overnight and froze the machine).
+    tts_used: Option<std::time::Instant>,
+    tts_cb_used: Option<std::time::Instant>,
 }
 
 /// Per-engine launch options chosen in the launcher (empty = engine default).
@@ -117,6 +121,8 @@ impl Engine {
             tts_dead: false,
             tts_cb: None,
             tts_cb_dead: false,
+            tts_used: None,
+            tts_cb_used: None,
         })
     }
 
@@ -892,6 +898,25 @@ impl Engine {
         if reaped {
             self.persist_layout(None);
         }
+        // Idle-reap TTS workers (runs on every command, so at least at the
+        // notification-poll cadence). Dropping closes stdin → workers exit cleanly.
+        // Dead-latches reset too, so the next use after a reap respawns fresh.
+        const CB_IDLE: std::time::Duration = std::time::Duration::from_secs(300);
+        const KOKORO_IDLE: std::time::Duration = std::time::Duration::from_secs(900);
+        if self.tts_cb.is_some() && self.tts_cb_used.is_some_and(|t| t.elapsed() > CB_IDLE) {
+            self.tts_cb = None;
+            self.tts_cb_used = None;
+            self.tts_cb_dead = false;
+            self.emit(Event::Notice {
+                tab: None,
+                message: "chatterbox pool released (idle 5m) — reselect 🎭 to re-warm".into(),
+            });
+        }
+        if self.tts.is_some() && self.tts_used.is_some_and(|t| t.elapsed() > KOKORO_IDLE) {
+            self.tts = None;
+            self.tts_used = None;
+            self.tts_dead = false;
+        }
     }
 
     /// Count of live tabs — observability + tests.
@@ -1179,6 +1204,7 @@ impl Engine {
         };
         // Chatterbox path (reroutes to kokoro on any unavailability).
         if backend.as_deref() == Some("chatterbox") && !self.tts_cb_dead {
+            self.tts_cb_used = Some(std::time::Instant::now());
             if self.tts_cb.is_none() {
                 match crate::tts::TtsPool::spawn_chatterbox(self.sink.clone()) {
                     Ok(t) => {
@@ -1235,6 +1261,7 @@ impl Engine {
             fallback(&self.sink, id);
             return;
         }
+        self.tts_used = Some(std::time::Instant::now());
         if self.tts.is_none() {
             match crate::tts::Tts::spawn_kokoro(self.sink.clone()) {
                 Ok(t) => self.tts = Some(t),
