@@ -114,12 +114,13 @@ function narrationFor(doc: ReviewDoc, step: Step, selected: Set<string>): string
       const disputed = Object.values(f.engines).includes("dispute");
       if (f.type === "praise") return `Some praise: ${f.title}.`;
       if (f.type === "question") return `An open question: ${f.title}. You can answer it from the card below.`;
+      // NOTE: keep this text free of selection state — stable text = stable cache
+      // (the select hint lives in the written register, on the button).
       return (
         `${SEV_SPOKEN[f.severity] ?? "A"} ${f.type.replace(/_/g, " ")} finding, at ${conf} percent confidence. ` +
         `${f.title}. ${f.evidence || ""} ` +
         (f.rule?.why ? `Why it matters: ${f.rule.why} ` : "") +
-        (disputed ? "Note: the engines disagree on this one. " : "") +
-        `Press space to ${selected.has(f.id) ? "remove it from" : "add it to"} your review.`
+        (disputed ? "Note: the engines disagree on this one." : "")
       );
     }
     case "departure": {
@@ -207,6 +208,7 @@ export function startJourney(
     <div class="jr-top">
       <span class="jr-progress"></span>
       <span class="jr-selcount"></span>
+      <span class="jr-preload hidden"><span class="jr-pre-label"></span><span class="jr-pre-track"><span class="jr-pre-fill"></span></span></span>
       <span class="jr-spacer"></span>
       <button class="jr-btn jr-voice" title="toggle narration (V)"></button>
       <button class="jr-btn jr-tts" title="narration voice: kokoro (fast) / chatterbox (emotion dial — severity earns drama) (B)"></button>
@@ -269,6 +271,7 @@ export function startJourney(
   let inFlight: string | null = null;
   let wantNow: TtsReq | null = null; // current step — priority
   let wantNext: TtsReq | null = null; // prefetch — best effort
+  let wantBulk: TtsReq[] = []; // background preload of the whole journey (chatterbox)
 
   const nid = (s: string) => {
     let h = 5381;
@@ -282,13 +285,47 @@ export function startJourney(
   };
   const pump = () => {
     if (inFlight || ttsDead) return;
-    const r = wantNow ?? wantNext;
+    const r = wantNow ?? wantNext ?? wantBulk[0] ?? null;
     if (!r) return;
     if (r === wantNow) wantNow = null;
-    else wantNext = null;
+    else if (r === wantNext) wantNext = null;
+    else wantBulk.shift();
     if (ttsCache.get(r.id)?.done) return pump(); // already cached — next want
     inFlight = r.id;
     opts.requestTts(r.id, r.text, ttsBackend, r.intensity);
+  };
+
+  // ── background preload (the whole journey's narration, chatterbox) ──
+  // Departure is excluded — its narration depends on the selection count.
+  const preloadable = (): number[] =>
+    steps.map((s, i) => (s.kind === "departure" ? -1 : i)).filter((i) => i >= 0);
+  const startPreload = () => {
+    wantBulk = [];
+    for (const i of preloadable()) {
+      const r = reqFor(i);
+      if (!ttsCache.get(r.id)?.done && inFlight !== r.id) wantBulk.push(r);
+    }
+    updatePreloadUi();
+    pump();
+  };
+  const cancelPreload = () => {
+    wantBulk = [];
+    updatePreloadUi();
+  };
+  const updatePreloadUi = () => {
+    const el = hud.querySelector<HTMLElement>(".jr-preload");
+    if (!el) return;
+    const ids = preloadable().map((i) => reqFor(i).id);
+    const done = ids.filter((id) => ttsCache.get(id)?.done).length;
+    const active = ttsBackend === "chatterbox" && done < ids.length && (wantBulk.length > 0 || inFlight !== null);
+    if (!active) {
+      el.classList.toggle("hidden", true);
+      return;
+    }
+    el.classList.remove("hidden");
+    el.querySelector(".jr-pre-label")!.textContent = `🎭 caching ${done}/${ids.length}`;
+    (el.querySelector(".jr-pre-fill") as HTMLElement).style.width =
+      `${Math.round((done / Math.max(ids.length, 1)) * 100)}%`;
   };
 
   const onNarrationEnd = () => {
@@ -390,6 +427,7 @@ export function startJourney(
     if (inFlight === id && !more) {
       inFlight = null;
       pump(); // serve the next want (current step first)
+      updatePreloadUi();
     }
     if (play?.id === id) {
       if (b64) {
@@ -586,7 +624,14 @@ export function startJourney(
     else selected.delete(s.f.id);
     handle.setSelected(s.f.id, on);
     localStorage.setItem(selKey, JSON.stringify([...selected]));
-    renderStep(); // re-narrates with the updated select hint
+    // Light UI update only — narration text is selection-independent (cache-stable),
+    // so a full renderStep would just restart the audio.
+    const btn = card.querySelector<HTMLButtonElement>(".jr-sel");
+    if (btn) {
+      btn.classList.toggle("on", on);
+      btn.textContent = on ? "✓ in your review — ␣ to remove" : "␣ add to your review";
+    }
+    refreshHud();
   };
 
   const doExport = () => {
@@ -640,6 +685,10 @@ export function startJourney(
         localStorage.setItem("pear.journey.tts", ttsBackend);
         refreshHud();
         if (voiceOn) narrate(narrationFor(doc, steps[idx], selected), intensityFor(steps[idx]));
+        // Chatterbox is ~realtime — pre-cache the whole journey in the background
+        // (current step always outranks the bulk queue).
+        if (ttsBackend === "chatterbox" && voiceOn) startPreload();
+        else cancelPreload();
         break;
       case "d":
       case "D": {
@@ -687,6 +736,8 @@ export function startJourney(
     window.setTimeout(() => legend.classList.add("hidden"), 6000);
   }
   renderStep();
+  // Journey starts on chatterbox → pre-cache every beat right away (progress in HUD).
+  if (ttsBackend === "chatterbox" && voiceOn) startPreload();
   return { exit, handleSpeech };
 }
 
