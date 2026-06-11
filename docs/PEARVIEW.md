@@ -216,12 +216,18 @@ tab, the map replaces the markdown dump (toggle back available; prose is never l
 5. **Write-back**: finding status lifecycle from the widget.
 6. Then revisit the learning ladder (walkthrough mode, pedagogy) — see memory note.
 
-## Open questions (for spec review)
+## Resolved spec decisions (2026-06-10)
 
-- [ ] Taxonomy: 12 types + 2 kinds — trim further (merge `style`→`clarity`,
-      `observability`→`design`)? The ceiling research says ≤9 is safest.
-- [ ] Should `question` findings be answerable in-widget (reply → typed into the agent
-      terminal), or v2?
-- [ ] `review.json` history: keep every revision (re-reviews) or last-write-wins per
-      session?
-- [ ] Engine disagreement display: dashed ring enough, or a dedicated "disputed" rail?
+- **Taxonomy: keep all 12 types** — but the type→display mapping (color wheel, legend,
+  grouping) lives in ONE frontend table so collapsing to 10 later (`style`→`clarity`,
+  `observability`→`design`) is a display-layer remap, not a schema change. The schema
+  never changes; old docs stay valid.
+- **In-widget question answering ships in v1**: a `question` finding's detail card gets
+  a reply box; the reply is typed into the tab's agent terminal (existing PTY input
+  machinery), prefixed with the finding's anchor for context.
+- **Review history: keep every revision.** Docs are tiny JSON; store as
+  `reviews/<slug>/<pr#>/review-<timestamp>.json` with a `review.json` symlink/copy to
+  the latest. UI shows only the latest by default (history behind a small ⌚ affordance
+  — hidden noise, cheap disk).
+- **Engine disagreement: dashed ring first.** If that reads poorly in practice, a
+  dedicated "disputed" rail is the planned fallback (toggle, not redesign).
