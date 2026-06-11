@@ -1180,7 +1180,15 @@ impl Engine {
         if backend.as_deref() == Some("chatterbox") && !self.tts_cb_dead {
             if self.tts_cb.is_none() {
                 match crate::tts::Tts::spawn_chatterbox(self.sink.clone()) {
-                    Ok(t) => self.tts_cb = Some(t),
+                    Ok(t) => {
+                        self.tts_cb = Some(t);
+                        self.emit(Event::Notice {
+                            tab: None,
+                            message: "🎭 chatterbox warming up — first narration takes ~15s \
+                                      (log: /tmp/pear-tts-chatterbox.log)"
+                                .into(),
+                        });
+                    }
                     Err(e) => {
                         self.tts_cb_dead = true;
                         self.emit(Event::Notice {

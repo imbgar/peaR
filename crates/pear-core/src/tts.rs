@@ -142,12 +142,17 @@ impl Tts {
         name: &'static str,
         sink: EventSink,
     ) -> std::io::Result<Tts> {
+        // Worker stderr (model-load progress, tracebacks) goes to a log file — the
+        // only way to see WHY a worker died.
+        let log = std::fs::File::create(format!("/tmp/pear-tts-{name}.log"))
+            .map(Stdio::from)
+            .unwrap_or_else(|_| Stdio::null());
         let mut child = PCommand::new(&py)
             .args(["-u", "-c", &script])
             .env("PATH", crate::shellenv::login_path())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null()) // model-load progress bars etc.
+            .stderr(log)
             .spawn()?;
         let stdin = child.stdin.take().expect("piped stdin");
         let stdout = child.stdout.take().expect("piped stdout");
