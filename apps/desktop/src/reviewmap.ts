@@ -83,6 +83,8 @@ export interface MapCallbacks {
   /** Send a question-reply into the tab's agent terminal. */
   onAsk: (finding: RdFinding, text: string) => void;
   reduceMotion: boolean;
+  /** Canvas height in px (the pop-out theater passes the full window). Default 470. */
+  stageHeight?: number;
 }
 
 // One live scene at a time — torn down before every render (and when detached).
@@ -159,7 +161,7 @@ export function renderReviewMap(
   root.appendChild(stage);
 
   const W = Math.max(host.clientWidth || 460, 340) - 24;
-  const H = 470;
+  const H = cb.stageHeight ?? 470;
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(W, H);
@@ -457,7 +459,6 @@ export function renderReviewMap(
     teardown = null;
   };
   teardown = dispose;
-  tick();
 
   // ── footer ──
   if (doc.understanding.verified.length) {
@@ -472,7 +473,10 @@ export function renderReviewMap(
     w.textContent = `⚠ ${warnings.join("; ")}`;
     root.appendChild(w);
   }
+  // Attach BEFORE the first tick — the loop's liveness check is `isConnected`, so
+  // starting it pre-attach would dispose the scene on frame one (black canvas).
   host.appendChild(root);
+  tick();
 }
 
 /** The click-through detail card: evidence, the rule's teaching block, the committable

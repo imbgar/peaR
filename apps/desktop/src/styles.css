@@ -1101,6 +1101,14 @@ body.tiling-drag .terminal-host { cursor: grabbing; }
   padding: 2px 8px; border-radius: 10px; pointer-events: none; white-space: nowrap;
   max-width: 230px; overflow: hidden; text-overflow: ellipsis; backdrop-filter: blur(4px);
 }
+/* The review-map theater window (map.html) — opaque deep space, no vibrancy. */
+body.map-window { background: #05070c; margin: 0; overflow-y: auto; }
+body.map-window #map-root { max-width: 1280px; margin: 0 auto; }
+body.map-window .rmap-stage { border: none; border-radius: 0; }
+.map-empty {
+  display: grid; place-items: center; height: 100vh;
+  font-family: var(--font-mono); font-size: 13px; color: var(--dim);
+}
 .rmap-verified { color: var(--dim); font-size: 11px; }
 .rmap-warnings { font-size: 11px; color: #d29922; }
 .rmap-card {

@@ -20,7 +20,6 @@ import "@fontsource-variable/jetbrains-mono";
 import { marked } from "marked";
 import { parse as parseSearchQuery, type SearchParserResult } from "search-query-parser";
 import { renderMarkdown, setImageProxy } from "./markdown";
-import { renderReviewMap } from "./reviewmap";
 import { initUpdater } from "./update";
 import {
   renderDiff,
@@ -49,6 +48,7 @@ import {
   DiffComment,
   Favorites,
   PanelPayload,
+  RdFinding,
   ReviewDoc,
   PrComments,
   PrMeta,
@@ -2624,8 +2624,8 @@ function handle(ev: CoreEvent) {
       break;
     }
     case "review_doc": {
-      renderReviewDoc(ev.doc, ev.warnings);
-      setStatus(`review map loaded — ${ev.doc.findings.length} findings`);
+      openReviewTheater(ev.doc, ev.warnings);
+      setStatus(`review map → theater — ${ev.doc.findings.length} findings`);
       break;
     }
     case "diff": {
@@ -4100,32 +4100,40 @@ function renderPanel(p: PanelPayload) {
   setPanel(true);
 }
 
-function renderReviewDoc(doc: ReviewDoc, warnings: string[]) {
-  panelTitleEl.textContent = `⊞ Review map — ${doc.subjects.map((s) => s.ref).join(" + ")}`;
-  panelBodyEl.classList.remove("diff-mode");
-  panelBodyEl.innerHTML = "";
-  renderReviewMap(panelBodyEl, doc, warnings, {
-    reduceMotion: prefs.reduceMotion,
-    onJump: (path) => {
+// ── peaRview map theater ──────────────────────────────────────────────────────
+// The galaxy renders in its OWN window (map.html): the doc travels via localStorage,
+// the window opens/focuses through the open_map_window command, and the theater's
+// jump/ask actions come back over a BroadcastChannel (executed here, where the diff
+// panel + terminals live).
+function openReviewTheater(doc: ReviewDoc, warnings: string[]) {
+  localStorage.setItem("pear.reviewmap.doc", JSON.stringify({ doc, warnings }));
+  void invoke("open_map_window").catch((e) => setStatus(`review map: ${e}`, true));
+}
+
+function initMapChannel() {
+  const chan = new BroadcastChannel("pear-map");
+  chan.addEventListener("message", (ev) => {
+    const m = ev.data as
+      | { kind: "jump"; path: string; line: number | null }
+      | { kind: "ask"; finding: RdFinding; text: string };
+    if (m.kind === "jump") {
       // Open the diff (anchored to the same PR) and scroll to the file's card.
       loadDiff();
       window.setTimeout(() => {
-        const card = document.querySelector(`[data-path="${CSS.escape(path)}"]`);
+        const card = document.querySelector(`[data-path="${CSS.escape(m.path)}"]`);
         card?.scrollIntoView({ behavior: prefs.reduceMotion ? "auto" : "smooth", block: "start" });
       }, 350);
-    },
-    onAsk: (f, text) => {
+    } else if (m.kind === "ask") {
       const tab = diffAnchor();
       if (tab === null) return;
+      const f = m.finding;
       const where = f.anchor ? ` at ${f.anchor.path}${f.anchor.line ? `:${f.anchor.line}` : ""}` : "";
-      const prompt = `Regarding review question ${f.id}${where} ("${f.title}"): ${text}\r`;
+      const prompt = `Regarding review question ${f.id}${where} ("${f.title}"): ${m.text}\r`;
       send({ type: "input", tab, bytes: Array.from(new TextEncoder().encode(prompt)) });
       setStatus(`asked the agent about ${f.id}`);
-    },
+    }
   });
-  setPanel(true);
 }
-
 
 // ── launcher wiring (segmented engine + intensity chips) ─────────────────────
 // Engine pill bar drives which intensities are offered; an intensity chip selects the
@@ -4917,6 +4925,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   new ResizeObserver(refit).observe(terminalsEl);
 
   initNotifications(); // wire the bell + polling before the (Tauri-only) event listener
+  initMapChannel(); // execute jump/ask actions sent back from the review-map theater
   setImageProxy(wireCommentImages); // proxy private GitHub comment images that fail to load
   $("#settings-btn").addEventListener("click", openSettings);
   applyPrefs(); // apply persisted appearance/notification/behavior prefs on startup
