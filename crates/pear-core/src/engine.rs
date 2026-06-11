@@ -55,17 +55,12 @@ pub struct Engine {
     reaper_rx: Receiver<TabId>,
     /// Stop flags for active brain (thinking-tail) watchers, keyed by tab.
     brain_watchers: HashMap<TabId, Arc<AtomicBool>>,
-    /// Lazy local-TTS workers (journey narration); dead flags stop respawn storms.
-    /// Chatterbox-unavailable reroutes to kokoro; kokoro-unavailable → empty Speech
-    /// (frontend falls back to the system voice).
+    /// Lazy local-TTS worker (journey narration, kokoro); the dead flag stops respawn
+    /// storms — kokoro-unavailable → empty Speech (frontend uses the system voice).
     tts: Option<crate::tts::Tts>,
     tts_dead: bool,
-    tts_cb: Option<crate::tts::TtsPool>,
-    tts_cb_dead: bool,
-    /// Last `Speak` per backend — idle workers are reaped (the chatterbox pool holds
-    /// gigabytes of model copies; it once survived overnight and froze the machine).
+    /// Last `Speak` — the worker is reaped after sitting idle (~500 MB RSS).
     tts_used: Option<std::time::Instant>,
-    tts_cb_used: Option<std::time::Instant>,
 }
 
 /// Per-engine launch options chosen in the launcher (empty = engine default).
@@ -119,10 +114,7 @@ impl Engine {
             brain_watchers: HashMap::new(),
             tts: None,
             tts_dead: false,
-            tts_cb: None,
-            tts_cb_dead: false,
             tts_used: None,
-            tts_cb_used: None,
         })
     }
 
@@ -200,12 +192,7 @@ impl Engine {
             Command::SaveReview { tab, content } => self.save_review(tab, &content),
             Command::LoadPanel { tab } => self.load_panel(tab),
             Command::LoadReviewDoc { tab } => self.load_review_doc(tab),
-            Command::Speak {
-                id,
-                text,
-                backend,
-                intensity,
-            } => self.speak(id, text, backend, intensity),
+            Command::Speak { id, text } => self.speak(id, text),
             Command::SetClaudePermission { mode } => {
                 let mode = if CLAUDE_PERM_MODES.contains(&mode.as_str()) {
                     mode
@@ -898,20 +885,10 @@ impl Engine {
         if reaped {
             self.persist_layout(None);
         }
-        // Idle-reap TTS workers (runs on every command, so at least at the
-        // notification-poll cadence). Dropping closes stdin → workers exit cleanly.
-        // Dead-latches reset too, so the next use after a reap respawns fresh.
-        const CB_IDLE: std::time::Duration = std::time::Duration::from_secs(300);
+        // Idle-reap the TTS worker (runs on every command, so at least at the
+        // notification-poll cadence). Dropping closes stdin → the worker exits
+        // cleanly; the dead-latch resets so the next use respawns fresh.
         const KOKORO_IDLE: std::time::Duration = std::time::Duration::from_secs(900);
-        if self.tts_cb.is_some() && self.tts_cb_used.is_some_and(|t| t.elapsed() > CB_IDLE) {
-            self.tts_cb = None;
-            self.tts_cb_used = None;
-            self.tts_cb_dead = false;
-            self.emit(Event::Notice {
-                tab: None,
-                message: "chatterbox pool released (idle 5m) — reselect 🎭 to re-warm".into(),
-            });
-        }
         if self.tts.is_some() && self.tts_used.is_some_and(|t| t.elapsed() > KOKORO_IDLE) {
             self.tts = None;
             self.tts_used = None;
@@ -1194,7 +1171,10 @@ impl Engine {
     /// `"chatterbox"` (emotion dial) reroutes to kokoro when unavailable; a kokoro
     /// failure emits an empty `Event::Speech` so the frontend falls back to the
     /// system voice instead of waiting forever.
-    fn speak(&mut self, id: String, text: String, backend: Option<String>, intensity: Option<f32>) {
+    /// Journey narration: synthesize `text` on the lazy local kokoro worker. Any
+    /// failure path emits an empty `Event::Speech` so the frontend falls back to the
+    /// system voice instead of waiting forever.
+    fn speak(&mut self, id: String, text: String) {
         let fallback = |sink: &EventSink, id: String| {
             sink(Event::Speech {
                 id,
@@ -1202,61 +1182,6 @@ impl Engine {
                 more: false,
             })
         };
-        // Chatterbox path (reroutes to kokoro on any unavailability).
-        if backend.as_deref() == Some("chatterbox") && !self.tts_cb_dead {
-            self.tts_cb_used = Some(std::time::Instant::now());
-            if self.tts_cb.is_none() {
-                match crate::tts::TtsPool::spawn_chatterbox(self.sink.clone()) {
-                    Ok(t) => {
-                        self.tts_cb = Some(t);
-                        self.emit(Event::Notice {
-                            tab: None,
-                            message: format!(
-                                "🎭 chatterbox warming up ({} workers, ~15s; \
-                                 log: /tmp/pear-tts-chatterbox.log)",
-                                crate::tts::TtsPool::pool_size()
-                            ),
-                        });
-                    }
-                    Err(e) => {
-                        self.tts_cb_dead = true;
-                        self.emit(Event::Notice {
-                            tab: None,
-                            message: format!("chatterbox unavailable ({e}) — using kokoro"),
-                        });
-                    }
-                }
-            }
-            if let Some(t) = self.tts_cb.as_mut() {
-                if t.speak(&id, &text, intensity, None).is_ok() {
-                    return;
-                }
-                // Whole pool died (MPS can SIGBUS under GPU contention) — respawn ONCE
-                // and retry this request; latch dead only if the respawn also fails.
-                self.tts_cb = None;
-                let retried = crate::tts::TtsPool::spawn_chatterbox(self.sink.clone())
-                    .ok()
-                    .and_then(|mut t2| t2.speak(&id, &text, intensity, None).ok().map(|()| t2));
-                match retried {
-                    Some(t2) => {
-                        self.emit(Event::Notice {
-                            tab: None,
-                            message: "chatterbox pool crashed — respawned (re-warming ~15s)".into(),
-                        });
-                        self.tts_cb = Some(t2);
-                        return;
-                    }
-                    None => {
-                        self.tts_cb_dead = true; // gone for good this session
-                        self.emit(Event::Notice {
-                            tab: None,
-                            message: "chatterbox keeps dying — narration falls back to kokoro"
-                                .into(),
-                        });
-                    }
-                }
-            }
-        }
         if self.tts_dead {
             fallback(&self.sink, id);
             return;
@@ -1277,7 +1202,7 @@ impl Engine {
             }
         }
         if let Some(t) = self.tts.as_mut() {
-            if t.speak(&id, &text, None, None).is_err() {
+            if t.speak(&id, &text).is_err() {
                 // Worker gone mid-flight; its reader thread already notified.
                 self.tts = None;
                 self.tts_dead = true;

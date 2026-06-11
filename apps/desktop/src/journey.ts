@@ -7,8 +7,8 @@
 //     the timeline fits the voice, never the reverse
 //   · written vs spoken register: the dialog shows labels/fragments; the voice speaks
 //     full sentences (never reads the UI aloud)
-// The in-app voice engine is the webview's native speechSynthesis (instant, offline);
-// the skill's Qwen3/Kokoro path stays the offline-render analog.
+// The in-app voice engine is a local Kokoro-82M worker (the skill's fast backend);
+// the webview's speechSynthesis is only the last-resort fallback.
 //
 // The reviewer doesn't just watch: ␣ selects/deselects the current finding into THEIR
 // review, the diff around each finding renders inline, and ⏎E exports the draft.
@@ -141,9 +141,9 @@ export interface JourneyOpts {
   getDiff: () => string | null;
   /** Ask the main window to fetch the diff (it owns the GitHub client). */
   requestDiff: () => void;
-  /** Ask the backend (via the main window) to synthesize narration — Kokoro or
-   *  Chatterbox (emotion dial). The WAV comes back through `JourneyHandle.handleSpeech`. */
-  requestTts: (id: string, text: string, backend: string, intensity: number) => void;
+  /** Ask the backend (via the main window) to synthesize narration (kokoro).
+   *  The WAV comes back through `JourneyHandle.handleSpeech`. */
+  requestTts: (id: string, text: string) => void;
   onAsk: (f: RdFinding, text: string) => void;
   onExport: (markdown: string, count: number) => void;
 }
@@ -167,36 +167,9 @@ export function startJourney(
   for (const id of selected) handle.setSelected(id, true);
   let idx = 0;
   let voiceOn = localStorage.getItem("pear.journey.voice") !== "0";
-  // Narration backend: kokoro (fast, neutral) or chatterbox (the skill's v5 emotion
-  // dial — severity drives the exaggeration, see intensityFor).
-  let ttsBackend = localStorage.getItem("pear.journey.tts") === "chatterbox" ? "chatterbox" : "kokoro";
   let autoOn = false;
   let parsedDiff: DFile[] | null = null;
 
-  /** The emotion dial: how theatrically a beat is narrated (chatterbox only).
-   *  0.25 deadpan · 0.5 neutral · 1.0 theatrical — severity earns drama. */
-  const intensityFor = (s: Step): number => {
-    switch (s.kind) {
-      case "arrival":
-        return 0.6; // welcoming
-      case "departure":
-        return 0.55;
-      case "chapter": {
-        const r = doc.understanding.walkthrough[s.beatIdx]?.risk;
-        return r === "high" ? 0.7 : r === "medium" ? 0.55 : 0.45;
-      }
-      case "finding":
-        if (s.f.type === "praise") return 0.7; // warm
-        if (s.f.type === "question") return 0.55; // curious
-        return s.f.severity === "blocker"
-          ? 0.92 // alarmed
-          : s.f.severity === "fix_before_merge"
-            ? 0.72
-            : s.f.severity === "follow_up"
-              ? 0.5
-              : 0.38; // nits stay deadpan
-    }
-  };
 
   handle.setJourneyMode(true);
   if (!opts.getDiff()) opts.requestDiff();
@@ -208,10 +181,8 @@ export function startJourney(
     <div class="jr-top">
       <span class="jr-progress"></span>
       <span class="jr-selcount"></span>
-      <span class="jr-preload hidden"><span class="jr-pre-label"></span><span class="jr-pre-track"><span class="jr-pre-fill"></span></span></span>
       <span class="jr-spacer"></span>
       <button class="jr-btn jr-voice" title="toggle narration (V)"></button>
-      <button class="jr-btn jr-tts" title="narration voice: kokoro (fast) / chatterbox (emotion dial — severity earns drama) (B)"></button>
       <button class="jr-btn jr-auto" title="auto-play: advance when narration ends (A)"></button>
       <button class="jr-btn jr-keys" title="key bindings (?)">⌨ keys</button>
       <button class="jr-btn jr-exit" title="exit journey (esc)">✕ exit</button>
@@ -231,7 +202,6 @@ export function startJourney(
         <kbd>←</kbd><span>previous step</span>
         <kbd>␣</kbd><span>select / deselect finding → your review</span>
         <kbd>V</kbd><span>voice narration on/off</span>
-        <kbd>B</kbd><span>voice backend: kokoro ↔ chatterbox (emotion dial)</span>
         <kbd>A</kbd><span>auto-play (advance when narration ends)</span>
         <kbd>D</kbd><span>open the full detail card</span>
         <kbd>E</kbd><span>export your review draft</span>
@@ -245,10 +215,9 @@ export function startJourney(
   const legend = $(".jr-legend");
 
   // ── narration engine ───────────────────────────────────────────────────────────
-  // Kokoro replies with ONE wav; chatterbox is ~realtime, so it STREAMS one wav per
-  // sentence — the player runs a chunk queue (start speaking after sentence one).
-  // A priority scheduler keeps exactly ONE request in flight: the current step always
-  // beats prefetch, and superseded wants are simply dropped (no FIFO starvation).
+  // The player runs a chunk queue (the protocol supports streamed multi-chunk
+  // replies; kokoro sends one). A priority scheduler keeps exactly ONE request in
+  // flight: the current step beats prefetch, superseded wants are dropped.
   let autoTimer = 0;
   let audio: HTMLAudioElement | null = null;
   interface CacheEntry {
@@ -266,15 +235,10 @@ export function startJourney(
   interface TtsReq {
     id: string;
     text: string;
-    intensity: number;
   }
-  // Up to 4 requests in flight on chatterbox (the backend runs a worker POOL — model
-  // copies synthesize in parallel); kokoro is near-instant, one is plenty.
   const inFlight = new Set<string>();
-  const flightLimit = () => (ttsBackend === "chatterbox" ? 4 : 1);
   let wantNow: TtsReq | null = null; // current step — priority
   let wantNext: TtsReq | null = null; // prefetch — best effort
-  let wantBulk: TtsReq[] = []; // background preload of the whole journey (chatterbox)
 
   const nid = (s: string) => {
     let h = 5381;
@@ -283,59 +247,19 @@ export function startJourney(
   };
   const reqFor = (i: number): TtsReq => {
     const text = narrationFor(doc, steps[i], selected);
-    const intensity = intensityFor(steps[i]);
-    return { id: nid(`${ttsBackend}:${intensity}:${text}`), text, intensity };
+    return { id: nid(text), text };
   };
-  // Drop the galaxy to half-rate rendering while chatterbox is on the GPU.
-  const syncPower = () => handle.setLowPower(inFlight.size > 0 && ttsBackend === "chatterbox");
   const pump = () => {
-    if (!ttsDead) {
-      while (inFlight.size < flightLimit()) {
-        const r = wantNow ?? wantNext ?? wantBulk[0] ?? null;
-        if (!r) break;
-        if (r === wantNow) wantNow = null;
-        else if (r === wantNext) wantNext = null;
-        else wantBulk.shift();
-        if (ttsCache.get(r.id)?.done || inFlight.has(r.id)) continue; // cached/dup — next
-        inFlight.add(r.id);
-        opts.requestTts(r.id, r.text, ttsBackend, r.intensity);
-      }
-    }
-    syncPower();
+    if (ttsDead || inFlight.size > 0) return;
+    const r = wantNow ?? wantNext ?? null;
+    if (!r) return;
+    if (r === wantNow) wantNow = null;
+    else wantNext = null;
+    if (ttsCache.get(r.id)?.done || inFlight.has(r.id)) return pump(); // cached — next
+    inFlight.add(r.id);
+    opts.requestTts(r.id, r.text);
   };
 
-  // ── background preload (the whole journey's narration, chatterbox) ──
-  // Departure is excluded — its narration depends on the selection count.
-  const preloadable = (): number[] =>
-    steps.map((s, i) => (s.kind === "departure" ? -1 : i)).filter((i) => i >= 0);
-  const startPreload = () => {
-    wantBulk = [];
-    for (const i of preloadable()) {
-      const r = reqFor(i);
-      if (!ttsCache.get(r.id)?.done && !inFlight.has(r.id)) wantBulk.push(r);
-    }
-    updatePreloadUi();
-    pump();
-  };
-  const cancelPreload = () => {
-    wantBulk = [];
-    updatePreloadUi();
-  };
-  const updatePreloadUi = () => {
-    const el = hud.querySelector<HTMLElement>(".jr-preload");
-    if (!el) return;
-    const ids = preloadable().map((i) => reqFor(i).id);
-    const done = ids.filter((id) => ttsCache.get(id)?.done).length;
-    const active = ttsBackend === "chatterbox" && done < ids.length && (wantBulk.length > 0 || inFlight.size > 0);
-    if (!active) {
-      el.classList.toggle("hidden", true);
-      return;
-    }
-    el.classList.remove("hidden");
-    el.querySelector(".jr-pre-label")!.textContent = `🎭 caching ${done}/${ids.length}`;
-    (el.querySelector(".jr-pre-fill") as HTMLElement).style.width =
-      `${Math.round((done / Math.max(ids.length, 1)) * 100)}%`;
-  };
 
   const onNarrationEnd = () => {
     if (autoOn && idx < steps.length - 1) autoTimer = window.setTimeout(() => go(idx + 1), 450);
@@ -387,27 +311,24 @@ export function startJourney(
     utter.onend = onNarrationEnd;
     speechSynthesis.speak(utter);
   };
-  const narrate = (text: string, intensity: number) => {
+  const narrate = (text: string) => {
     stopNarration();
     if (!voiceOn) return;
-    const id = nid(`${ttsBackend}:${intensity}:${text}`);
+    const id = nid(text);
     const entry = ttsCache.get(id);
     if (entry?.failed || ttsDead) return sysSpeak(text);
     // Attach the player to this id — cached/streamed chunks play in order.
     play = { id, queue: [...(entry?.chunks ?? [])], playing: false, done: entry?.done ?? false };
     playNextChunk();
     if (!entry?.done && !inFlight.has(id)) {
-      wantNow = { id, text, intensity };
+      wantNow = { id, text };
       pump();
     }
     if (!entry?.done) {
       // Don't leave silence forever (first synth includes the one-time model load).
-      fallbackTimer = window.setTimeout(
-        () => {
-          if (play?.id === id && !play.playing && play.queue.length === 0) sysSpeak(text);
-        },
-        ttsBackend === "chatterbox" ? 45000 : 15000,
-      );
+      fallbackTimer = window.setTimeout(() => {
+        if (play?.id === id && !play.playing && play.queue.length === 0) sysSpeak(text);
+      }, 15000);
     }
   };
   /** Queue a prefetch of step `i` (one ahead) — never preempts the current step. */
@@ -435,9 +356,7 @@ export function startJourney(
     }
     if (inFlight.has(id) && !more) {
       inFlight.delete(id);
-      syncPower();
       pump(); // serve the next want (current step first)
-      updatePreloadUi();
     }
     if (play?.id === id) {
       if (b64) {
@@ -520,8 +439,6 @@ export function startJourney(
     $(".jr-progress").textContent = `${idx + 1} / ${steps.length}`;
     $(".jr-selcount").textContent = selected.size ? `✓ ${selected.size} in your review` : "";
     $(".jr-voice").textContent = voiceOn ? "🔊 voice on" : "🔇 voice off";
-    $(".jr-tts").textContent = ttsBackend === "chatterbox" ? "🎭 chatterbox" : "🎙 kokoro";
-    $(".jr-tts").classList.toggle("on", ttsBackend === "chatterbox");
     $(".jr-auto").textContent = autoOn ? "▶ auto" : "⏸ manual";
     $(".jr-auto").classList.toggle("on", autoOn);
     $(".jr-voice").classList.toggle("on", voiceOn);
@@ -616,7 +533,7 @@ export function startJourney(
       card.appendChild(ex);
     }
     refreshHud();
-    narrate(narrationFor(doc, s, selected), intensityFor(s));
+    narrate(narrationFor(doc, s, selected));
     prefetch(idx + 1); // warm the next beat so navigation is gapless
   };
 
@@ -680,25 +597,14 @@ export function startJourney(
         voiceOn = !voiceOn;
         localStorage.setItem("pear.journey.voice", voiceOn ? "1" : "0");
         if (!voiceOn) stopNarration();
-        else narrate(narrationFor(doc, steps[idx], selected), intensityFor(steps[idx]));
+        else narrate(narrationFor(doc, steps[idx], selected));
         refreshHud();
         break;
       case "a":
       case "A":
         autoOn = !autoOn;
         refreshHud();
-        if (autoOn && voiceOn) narrate(narrationFor(doc, steps[idx], selected), intensityFor(steps[idx]));
-        break;
-      case "b":
-      case "B":
-        ttsBackend = ttsBackend === "kokoro" ? "chatterbox" : "kokoro";
-        localStorage.setItem("pear.journey.tts", ttsBackend);
-        refreshHud();
-        if (voiceOn) narrate(narrationFor(doc, steps[idx], selected), intensityFor(steps[idx]));
-        // Chatterbox is ~realtime — pre-cache the whole journey in the background
-        // (current step always outranks the bulk queue).
-        if (ttsBackend === "chatterbox" && voiceOn) startPreload();
-        else cancelPreload();
+        if (autoOn && voiceOn) narrate(narrationFor(doc, steps[idx], selected));
         break;
       case "d":
       case "D": {
@@ -722,7 +628,6 @@ export function startJourney(
   $(".jr-prev").addEventListener("click", () => go(idx - 1));
   $(".jr-next").addEventListener("click", () => go(idx + 1));
   $(".jr-voice").addEventListener("click", () => onKey(new KeyboardEvent("keydown", { key: "v" })));
-  $(".jr-tts").addEventListener("click", () => onKey(new KeyboardEvent("keydown", { key: "b" })));
   $(".jr-auto").addEventListener("click", () => onKey(new KeyboardEvent("keydown", { key: "a" })));
   $(".jr-keys").addEventListener("click", () => legend.classList.toggle("hidden"));
   $(".jr-exit").addEventListener("click", () => exit());
@@ -735,7 +640,6 @@ export function startJourney(
     clearTimeout(autoTimer);
     stopNarration();
     document.removeEventListener("keydown", onKey);
-    handle.setLowPower(false);
     handle.setJourneyMode(false);
     hud.remove();
   };
@@ -747,8 +651,6 @@ export function startJourney(
     window.setTimeout(() => legend.classList.add("hidden"), 6000);
   }
   renderStep();
-  // Journey starts on chatterbox → pre-cache every beat right away (progress in HUD).
-  if (ttsBackend === "chatterbox" && voiceOn) startPreload();
   return { exit, handleSpeech };
 }
 

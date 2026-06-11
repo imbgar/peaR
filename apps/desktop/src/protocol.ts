@@ -228,7 +228,7 @@ export type Command =
   | { type: "summarize_diff"; tab: number; path?: string }
   | { type: "fetch_image"; url: string }
   | { type: "load_review_doc"; tab: number }
-  | { type: "speak"; id: string; text: string; backend?: string; intensity?: number };
+  | { type: "speak"; id: string; text: string };
 
 export interface FileSummary {
   path: string;

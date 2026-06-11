@@ -103,9 +103,6 @@ export interface MapHandle {
   setSelected: (findingId: string, on: boolean) => void;
   /** Open the detail card for a finding (same card the click path uses). */
   showDetail: (f: RdFinding) => void;
-  /** Half-rate rendering while local TTS is synthesizing — chatterbox's MPS compute
-   *  and the bloom pass share the GPU, and the voice matters more than 60 fps. */
-  setLowPower: (on: boolean) => void;
 }
 
 // One live scene at a time — torn down before every render (and when detached).
@@ -277,8 +274,6 @@ export function renderReviewMap(
   const planetByIdx: THREE.Object3D[] = [];
   const selShells = new Map<string, THREE.Mesh>();
   let journeyPaused = false;
-  let lowPower = false;
-  let frameNo = 0;
   // Camera focus: follow `obj` (or a fixed point); the flight lerps the camera in for
   // `flight` seconds, after which the user orbits freely while the target stays pinned.
   let focusState: { obj: THREE.Object3D | null; pos: THREE.Vector3; dist: number; flight: number } | null =
@@ -481,11 +476,8 @@ export function renderReviewMap(
       }
     }
     controls.update();
-    frameNo++;
-    if (!lowPower || frameNo % 2 === 0) {
-      composer.render();
-      labelRenderer.render(scene, camera);
-    }
+    composer.render();
+    labelRenderer.render(scene, camera);
   };
 
   // Resize with the panel.
@@ -579,9 +571,6 @@ export function renderReviewMap(
       selShells.set(id, shell);
     },
     showDetail: (f) => detail.show(f),
-    setLowPower(on) {
-      lowPower = on;
-    },
   };
 }
 
