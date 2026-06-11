@@ -41,6 +41,10 @@ const SKILLS: &[(&str, &str)] = &[
         "pr-coreview",
         include_str!("../../../plugins/pear-review/skills/pr-coreview/SKILL.md"),
     ),
+    (
+        "pr-tandem",
+        include_str!("../../../plugins/pear-review/skills/pr-tandem/SKILL.md"),
+    ),
 ];
 
 fn skills_root() -> Result<PathBuf> {
@@ -81,7 +85,7 @@ mod tests {
 
     #[test]
     fn embeds_all_bundled_skills() {
-        assert_eq!(SKILLS.len(), 7);
+        assert_eq!(SKILLS.len(), 8);
         for (name, body) in SKILLS {
             assert!(name.starts_with("pr-"), "{name} not a pr- skill");
             assert!(body.contains("name:"), "{name} missing frontmatter");
@@ -93,7 +97,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::env::set_var("HOME", tmp.path());
         let n = install_skills().unwrap();
-        assert_eq!(n, 7);
+        assert_eq!(n, 8);
         assert!(skills_installed());
         assert!(tmp
             .path()

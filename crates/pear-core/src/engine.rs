@@ -172,6 +172,14 @@ impl Engine {
                 claude_tier,
                 codex_tier,
             } => self.start_co_review(tab, first, claude_tier, codex_tier),
+            Command::StartTandemReview {
+                tab,
+                prs,
+                claude_tier,
+                co,
+                first,
+                codex_tier,
+            } => self.start_tandem_review(tab, prs, claude_tier, co, first, codex_tier),
             Command::SaveReview { tab, content } => self.save_review(tab, &content),
             Command::LoadPanel { tab } => self.load_panel(tab),
             Command::SetClaudePermission { mode } => {
@@ -992,6 +1000,61 @@ impl Engine {
             self.emit(Event::Notice {
                 tab: Some(tab),
                 message: format!("co-review: {e}"),
+            });
+        }
+    }
+
+    /// Type the `/pr-tandem` group-review macro into a CLAUDE tab (the skill maps the
+    /// PRs' relationships, reviews each in group context, and — under `co` — runs the
+    /// two-engine pipeline over the whole group). Claude-only, like `start_co_review`.
+    fn start_tandem_review(
+        &mut self,
+        tab: TabId,
+        prs: Vec<PrRef>,
+        claude_tier: ReviewTier,
+        co: bool,
+        first: Option<CliKind>,
+        codex_tier: Option<ReviewTier>,
+    ) {
+        let cli = match self.tabs.get(&tab) {
+            Some(t) => t.cli,
+            None => {
+                self.emit(Event::Notice {
+                    tab: Some(tab),
+                    message: "tandem: unknown tab".into(),
+                });
+                return;
+            }
+        };
+        if cli != CliKind::Claude {
+            self.emit(Event::Notice {
+                tab: Some(tab),
+                message: format!("tandem review needs a claude tab (this is {:?})", cli),
+            });
+            return;
+        }
+        if prs.is_empty() {
+            self.emit(Event::Notice {
+                tab: Some(tab),
+                message: "tandem: no PRs given".into(),
+            });
+            return;
+        }
+        let keys = dispatch::tandem_keystrokes(
+            &prs,
+            claude_tier,
+            co,
+            first.unwrap_or(CliKind::Claude),
+            codex_tier.unwrap_or(claude_tier),
+        );
+        let err = self
+            .tabs
+            .get_mut(&tab)
+            .and_then(|t| t.session.write_then_submit(keys.as_bytes()).err());
+        if let Some(e) = err {
+            self.emit(Event::Notice {
+                tab: Some(tab),
+                message: format!("tandem: {e}"),
             });
         }
     }

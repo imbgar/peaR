@@ -798,8 +798,9 @@ function renderToolbar() {
 /** Open a PR tab. Default = resume the PR's most recent session; `fresh` forces a
  *  new one; `session_id` resumes that exact session. */
 // A review to auto-run on the next opened PR tab: a tier, "ultra" (the paid cloud
-// review, dispatched as a button), or "coreview" (the two-engine pipeline skill).
-type LaunchReview = ReviewTier | "ultra" | "coreview";
+// review, dispatched as a button), "coreview" (the two-engine pipeline skill), or
+// "tandem" (the group-of-related-PRs skill, fed from `pendingTandem`).
+type LaunchReview = ReviewTier | "ultra" | "coreview" | "tandem";
 // Auto-review intent for the NEXT tab to open, set per-open so it only applies to
 // a fresh Open-box launch — never to a Resume / session-restore.
 let pendingAutoReview: LaunchReview | null = null;
@@ -852,6 +853,137 @@ function startCoReview(pr: PrRef) {
   openPr(pr, "claude", { fresh: true, autoReview: "coreview" });
 }
 
+// ── tandem review (a GROUP of related PRs, reviewed AS a group) ───────────────────
+// One claude tab (anchored on the first PR) runs the /pr-tandem skill over the whole
+// set: it maps how the PRs relate (stacking, shared files, cross-PR contracts), reviews
+// each in that context, surfaces cross-PR findings, and recommends a merge order.
+// `co` runs the group through the two-engine co-review pipeline instead of claude alone.
+let pendingTandem: { prs: PrRef[]; co: boolean } | null = null;
+
+function startTandem(prs: PrRef[], co: boolean) {
+  if (!prs.length) return;
+  pendingTandem = { prs, co };
+  setStatus(
+    `tandem review: ${prs.map((p) => `#${p.number}`).join(" + ")} as a group${co ? " (co-review pipeline)" : ""}`,
+  );
+  openPr(prs[0], "claude", { fresh: true, autoReview: "tandem" });
+}
+
+/** The ⋔ modal: a manual multi-select of PRs — input boxes with "+ add" for more. */
+function openTandemModal() {
+  const scrim = document.createElement("div");
+  scrim.className = "pop-scrim";
+  const card = document.createElement("div");
+  card.className = "tile-confirm tandem-card";
+  const title = document.createElement("div");
+  title.className = "tc-msg";
+  title.innerHTML = `<b>⋔ Tandem review</b> — review a group of <b>related</b> PRs as a group: how they stack, shared files, cross-PR contracts, merge order.`;
+  const modeRow = document.createElement("div");
+  modeRow.className = "tandem-mode";
+  const modeLabel = document.createElement("span");
+  modeLabel.textContent = "Reviewer";
+  const modeSel = document.createElement("select");
+  modeSel.className = "tandem-mode-sel";
+  modeSel.add(new Option(`claude · ${coreviewDepth(String(selectedTier ?? "standard"))}`, "single"));
+  modeSel.add(new Option("co-review pipeline (claude ⇄ codex)", "co"));
+  modeRow.append(modeLabel, modeSel);
+  const rows = document.createElement("div");
+  rows.className = "tandem-rows";
+
+  const addRow = (value = "") => {
+    const row = document.createElement("div");
+    row.className = "tandem-row";
+    const input = document.createElement("input");
+    input.className = "tandem-input";
+    input.placeholder = "owner/repo#123  ·  or a GitHub URL";
+    input.spellcheck = false;
+    input.value = value;
+    // Typing in the last row sprouts a fresh one; Enter from any row launches.
+    input.addEventListener("input", () => {
+      input.classList.remove("bad");
+      if (row === rows.lastElementChild && input.value.trim()) addRow();
+    });
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        launch();
+      }
+    });
+    const del = document.createElement("button");
+    del.className = "tandem-del";
+    del.title = "Remove";
+    del.textContent = "✕";
+    del.onclick = () => {
+      row.remove();
+      if (!rows.children.length) addRow();
+    };
+    row.append(input, del);
+    rows.appendChild(row);
+    return input;
+  };
+
+  const actions = document.createElement("div");
+  actions.className = "tc-actions";
+  const more = document.createElement("button");
+  more.className = "tc-cancel";
+  more.textContent = "+ Add PR";
+  more.onclick = () => addRow().focus();
+  const cancel = document.createElement("button");
+  cancel.className = "tc-cancel";
+  cancel.textContent = "Cancel";
+  const ok = document.createElement("button");
+  ok.className = "primary tc-ok";
+  ok.textContent = "⋔ Review as group";
+  actions.append(more, cancel, ok);
+  card.append(title, modeRow, rows, actions);
+  scrim.appendChild(card);
+
+  const close = () => {
+    scrim.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  const launch = () => {
+    const inputs = [...rows.querySelectorAll<HTMLInputElement>(".tandem-input")];
+    const prs: PrRef[] = [];
+    let bad = false;
+    for (const inp of inputs) {
+      const v = inp.value.trim();
+      if (!v) continue;
+      const pr = parsePrRef(v);
+      if (pr && !prs.some((p) => p.owner === pr.owner && p.repo === pr.repo && p.number === pr.number)) {
+        prs.push(pr);
+      } else if (!pr) {
+        inp.classList.add("bad");
+        bad = true;
+      }
+    }
+    if (bad) return; // invalid rows are flagged red — fix or clear them
+    if (prs.length < 2) {
+      setStatus("⚠ tandem reviews a GROUP — enter at least two related PRs", true);
+      return;
+    }
+    close();
+    prInput.value = "";
+    startTandem(prs, modeSel.value === "co");
+  };
+  const onKey = (ev: KeyboardEvent) => {
+    if (ev.key === "Escape") close();
+  };
+  cancel.onclick = close;
+  ok.onclick = launch;
+  scrim.addEventListener("click", (ev) => {
+    if (ev.target === scrim) close();
+  });
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(scrim);
+  positionPopover(card); // centered (no anchor)
+
+  // Seed: the launcher box's PR (if any) in row 1, then an empty row ready for the next.
+  const seeded = addRow(parsePrRef(prInput.value) ? prInput.value.trim() : "");
+  addRow();
+  (seeded.value ? rows.children[1]?.querySelector("input") ?? seeded : seeded).focus();
+}
+
 // ── auto-review readiness ─────────────────────────────────────────────────────
 // Fire the review when the agent's boot output goes QUIET (prompt rendered, idle),
 // not on a fixed delay that can type into a not-yet-ready CLI. Bounded by a min (don't
@@ -874,7 +1006,20 @@ function fireReview(tab: number) {
   const agent = v ? resolveAgent(v) : undefined;
   setStatus(`auto-review (${p.sel}) → ${v?.title ?? `tab ${tab}`}`);
   if (p.sel === "ultra") send({ type: "button", tab, button: "ultra", agent });
-  else if (p.sel === "coreview")
+  else if (p.sel === "tandem") {
+    const t = pendingTandem;
+    pendingTandem = null;
+    if (!t) return;
+    send({
+      type: "start_tandem_review",
+      tab,
+      prs: t.prs,
+      claude_tier: coreviewDepth(t.co ? prefs.coReviewClaudeTier : String(selectedTier ?? "standard")),
+      co: t.co,
+      first: prefs.coReviewOrder === "codex_claude" ? "codex" : "claude",
+      codex_tier: coreviewDepth(prefs.coReviewCodexTier),
+    });
+  } else if (p.sel === "coreview")
     send({
       type: "start_co_review",
       tab,
@@ -4352,6 +4497,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     startCoReview(pr);
     prInput.value = "";
   });
+
+  $("#tandem-btn").addEventListener("click", () => openTandemModal());
 
   $("#new-shell").addEventListener("click", () =>
     send({ type: "open_scratch", cli: "shell", cwd: null }),

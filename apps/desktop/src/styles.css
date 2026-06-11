@@ -1049,6 +1049,30 @@ body.tiling-drag .terminal-host { cursor: grabbing; }
 }
 .tc-cancel:hover { color: var(--tx); border-color: var(--accent-d); }
 
+/* ── tandem review modal (⋔): manual multi-select of PRs ── */
+.tandem-card { width: 420px; }
+.tandem-mode { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.tandem-mode span { font-family: var(--font-ui); font-size: 12px; color: var(--dim); }
+.tandem-mode-sel {
+  flex: 1; background: var(--bg); border: 1px solid var(--bd2); border-radius: var(--r-sm);
+  color: var(--tx); font-family: var(--font-ui); font-size: 12px; padding: 5px 8px; outline: none;
+}
+.tandem-mode-sel:focus { border-color: var(--accent-d); }
+.tandem-rows { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; max-height: 40vh; overflow-y: auto; }
+.tandem-row { display: flex; align-items: center; gap: 6px; }
+.tandem-input {
+  flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--bd2);
+  border-radius: var(--r-sm); color: var(--tx); font-family: var(--font-mono);
+  font-size: 12px; padding: 6px 9px; outline: none;
+}
+.tandem-input:focus { border-color: var(--accent-d); }
+.tandem-input.bad { border-color: var(--red, #e5534b); }
+.tandem-del {
+  background: transparent; border: none; color: var(--dim); font-size: 12px;
+  padding: 4px 6px; cursor: pointer; border-radius: var(--r-sm);
+}
+.tandem-del:hover { color: var(--tx); background: var(--elev2, rgba(255,255,255,0.06)); }
+
 #panel {
   border-left: 1px solid var(--bd);
   background: var(--panel);
