@@ -1,23 +1,23 @@
-// The peaRview review map — ANIMATED ASCII (replaces the WebGL galaxy; step 3 of
-// docs/PEARVIEW.md, take 3). Terminal-native to the bone: the whole scene is a
-// character grid rendered to canvas through a glyph atlas, full redraw every frame,
-// uncapped requestAnimationFrame (M-series sustains 60-120 fps).
+// The peaRview review map — 3D ANIMATED ASCII (step 3 of docs/PEARVIEW.md, take 4).
+// donut.c's spirit, scaled up: a true 3D scene perspective-projected onto a character
+// grid through a glyph atlas, full redraw every frame on uncapped rAF.
 //
 // The math is the visual design:
-//   · BACKGROUND — a live Julia set, c(t) drifting along the cardioid's rim, rendered
-//     as an escape-time luminance ramp in two deep-space tones (fractal geometry,
-//     literally, morphing in real time)
-//   · LAYOUT — golden-angle phyllotaxis at EVERY scale (self-similar): beats spiral
-//     around the verdict core exactly as findings spiral around their beat
-//   · NODES — glyph-ramp discs: the same ramp law renders the core, planets, and
-//     moons at their own radii (fractal self-similarity again)
-//   · EDGES — Bresenham character lines with phase-animated flow (data streams)
-// Encoding unchanged from the galaxy: color = type · size = severity · pulse =
-// blocker · orbiting / | \ - = engine-disputed · "?" = question · "+" = praise ·
-// gold brackets = selected. Click a node → the detail card. Drag pans, wheel zooms.
-//
-// The journey drives this through the SAME MapHandle surface the galaxy exposed —
-// focus flights are now damped pan/zoom in grid space.
+//   · BACKGROUND — a live Julia set (c(t) drifting the cardioid rim) with camera
+//     parallax, escape-time luminance ramp in two deep-space tones
+//   · LAYOUTS (two, MORPHING — nodes lerp between 3D targets):
+//       ≋ flow  — a river through space: chapters are stations on a 3D-meandering
+//                 spine, findings fan off in the perpendicular plane (severity-major,
+//                 golden-angle), the stream debouches into the verdict basin
+//       ✿ orbit — spherical phyllotaxis at every scale: beats on a Fibonacci sphere
+//                 around the verdict core, findings on mini-spheres around their beat
+//   · PROJECTION — yaw/pitch orbit camera, perspective divide, painter's ordering,
+//     DEPTH CUEING (farther glyphs dim toward the void)
+//   · EDGES — 3D-sampled character lines with phase-animated flow running downstream
+// Encoding unchanged: color = type · size = severity · pulse = blocker · orbiting
+// / | \ - = engine-disputed · "?" = question · "+" = praise · gold [brackets] =
+// selected. DRAG ROTATES, wheel zooms, idle auto-spins, dblclick re-frames; click a
+// node → the detail card in the right rail (the graph is never covered).
 
 import type { RdFinding, ReviewDoc } from "./protocol";
 
@@ -75,6 +75,7 @@ const VERDICT_LABEL: Record<string, string> = {
 const DISC_RAMP = ["@", "%", "#", "*", "+", "=", ":", "·"];
 const BG_RAMP = " ··::;;==++xxXX##";
 const FLOW = "·∙•∙"; // edge phase chars
+const VOID = { r: 0x15, g: 0x19, b: 0x2a }; // what depth fades toward
 
 export interface MapCallbacks {
   onJump: (path: string, line: number | null) => void;
@@ -84,16 +85,17 @@ export interface MapCallbacks {
   stageHeight?: number;
 }
 
-/** A node in grid space (cells). Opaque to callers — the journey passes them back.
- *  `x/y` are the LIVE (lerped) position; `tx/ty` the current layout's target — so
- *  switching layouts morphs the whole graph instead of snapping. */
+/** A node in WORLD space (isotropic 3D units). `x/y/z` live (lerped), `t*` the
+ *  current layout's target — switching layouts morphs the graph instead of snapping. */
 export interface MapNode {
   id: string;
   kind: "core" | "beat" | "finding";
   x: number;
   y: number;
+  z: number;
   tx: number;
   ty: number;
+  tz: number;
   r: number;
   color: string;
   finding?: RdFinding;
@@ -104,7 +106,7 @@ export interface MapNode {
 export interface MapHandle {
   /** The right-rail element journey/detail cards dock into (graph stays visible). */
   side: HTMLElement;
-  /** Pan/zoom flight to a node; `zoom` = target magnification (default by kind). */
+  /** Camera flight to a node; `zoom` = target magnification (default by kind). */
   focus: (node: MapNode, zoom?: number) => void;
   focusWide: () => void;
   setJourneyMode: (on: boolean) => void;
@@ -136,6 +138,14 @@ function dockFindings(doc: ReviewDoc): Map<number, RdFinding[]> {
     (out.get(best) ?? out.set(best, []).get(best)!).push(f);
   }
   return out;
+}
+
+/** Spherical Fibonacci lattice point j of n on a sphere of radius r. */
+function sphereFib(j: number, n: number, r: number): [number, number, number] {
+  const y = n === 1 ? 0 : 1 - (2 * (j + 0.5)) / n;
+  const ring = Math.sqrt(Math.max(0, 1 - y * y));
+  const th = GOLDEN * j;
+  return [Math.cos(th) * ring * r, y * r, Math.sin(th) * ring * r];
 }
 
 export function renderReviewMap(
@@ -198,6 +208,7 @@ export function renderReviewMap(
   const FONT = 11;
   const CW = 6.6;
   const CH = 12;
+  const ASPECT = CH / CW; // a cell is ~1.8× taller than wide
   const SIDE_W = 380;
   let W = Math.max((host.clientWidth || 800) - SIDE_W - 12, 320);
   const H = cb.stageHeight ?? 470;
@@ -214,8 +225,7 @@ export function renderReviewMap(
   };
   sizeCanvas();
 
-  // Glyph atlas: one tiny pre-rendered tile per (char, color) — fillText is far too
-  // slow for a full-grid redraw; drawImage from the atlas isn't.
+  // Glyph atlas — fillText is far too slow for full-grid redraw; drawImage isn't.
   const atlas = new Map<string, HTMLCanvasElement>();
   const tile = (ch: string, color: string): HTMLCanvasElement => {
     const key = `${ch}|${color}`;
@@ -243,20 +253,22 @@ export function renderReviewMap(
     for (let i = 0; i < s.length; i++) put(col + i, row, s[i], color);
   };
 
-  // ── world layout: phyllotaxis at every scale (units = cells at zoom 1) ──
+  // ── world: nodes in isotropic 3D units ──
   const docked = dockFindings(doc);
   const beats = [...doc.understanding.walkthrough.map((b) => ({ title: b.title, body: b.body, risk: b.risk }))];
   if (docked.has(beats.length) || beats.length === 0)
     beats.push({ title: beats.length ? "other findings" : "findings", body: "", risk: "low" });
 
-  const mk = (partial: Omit<MapNode, "x" | "y" | "tx" | "ty">): MapNode => ({
-    ...partial,
+  const mk = (p: Omit<MapNode, "x" | "y" | "z" | "tx" | "ty" | "tz">): MapNode => ({
+    ...p,
     x: 0,
     y: 0,
+    z: 0,
     tx: 0,
     ty: 0,
+    tz: 0,
   });
-  const core = mk({ id: "__core__", kind: "core", r: 4.4, color: VERDICT_COLOR[state0] ?? "#3fb950" });
+  const core = mk({ id: "__core__", kind: "core", r: 4.2, color: VERDICT_COLOR[state0] ?? "#3fb950" });
   const beatNodes: MapNode[] = [];
   const findingNodes: MapNode[] = [];
   beats.forEach((b, i) => {
@@ -289,83 +301,129 @@ export function renderReviewMap(
   const moonByFid = new Map(findingNodes.map((n) => [n.id, n]));
   const beatOf = (n: MapNode): MapNode => beatNodes[n.beatIdx ?? 0];
 
-  // ── two layouts over the same nodes; targets lerp → switching MORPHS ──
-  // "orbit": phyllotaxis at every scale (core-centric).
-  // "flow":  a left→right river — chapters are stations on a meandering spine,
-  //          findings fan off as severity-ordered tributaries (most severe nearest
-  //          the spine), and the whole stream debouches into the verdict basin.
+  // ── two 3D layouts over the same nodes; targets lerp → switching MORPHS ──
   type LayoutMode = "flow" | "orbit";
   let layout: LayoutMode =
     (localStorage.getItem("pear.map.layout") as LayoutMode) === "orbit" ? "orbit" : "flow";
   const applyLayout = (mode: LayoutMode) => {
     layout = mode;
     localStorage.setItem("pear.map.layout", mode);
+    const perBeat = new Map<number, { j: number; n: number }>();
+    findingNodes.forEach((fn) => {
+      const i = fn.beatIdx ?? 0;
+      const e = perBeat.get(i) ?? { j: 0, n: 0 };
+      e.n++;
+      perBeat.set(i, e);
+    });
     if (mode === "orbit") {
-      core.tx = 0;
-      core.ty = 0;
+      // spherical phyllotaxis at every scale (self-similar)
+      core.tx = core.ty = core.tz = 0;
+      const R = 15 + beatNodes.length * 1.1;
       beatNodes.forEach((bn, i) => {
-        const ang = i * GOLDEN + 0.8;
-        const rad = 15 + 6.5 * Math.sqrt(i + 1);
-        bn.tx = Math.cos(ang) * rad * 1.9; // ×1.9: cells are taller than wide
-        bn.ty = Math.sin(ang) * rad;
+        const [x, y, z] = sphereFib(i, beatNodes.length, R);
+        bn.tx = x;
+        bn.ty = y;
+        bn.tz = z;
       });
-      const perBeat = new Map<number, number>();
       findingNodes.forEach((fn) => {
         const i = fn.beatIdx ?? 0;
-        const j = perBeat.get(i) ?? 0;
-        perBeat.set(i, j + 1);
+        const e = perBeat.get(i)!;
         const bn = beatNodes[i];
-        const fa = j * GOLDEN + i * 1.3;
-        const fr = bn.r + 3.2 + 1.8 * Math.sqrt(j + 0.5);
-        fn.tx = bn.tx + Math.cos(fa) * fr * 1.9;
-        fn.ty = bn.ty + Math.sin(fa) * fr;
+        const [x, y, z] = sphereFib(e.j, e.n, bn.r + 3.4 + 0.6 * Math.sqrt(e.j));
+        e.j++;
+        fn.tx = bn.tx + x;
+        fn.ty = bn.ty + y;
+        fn.tz = bn.tz + z;
       });
     } else {
-      // flow: stations along x, meandering y; verdict basin at the far right.
-      const STEP = 30;
-      const x0 = (-(beatNodes.length - 1) / 2) * STEP - 10;
+      // flow: a river through space — 3D meander, tributaries in the ⊥ plane
+      const STEP = 22;
+      const x0 = (-(beatNodes.length - 1) / 2) * STEP - 8;
       beatNodes.forEach((bn, i) => {
         bn.tx = x0 + i * STEP;
-        bn.ty = Math.sin(i * 0.9) * 7;
+        bn.ty = Math.sin(i * 0.9) * 6;
+        bn.tz = Math.cos(i * 0.7) * 7;
       });
-      core.tx = x0 + beatNodes.length * STEP + 6;
-      core.ty = Math.sin(beatNodes.length * 0.9) * 7;
-      const perBeat = new Map<number, number>();
+      core.tx = x0 + beatNodes.length * STEP + 4;
+      core.ty = Math.sin(beatNodes.length * 0.9) * 6;
+      core.tz = Math.cos(beatNodes.length * 0.7) * 7;
       findingNodes.forEach((fn) => {
         const i = fn.beatIdx ?? 0;
-        const j = perBeat.get(i) ?? 0;
-        perBeat.set(i, j + 1);
+        const e = perBeat.get(i)!;
         const bn = beatNodes[i];
-        const side = j % 2 ? 1 : -1; // alternate banks
-        const rank = Math.floor(j / 2);
-        fn.tx = bn.tx + (rank % 2 ? 5 : -4) + rank * 2.0;
-        fn.ty = bn.ty + side * (bn.r + 3.4 + rank * 2.6);
+        const phi = e.j * GOLDEN;
+        const rr = bn.r + 3.2 + 1.5 * Math.sqrt(e.j);
+        e.j++;
+        fn.tx = bn.tx + Math.sin(phi) * 1.8; // slight downstream stagger
+        fn.ty = bn.ty + Math.cos(phi) * rr;
+        fn.tz = bn.tz + Math.sin(phi) * rr;
       });
     }
   };
   applyLayout(layout);
-  // First paint starts AT the layout (no fly-in from origin).
   nodes.forEach((n) => {
     n.x = n.tx;
     n.y = n.ty;
+    n.z = n.tz;
   });
 
-  // ── camera (pan in world cells, zoom = magnification) ──
-  const extent = () => nodes.reduce((m, n) => Math.max(m, Math.abs(n.tx) / 1.6 + 10, Math.abs(n.ty) + 6), 20);
-  const fitZoom = () => Math.min(cols / (extent() * 2.2), rows / (extent() * 1.35));
-  const cam = { x: 0, y: 0, z: fitZoom() };
-  let camTarget: { x: number; y: number; z: number } | null = null;
+  // ── orbit camera: yaw/pitch around a target, perspective projection ──
+  const FOV = 42; // perspective strength (world units to the projection plane)
+  const extent = () =>
+    nodes.reduce((m, n) => Math.max(m, Math.abs(n.tx) + 8, Math.abs(n.ty) + 6, Math.abs(n.tz) + 6), 18);
+  const fitZoom = () => Math.min(cols / (extent() * 2.3), rows / (extent() * 1.28));
+  const cam = { x: 0, y: 0, z: 0, zoom: fitZoom(), yaw: 0.35, pitch: 0.22 };
+  let camTarget: { x: number; y: number; z: number; zoom: number } | null = null;
+  let focusNode: MapNode | null = null;
   const selected = new Set<string>();
   let journeyMode = false;
   let hovered: MapNode | null = null;
-
-  const toScreen = (n: { x: number; y: number }) => ({
-    col: cols / 2 + (n.x - cam.x) * cam.z,
-    row: rows / 2 + ((n.y - cam.y) * cam.z) / (CH / CW / 1.05), // aspect-correct
-  });
-
-  // ── input: drag pans, wheel zooms, click picks ──
   let dragging = false;
+
+  interface Proj {
+    col: number;
+    row: number;
+    s: number; // screen scale at this depth (perspective × zoom)
+    depth: number; // camera-space z (sorting + dimming)
+  }
+  const project = (px: number, py: number, pz: number): Proj => {
+    const x = px - cam.x;
+    const y = py - cam.y;
+    const z = pz - cam.z;
+    // yaw about Y, then pitch about X
+    const cy = Math.cos(cam.yaw);
+    const sy = Math.sin(cam.yaw);
+    const x1 = x * cy + z * sy;
+    const z1 = -x * sy + z * cy;
+    const cp = Math.cos(cam.pitch);
+    const sp = Math.sin(cam.pitch);
+    const y1 = y * cp - z1 * sp;
+    const z2 = y * sp + z1 * cp;
+    const s = (FOV / Math.max(FOV * 0.25, FOV + z2)) * cam.zoom;
+    return {
+      col: cols / 2 + x1 * s,
+      row: rows / 2 + (y1 * s) / (ASPECT / 1.05),
+      s,
+      depth: z2,
+    };
+  };
+  /** Depth cue: far → dim toward the void (quantized so the atlas stays small). */
+  const shadeCache = new Map<string, string>();
+  const shade = (hex: string, depth: number): string => {
+    const t = Math.max(0, Math.min(0.78, (depth + extent() * 0.55) / (extent() * 1.7)));
+    const q = Math.round(t * 7) / 7;
+    const key = `${hex}@${q}`;
+    let out = shadeCache.get(key);
+    if (!out) {
+      const n = parseInt(hex.slice(1), 16);
+      const mix = (v: number, tgt: number) => Math.round(v + (tgt - v) * q);
+      out = `rgb(${mix((n >> 16) & 255, VOID.r)},${mix((n >> 8) & 255, VOID.g)},${mix(n & 255, VOID.b)})`;
+      shadeCache.set(key, out);
+    }
+    return out;
+  };
+
+  // ── input: drag ROTATES, wheel zooms, click picks, dblclick re-frames ──
   let dragMoved = false;
   let last = { x: 0, y: 0 };
   canvas.addEventListener("pointerdown", (e) => {
@@ -379,19 +437,13 @@ export function renderReviewMap(
     if (dragging) {
       const dx = e.clientX - last.x;
       const dy = e.clientY - last.y;
-      if (Math.abs(dx) + Math.abs(dy) > 2) {
-        dragMoved = true;
-        camTarget = null; // the user took the wheel
-        cam.x -= dx / CW / cam.z;
-        cam.y -= (dy / CH / cam.z) * (CH / CW / 1.05);
-      }
+      if (Math.abs(dx) + Math.abs(dy) > 2) dragMoved = true;
+      cam.yaw -= dx * 0.0085;
+      cam.pitch = Math.max(-1.25, Math.min(1.25, cam.pitch + dy * 0.0085));
       last = { x: e.clientX, y: e.clientY };
       return;
     }
-    // hover pick (screen-space)
-    const mc = (e.clientX - rect.left) / CW;
-    const mr = (e.clientY - rect.top) / CH;
-    hovered = pick(mc, mr);
+    hovered = pick((e.clientX - rect.left) / CW, (e.clientY - rect.top) / CH);
     canvas.style.cursor = hovered ? "pointer" : "grab";
   });
   canvas.addEventListener("pointerup", (e) => {
@@ -401,19 +453,24 @@ export function renderReviewMap(
     const n = pick((e.clientX - rect.left) / CW, (e.clientY - rect.top) / CH);
     if (n?.finding) detail.show(n.finding);
   });
+  canvas.addEventListener("dblclick", () => {
+    focusNode = null;
+    camTarget = { x: 0, y: 0, z: 0, zoom: fitZoom() };
+  });
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
-    camTarget = null;
-    cam.z = Math.max(fitZoom() * 0.6, Math.min(6, cam.z * (e.deltaY < 0 ? 1.1 : 0.9)));
+    const f = e.deltaY < 0 ? 1.1 : 0.9;
+    if (camTarget) camTarget.zoom = Math.max(fitZoom() * 0.5, Math.min(7, camTarget.zoom * f));
+    else cam.zoom = Math.max(fitZoom() * 0.5, Math.min(7, cam.zoom * f));
   });
   const pick = (mc: number, mr: number): MapNode | null => {
     let best: MapNode | null = null;
     let bd = 9;
     for (const n of nodes) {
       if (n.kind === "core") continue;
-      const s = toScreen(n);
-      const d = (s.col - mc) ** 2 + ((s.row - mr) * 1.8) ** 2;
-      const hit = Math.max(n.r * cam.z * 1.6, 2.5) ** 2;
+      const p = project(n.x, n.y, n.z);
+      const d = (p.col - mc) ** 2 + ((p.row - mr) * 1.8) ** 2;
+      const hit = Math.max(n.r * p.s * 1.6, 2.5) ** 2;
       if (d < hit && d < bd) {
         bd = d;
         best = n;
@@ -422,12 +479,12 @@ export function renderReviewMap(
     return best;
   };
 
-  // ── fractal background: Julia set, c(t) drifting along the cardioid rim ──
-  const julia = (zx: number, zy: number, cx: number, cy: number): number => {
+  // ── fractal background: Julia set with camera parallax ──
+  const julia = (zx: number, zy: number, jx: number, jy: number): number => {
     let n = 0;
     while (n < 16 && zx * zx + zy * zy < 4) {
-      const t = zx * zx - zy * zy + cx;
-      zy = 2 * zx * zy + cy;
+      const t = zx * zx - zy * zy + jx;
+      zy = 2 * zx * zy + jy;
       zx = t;
       n++;
     }
@@ -453,66 +510,81 @@ export function renderReviewMap(
       fpsAt = now;
     }
 
-    // layout morph: every node eases toward its current layout target
+    // layout morph, focus tracking, camera damping, idle spin
     const mk_ = 1 - Math.exp(-0.14);
     for (const n of nodes) {
       n.x += (n.tx - n.x) * mk_;
       n.y += (n.ty - n.y) * mk_;
+      n.z += (n.tz - n.z) * mk_;
     }
-    // camera damping
+    if (focusNode)
+      camTarget = {
+        x: focusNode.x,
+        y: focusNode.y,
+        z: focusNode.z,
+        zoom: camTarget?.zoom ?? cam.zoom,
+      };
     if (camTarget) {
       const k = 1 - Math.exp(-0.12);
       cam.x += (camTarget.x - cam.x) * k;
       cam.y += (camTarget.y - cam.y) * k;
       cam.z += (camTarget.z - cam.z) * k;
+      cam.zoom += (camTarget.zoom - cam.zoom) * k;
     }
+    if (!cb.reduceMotion && !dragging && !journeyMode) cam.yaw += 0.0009;
 
     ctx.fillStyle = "#05070c";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // 1 · Julia field (sampled in WORLD space so it pans/zooms with the graph)
+    // 1 · Julia field (screen space with yaw/pitch parallax — the void turns with you)
     const th = (cb.reduceMotion ? 0 : t * 0.05) + 2.2;
-    const cx = 0.7885 * Math.cos(th);
-    const cy = 0.7885 * Math.sin(th);
-    const step = cam.z > 2 ? 1 : 1; // dense always — it's cheap
-    for (let r = 0; r < rows; r += step) {
-      for (let c = 0; c < cols; c += step) {
-        const wx = (c - cols / 2) / cam.z + cam.x;
-        const wy = ((r - rows / 2) / cam.z) * (CH / CW / 1.05) + cam.y;
-        const n = julia(wx * 0.022, wy * 0.04, cx, cy);
-        if (n > 2) {
-          const ch = BG_RAMP[Math.min(n, BG_RAMP.length - 1)];
-          put(c, r, ch, n % 2 ? BG_A : BG_B);
-        }
+    const jx = 0.7885 * Math.cos(th);
+    const jy = 0.7885 * Math.sin(th);
+    const ox = cam.yaw * 9;
+    const oy = cam.pitch * 7;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const wx = (c - cols / 2) / cam.zoom + ox;
+        const wy = ((r - rows / 2) / cam.zoom) * (ASPECT / 1.05) + oy;
+        const n = julia(wx * 0.022, wy * 0.04, jx, jy);
+        if (n > 2) put(c, r, BG_RAMP[Math.min(n, BG_RAMP.length - 1)], n % 2 ? BG_A : BG_B);
       }
     }
 
-    // 2 · edges with flowing phase
+    // 2 · edges (3D-sampled, depth-shaded, flow phase runs downstream)
     const edge = (a: MapNode, b: MapNode, color: string) => {
-      const sa = toScreen(a);
-      const sb = toScreen(b);
-      const len = Math.hypot(sb.col - sa.col, sb.row - sa.row);
+      const pa = project(a.x, a.y, a.z);
+      const pb = project(b.x, b.y, b.z);
+      const len = Math.hypot(pb.col - pa.col, pb.row - pa.row);
       const steps = Math.max(2, Math.floor(len));
       for (let i = 1; i < steps; i++) {
         const s = i / steps;
-        const col = Math.round(sa.col + (sb.col - sa.col) * s);
-        const row = Math.round(sa.row + (sb.row - sa.row) * s);
+        const p = project(a.x + (b.x - a.x) * s, a.y + (b.y - a.y) * s, a.z + (b.z - a.z) * s);
         const phase = Math.floor(s * len - (cb.reduceMotion ? 0 : t * 7));
-        put(col, row, FLOW[((phase % FLOW.length) + FLOW.length) % FLOW.length], color);
+        put(
+          Math.round(p.col),
+          Math.round(p.row),
+          FLOW[((phase % FLOW.length) + FLOW.length) % FLOW.length],
+          shade(color, p.depth),
+        );
       }
     };
     if (layout === "orbit") {
-      for (const bn of beatNodes) edge(core, bn, "#2b3344");
+      for (const bn of beatNodes) edge(core, bn, "#3d4761");
     } else {
-      for (let i = 0; i + 1 < beatNodes.length; i++) edge(beatNodes[i], beatNodes[i + 1], "#3a4358");
-      if (beatNodes.length) edge(beatNodes[beatNodes.length - 1], core, "#3a4358");
+      for (let i = 0; i + 1 < beatNodes.length; i++) edge(beatNodes[i], beatNodes[i + 1], "#46506a");
+      if (beatNodes.length) edge(beatNodes[beatNodes.length - 1], core, "#46506a");
     }
-    for (const fn of findingNodes) edge(layout === "flow" ? fn : beatOf(fn), layout === "flow" ? beatOf(fn) : fn, dim(fn.color));
+    for (const fn of findingNodes) {
+      const bn = beatOf(fn);
+      if (layout === "flow") edge(fn, bn, dimHex(fn.color));
+      else edge(bn, fn, dimHex(fn.color));
+    }
 
-    // 3 · nodes — glyph-ramp discs (one law, every scale)
-    const disc = (n: MapNode, wob: number) => {
-      const s = toScreen(n);
-      const R = Math.max(n.r * cam.z, 0.8);
+    // 3 · nodes, painter's order (far → near), glyph-ramp discs with depth cueing
+    const disc = (n: MapNode, p: Proj, wob: number) => {
+      const R = Math.max(n.r * p.s, 0.8);
+      const color = shade(n.color, p.depth);
       const rIn = Math.ceil(R);
       for (let dr = -rIn; dr <= rIn; dr++) {
         for (let dc = -Math.ceil(R * 1.9); dc <= Math.ceil(R * 1.9); dc++) {
@@ -522,61 +594,64 @@ export function renderReviewMap(
             DISC_RAMP.length - 1,
             Math.floor(d * DISC_RAMP.length + wob * 0.6) % DISC_RAMP.length,
           );
-          put(Math.round(s.col + dc), Math.round(s.row + dr), DISC_RAMP[Math.abs(idx)], n.color);
+          put(Math.round(p.col + dc), Math.round(p.row + dr), DISC_RAMP[Math.abs(idx)], color);
         }
       }
-      return s;
     };
-    // core breathes
-    const breathe = cb.reduceMotion ? 0 : Math.sin(t * 1.6) * 0.5;
-    core.r = 4.4 + breathe * 0.4;
-    disc(core, cb.reduceMotion ? 0 : t * 1.5);
-    for (const bn of beatNodes) {
-      const s = disc(bn, cb.reduceMotion ? 0 : t * 0.8);
-      if (cam.z > 0.55 && bn.label)
-        text(Math.round(s.col + bn.r * cam.z * 1.9 + 2), Math.round(s.row), bn.label.slice(0, 26), "#8b949e");
-    }
-    for (const fn of findingNodes) {
-      const f = fn.finding!;
-      const pulse = f.severity === "blocker" && !cb.reduceMotion && Math.sin(t * 6) > 0;
-      const s = toScreen(fn);
-      if (f.type === "question") {
-        put(Math.round(s.col), Math.round(s.row), "?", fn.color);
-      } else if (f.type === "praise") {
-        put(Math.round(s.col), Math.round(s.row), "+", fn.color);
-      } else {
-        disc(fn, pulse ? 2 : 0);
+    const breathe = cb.reduceMotion ? 0 : Math.sin(t * 1.6) * 0.4;
+    core.r = 4.2 + breathe * 0.4;
+    const order = nodes
+      .map((n) => ({ n, p: project(n.x, n.y, n.z) }))
+      .sort((a, b) => b.p.depth - a.p.depth);
+    for (const { n, p } of order) {
+      if (n.kind === "core") {
+        disc(n, p, cb.reduceMotion ? 0 : t * 1.5);
+        continue;
       }
-      if (f.status !== "open") put(Math.round(s.col), Math.round(s.row), "·", "#444c56");
-      // engine-disputed → orbiting / - \ |
+      if (n.kind === "beat") {
+        disc(n, p, cb.reduceMotion ? 0 : t * 0.8);
+        if (cam.zoom > 0.55 && n.label && p.depth < extent() * 0.45)
+          text(
+            Math.round(p.col + n.r * p.s * 1.9 + 2),
+            Math.round(p.row),
+            n.label.slice(0, 24),
+            shade("#8b949e", p.depth),
+          );
+        continue;
+      }
+      const f = n.finding!;
+      const pulse = f.severity === "blocker" && !cb.reduceMotion && Math.sin(t * 6) > 0;
+      if (f.type === "question") put(Math.round(p.col), Math.round(p.row), "?", shade(n.color, p.depth));
+      else if (f.type === "praise") put(Math.round(p.col), Math.round(p.row), "+", shade(n.color, p.depth));
+      else disc(n, p, pulse ? 2 : 0);
+      if (f.status !== "open") put(Math.round(p.col), Math.round(p.row), "·", "#444c56");
       if (Object.values(f.engines).includes("dispute")) {
         const oa = cb.reduceMotion ? 0.8 : t * 2.2;
-        const or_ = fn.r * cam.z + 2;
+        const or_ = n.r * p.s + 2;
         for (let k = 0; k < 4; k++) {
           const a = oa + (k * Math.PI) / 2;
           put(
-            Math.round(s.col + Math.cos(a) * or_ * 1.9),
-            Math.round(s.row + Math.sin(a) * or_),
+            Math.round(p.col + Math.cos(a) * or_ * 1.9),
+            Math.round(p.row + Math.sin(a) * or_),
             "/-\\|"[k],
-            fn.color,
+            shade(n.color, p.depth),
           );
         }
       }
-      // selected → gold brackets
-      if (selected.has(fn.id)) {
-        const off = Math.max(fn.r * cam.z * 1.9 + 1, 2);
-        put(Math.round(s.col - off), Math.round(s.row), "[", "#ffd866");
-        put(Math.round(s.col + off), Math.round(s.row), "]", "#ffd866");
+      if (selected.has(n.id)) {
+        const off = Math.max(n.r * p.s * 1.9 + 1, 2);
+        put(Math.round(p.col - off), Math.round(p.row), "[", "#ffd866");
+        put(Math.round(p.col + off), Math.round(p.row), "]", "#ffd866");
       }
     }
 
-    // 4 · hover halo + status line
+    // 4 · hover halo + status line + fps
     if (hovered) {
-      const s = toScreen(hovered);
-      const hr = Math.max(hovered.r * cam.z + 1.5, 2.5);
+      const p = project(hovered.x, hovered.y, hovered.z);
+      const hr = Math.max(hovered.r * p.s + 1.5, 2.5);
       for (let k = 0; k < 12; k++) {
         const a = (k / 12) * Math.PI * 2 + (cb.reduceMotion ? 0 : t * 1.2);
-        put(Math.round(s.col + Math.cos(a) * hr * 1.9), Math.round(s.row + Math.sin(a) * hr), "·", "#e6edf3");
+        put(Math.round(p.col + Math.cos(a) * hr * 1.9), Math.round(p.row + Math.sin(a) * hr), "·", "#e6edf3");
       }
       const f = hovered.finding;
       const line = f
@@ -597,6 +672,7 @@ export function renderReviewMap(
     cancelAnimationFrame(raf);
     ro.disconnect();
     atlas.clear();
+    shadeCache.clear();
     teardown = null;
   };
   teardown = dispose;
@@ -604,13 +680,15 @@ export function renderReviewMap(
   const detail = buildDetailCard(slot, cb);
   const syncModeBtn = () => {
     modeBtn.textContent = layout === "flow" ? "≋ flow" : "✿ orbit";
-    modeBtn.title = "toggle layout: flow river ⇄ phyllotaxis orbit (morphs live)";
+    modeBtn.title =
+      "toggle layout: flow river ⇄ phyllotaxis orbit (morphs live) · drag rotates · wheel zooms · dblclick re-frames";
   };
   syncModeBtn();
   modeBtn.addEventListener("click", () => {
     applyLayout(layout === "flow" ? "orbit" : "flow");
     syncModeBtn();
-    camTarget = { x: 0, y: 0, z: fitZoom() }; // re-frame the new shape
+    focusNode = null;
+    camTarget = { x: 0, y: 0, z: 0, zoom: fitZoom() };
   });
 
   // ── footer ──
@@ -630,21 +708,27 @@ export function renderReviewMap(
   t0 = performance.now();
   raf = requestAnimationFrame(draw);
 
-  let focusNode: MapNode | null = null;
   return {
     side: slot,
     focus(node, zoom) {
-      focusNode = node;
-      camTarget = { x: node.tx, y: node.ty, z: zoom ?? (node.kind === "finding" ? 3.2 : node.kind === "beat" ? 1.9 : fitZoom()) };
-      void focusNode;
+      focusNode = node; // tracked live — the node may still be morphing
+      camTarget = {
+        x: node.x,
+        y: node.y,
+        z: node.z,
+        zoom: zoom ?? (node.kind === "finding" ? 3.2 : node.kind === "beat" ? 1.9 : fitZoom()),
+      };
     },
     focusWide() {
-      camTarget = { x: 0, y: 0, z: fitZoom() };
+      focusNode = null;
+      camTarget = { x: 0, y: 0, z: 0, zoom: fitZoom() };
     },
     setJourneyMode(on) {
       journeyMode = on;
-      if (!on) camTarget = null;
-      void journeyMode;
+      if (!on) {
+        focusNode = null;
+        camTarget = null;
+      }
     },
     moonOf: (id) => moonByFid.get(id),
     planetAt: (i) => beatNodes[i],
@@ -657,11 +741,11 @@ export function renderReviewMap(
   };
 }
 
-function dim(hex: string): string {
+function dimHex(hex: string): string {
   // 45% toward the void — edges whisper, nodes speak.
   const n = parseInt(hex.slice(1), 16);
   const f = (v: number) => Math.round(v * 0.45 + 10);
-  return `rgb(${f((n >> 16) & 255)},${f((n >> 8) & 255)},${f(n & 255)})`;
+  return `#${((f((n >> 16) & 255) << 16) | (f((n >> 8) & 255) << 8) | f(n & 255)).toString(16).padStart(6, "0")}`;
 }
 
 /** The click-through detail card — docks into the right rail (never over the graph). */
