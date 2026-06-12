@@ -242,6 +242,9 @@ export function renderReviewMap(
   resetBtn.textContent = "⌖ reset view";
   resetBtn.title = "fly home: frame everything, level the rotation";
   ctrls.appendChild(resetBtn);
+  const bgBtn = document.createElement("button");
+  bgBtn.className = "rmap-mode";
+  ctrls.appendChild(bgBtn);
   const resWrap = document.createElement("label");
   resWrap.className = "rmap-res";
   const resLabel = document.createElement("span");
@@ -263,7 +266,7 @@ export function renderReviewMap(
   const ASPECT = CH / CW; // a cell is ~1.8× taller than wide
   const SIDE_W = 380;
   let W = Math.max((host.clientWidth || 800) - SIDE_W - 12, 320);
-  const H = cb.stageHeight ?? 470;
+  let H = cb.stageHeight ?? 470;
   let cols = 0;
   let rows = 0;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -517,6 +520,9 @@ export function renderReviewMap(
       });
     }
   };
+  type BgMode = "mosaic" | "galaxy" | "simple";
+  const storedBg = localStorage.getItem("pear.map.bg");
+  let bgMode: BgMode = storedBg === "galaxy" || storedBg === "simple" ? storedBg : "mosaic";
   applyLayout(layout);
   nodes.forEach((n) => {
     n.x = n.tx;
@@ -727,7 +733,9 @@ export function renderReviewMap(
     //     the drifting Julia set. Both with camera parallax.
     const ox = cam.yaw * 9;
     const oy = cam.pitch * 7;
-    if (layout === "mandala") {
+    if (bgMode === "simple") {
+      // clean void — zero distraction, maximum fps
+    } else if (bgMode === "mosaic") {
       // The painting, in pebbles: a bilateral rainbow gem MOSAIC whose hue bands
       // radiate in arcs from the center; two grayscale masses flank it where the
       // skulls sit; a diamond pulses at the third eye. Each pebble is a brick-offset
@@ -1061,10 +1069,13 @@ export function renderReviewMap(
   };
 
   const ro = new ResizeObserver(() => {
+    // Track the REAL stage box — fullscreen/resize must reshape the grid live.
     W = Math.max(host.clientWidth - SIDE_W - 12, 320);
+    H = Math.max(stage.clientHeight || H, 300);
     sizeCanvas();
   });
   ro.observe(host);
+  ro.observe(stage);
 
   const dispose = () => {
     cancelAnimationFrame(raf);
@@ -1089,6 +1100,16 @@ export function renderReviewMap(
       focusNode = null;
       camTarget = { x: 0, y: 0, z: 0, zoom: fitZoom() }; // re-frame at the new grid
     }
+  });
+  const syncBgBtn = () => {
+    bgBtn.textContent = bgMode === "mosaic" ? "▦ mosaic" : bgMode === "galaxy" ? "✦ galaxy" : "○ simple";
+    bgBtn.title = "background: gem mosaic → julia galaxy → simple void (independent of layout)";
+  };
+  syncBgBtn();
+  bgBtn.addEventListener("click", () => {
+    bgMode = bgMode === "mosaic" ? "galaxy" : bgMode === "galaxy" ? "simple" : "mosaic";
+    localStorage.setItem("pear.map.bg", bgMode);
+    syncBgBtn();
   });
   const resetView = () => {
     focusNode = null;

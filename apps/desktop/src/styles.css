@@ -1203,7 +1203,9 @@ body.map-window .rmap-stage { border: none; border-radius: 0; }
 /* split theater: graph left (full height), info rail right — the graph stays
    visible while navigating; journey/detail cards dock into the rail. */
 .rmap-split { flex-direction: row; padding: 0; gap: 0; height: 100%; }
-.rmap-main { flex: 1; min-width: 0; position: relative; }
+.rmap-main { flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column; }
+.rmap-main .rmap-stage { flex: 1; min-height: 0; }
+.rmap-main .rmap-stage canvas { display: block; }
 .rmap-side {
   width: 392px; flex: none; display: flex; flex-direction: column; gap: 8px;
   padding: 12px 14px; overflow-y: auto; border-left: 1px solid var(--bd);

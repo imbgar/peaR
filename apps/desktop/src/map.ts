@@ -109,11 +109,5 @@ window.addEventListener("storage", (e) => {
   // A diff arriving mid-journey: no re-render (that would eject the reviewer) — the
   // next finding step picks it up via getDiff().
 });
-// Height is captured at render time; follow window resizes (but never mid-journey).
-let resizeT = 0;
-window.addEventListener("resize", () => {
-  clearTimeout(resizeT);
-  resizeT = window.setTimeout(() => {
-    if (!document.querySelector(".jr")) render();
-  }, 180);
-});
+// Resize/fullscreen is handled INSIDE the renderer (ResizeObserver on the stage) —
+// no re-render needed, the grid reshapes live without ejecting a journey.
