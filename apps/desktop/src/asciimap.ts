@@ -98,9 +98,15 @@ const GEM_PAL: string[][] = [];
 const GRAY_PAL: string[] = [];
 for (let h = 0; h < GEM_HUES; h++) {
   const hue = (h / GEM_HUES) * 360;
-  GEM_PAL.push([hslCss(hue, 0.62, 0.30), hslCss(hue, 0.58, 0.22), hslCss(hue, 0.5, 0.13)]);
+  GEM_PAL.push([
+    hslCss(hue, 0.7, 0.40),
+    hslCss(hue, 0.65, 0.30),
+    hslCss(hue, 0.58, 0.21),
+    hslCss(hue, 0.5, 0.12),
+  ]);
 }
-GRAY_PAL.push(hslCss(220, 0.06, 0.30), hslCss(220, 0.06, 0.21), hslCss(220, 0.06, 0.12));
+// the skulls are BONE — brighter than the field, near-white mosaic
+GRAY_PAL.push(hslCss(220, 0.05, 0.46), hslCss(220, 0.05, 0.35), hslCss(220, 0.05, 0.24), hslCss(220, 0.05, 0.13));
 const MORTAR = "#0a0d15";
 
 export interface MapCallbacks {
@@ -614,11 +620,13 @@ export function renderReviewMap(
     camTarget = { x: 0, y: 0, z: 0, zoom: fitZoom() };
     rotTarget = { yaw: 0, pitch: 0 };
   });
+  // Zoom stays inside [just-wider-than-fit … 3×]: you can never lose the composition.
+  const clampZoom = (z: number) => Math.max(fitZoom() * 0.85, Math.min(3.0, z));
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
     const f = e.deltaY < 0 ? 1.1 : 0.9;
-    if (camTarget) camTarget.zoom = Math.max(fitZoom() * 0.5, Math.min(7, camTarget.zoom * f));
-    else cam.zoom = Math.max(fitZoom() * 0.5, Math.min(7, cam.zoom * f));
+    if (camTarget) camTarget.zoom = clampZoom(camTarget.zoom * f);
+    else cam.zoom = clampZoom(cam.zoom * f);
   });
   const pick = (mc: number, mr: number): MapNode | null => {
     let best: MapNode | null = null;
@@ -711,12 +719,13 @@ export function renderReviewMap(
       // skulls sit; a diamond pulses at the third eye. Each pebble is a brick-offset
       // lattice cell shaded core→rim by the disc ramp (flat gem color per pebble).
       const tt = cb.reduceMotion ? 0 : t;
-      const P = Math.max(5, Math.round(8 * (DENS / 3))); // pebble size scales w/ density
-      const PH = P * 0.78;
-      const skX = cols * 0.3; // skull-mass focus (mirrored)
-      const skY = -rows * 0.06;
-      const skRx = cols * 0.17;
-      const skRy = rows * 0.34;
+      // bigger gems so the FACETS resolve (the painting's stones have inner cuts)
+      const P = Math.max(8, Math.round(12 * (DENS / 3)));
+      const PH = P * 0.8;
+      const skX = cols * 0.3; // skull-mass foci (mirrored)
+      const skY = -rows * 0.04;
+      const skRx = cols * 0.19;
+      const skRy = rows * 0.38;
       for (let r = 0; r < rows; r++) {
         const dy = (r - rows / 2) * (ASPECT / 1.05) + oy;
         for (let c = 0; c < cols; c++) {
@@ -725,24 +734,49 @@ export function renderReviewMap(
           const off = ry & 1 ? P / 2 : 0;
           const pcx = (Math.floor((ax + off) / P) + 0.5) * P - off;
           const pcy = (ry + 0.5) * PH - rows;
-          const ddx = (ax - pcx) / (P * 0.52);
-          const ddy = (dy - pcy) / (PH * 0.52);
+          const ddx = (ax - pcx) / (P * 0.5);
+          const ddy = (dy - pcy) / (PH * 0.5);
           const d = Math.sqrt(ddx * ddx + ddy * ddy);
-          if (d > 1.04) {
+          if (d > 1.05) {
             put(c, r, "·", MORTAR);
             continue;
           }
-          // hue from the pebble's center: bands arcing out of the face center
-          const pr = Math.sqrt(pcx * pcx + pcy * pcy);
-          const pth = Math.atan2(pcy, pcx);
-          const hueIdx =
-            ((Math.floor(pr * 0.22 + pth * 3.1 + tt * 0.5) % GEM_HUES) + GEM_HUES) % GEM_HUES;
+          // HUE: elliptical arcs out of the face center — gold at the heart, through
+          // green, to blue/violet at the rim, repeating — exactly the painting's bands.
+          // (squash y so the bands arch OVER the center like the original)
+          const prW = Math.sqrt(pcx * pcx + pcy * pcy * 1.8);
+          const jitter = ((((pcx * 73856093) ^ (pcy * 19349663)) >>> 0) % 7) - 3; // per-gem
+          const hueDeg = 42 + prW * 2.9 + jitter * 4 + tt * 6;
+          const hueIdx = ((Math.floor((hueDeg / 360) * GEM_HUES) % GEM_HUES) + GEM_HUES) % GEM_HUES;
           const sdx = (ax - skX) / skRx;
           const sdy = (dy - skY) / skRy;
           const inSkull = sdx * sdx + sdy * sdy < 1;
-          const shade = d < 0.38 ? 0 : d < 0.78 ? 1 : 2;
-          const ch = DISC_RAMP[Math.min(DISC_RAMP.length - 1, Math.floor(d * DISC_RAMP.length))];
-          put(c, r, ch, inSkull ? GRAY_PAL[shade] : GEM_PAL[hueIdx][shade]);
+          // FACETS: the inner cross + diagonal cuts of the painting's gems
+          const cross = Math.min(Math.abs(ddx), Math.abs(ddy));
+          const diag = Math.abs(Math.abs(ddx) - Math.abs(ddy));
+          let ch: string;
+          let shade: number;
+          if (d < 0.16) {
+            ch = "@";
+            shade = 0;
+          } else if (cross < 0.14 && d < 0.8) {
+            ch = "+";
+            shade = 0; // the bright inner cross
+          } else if (diag < 0.16 && d < 0.85) {
+            ch = "*";
+            shade = 1; // diagonal facet cuts
+          } else if (d < 0.55) {
+            ch = "#";
+            shade = 1;
+          } else if (d < 0.82) {
+            ch = "=";
+            shade = 2;
+          } else {
+            ch = ":";
+            shade = 3; // rim
+          }
+          const pal = inSkull ? GRAY_PAL : GEM_PAL[hueIdx];
+          put(c, r, ch, pal[shade]);
         }
       }
       // the third-eye diamond: a small pulsing rhombus above center
@@ -913,7 +947,26 @@ export function renderReviewMap(
       }
     }
 
-    // 4 · hover halo + status line + fps
+    // 4 · FOCUS GLOW: the journey's current node wears a pulsing double ring
+    if (focusNode) {
+      const p = project(focusNode.x, focusNode.y, focusNode.z);
+      const base = Math.max(focusNode.r * p.s, 1.4);
+      for (let ring = 0; ring < 2; ring++) {
+        const rr = base + 1.6 + ring * 2.2 + (cb.reduceMotion ? 0 : Math.sin(t * 3 + ring * 1.6) * 0.7);
+        const n = 18 + ring * 8;
+        for (let k = 0; k < n; k++) {
+          const a = (k / n) * Math.PI * 2 + (cb.reduceMotion ? 0 : t * (ring ? -1.1 : 1.5));
+          put(
+            Math.round(p.col + Math.cos(a) * rr * 1.9),
+            Math.round(p.row + Math.sin(a) * rr),
+            ring ? "·" : k % 3 ? "*" : "+",
+            ring ? focusNode.color : k % 2 ? "#ffffff" : focusNode.color,
+          );
+        }
+      }
+    }
+
+    // 5 · hover halo + status line + fps
     if (hovered) {
       const p = project(hovered.x, hovered.y, hovered.z);
       const hr = Math.max(hovered.r * p.s + 1.5, 2.5);
@@ -1007,7 +1060,7 @@ export function renderReviewMap(
         x: node.x,
         y: node.y,
         z: node.z,
-        zoom: zoom ?? (node.kind === "finding" ? 3.2 : node.kind === "beat" ? 1.9 : fitZoom()),
+        zoom: clampZoom(zoom ?? (node.kind === "finding" ? 2.6 : node.kind === "beat" ? 1.7 : fitZoom())),
       };
     },
     focusWide() {
