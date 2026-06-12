@@ -76,8 +76,7 @@ const VERDICT_LABEL: Record<string, string> = {
   blocked: "⛔ blocked",
 };
 
-// Luminance ramps (dense → sparse). One law, every scale.
-const DISC_RAMP = ["@", "%", "#", "*", "+", "=", ":", "·"];
+// Luminance ramps (dense → sparse).
 const BG_RAMP = " ··::;;==++xxXX##";
 const FLOW = "·∙•∙"; // edge phase chars
 const VOID = { r: 0x15, g: 0x19, b: 0x2a }; // what depth fades toward
@@ -568,6 +567,21 @@ export function renderReviewMap(
       depth: z2,
     };
   };
+  /** Lighten toward white (specular highlights) — quantized + cached like shade. */
+  const lightCache = new Map<string, string>();
+  const lighten = (hex: string, amt: number): string => {
+    const q = Math.round(Math.max(0, Math.min(1, amt)) * 7) / 7;
+    const key = `${hex}^${q}`;
+    let out = lightCache.get(key);
+    if (!out) {
+      const n = parseInt(hex.slice(1), 16);
+      const mix = (v: number) => Math.round(v + (255 - v) * q);
+      out = `rgb(${mix((n >> 16) & 255)},${mix((n >> 8) & 255)},${mix(n & 255)})`;
+      lightCache.set(key, out);
+    }
+    return out;
+  };
+
   /** Depth cue: far → dim toward the void (quantized so the atlas stays small). */
   const shadeCache = new Map<string, string>();
   const shade = (hex: string, depth: number): string => {
@@ -807,7 +821,42 @@ export function renderReviewMap(
       }
     }
 
-    // 2 · edges (3D-sampled, depth-shaded, flow phase runs downstream)
+    // 2 · OBJECT SEPARATION: project every node once, then carve a gaussian void
+    //     POCKET around each (suppresses the mosaic — diffusion halo) and drop an
+    //     offset PROJECTED SHADOW under it. Nodes get a calm, bordered stage.
+    const order = nodes
+      .map((n) => ({ n, p: project(n.x, n.y, n.z) }))
+      .sort((a, b) => b.p.depth - a.p.depth);
+    const SHADE_BLOCKS = ["█", "▓", "▒", "░"];
+    for (const { n, p } of order) {
+      const R = Math.max(n.r * p.s, 1.2);
+      // projected shadow: offset ellipse, light from upper-left
+      const shR = R * 1.05;
+      const shC = p.col + R * 0.85;
+      const shRow = p.row + R * 0.6;
+      for (let dr = -Math.ceil(shR); dr <= Math.ceil(shR); dr++) {
+        for (let dc = -Math.ceil(shR * 1.9); dc <= Math.ceil(shR * 1.9); dc++) {
+          const dd = Math.hypot(dc / 1.9, dr) / shR;
+          if (dd > 1) continue;
+          put(Math.round(shC + dc), Math.round(shRow + dr), dd > 0.7 ? "▒" : "▓", "#03050a");
+        }
+      }
+      // gaussian pocket: void clears outward (block ramp = the diffusion)
+      const HR = R * 1.9 + 2.5;
+      const sig2 = 2 * (HR * 0.52) ** 2;
+      for (let dr = -Math.ceil(HR); dr <= Math.ceil(HR); dr++) {
+        for (let dc = -Math.ceil(HR * 1.9); dc <= Math.ceil(HR * 1.9); dc++) {
+          const dist = Math.hypot(dc / 1.9, dr);
+          if (dist > HR) continue;
+          const w = Math.exp(-(dist * dist) / sig2);
+          if (w < 0.22) continue;
+          const bi = w > 0.85 ? 0 : w > 0.6 ? 1 : w > 0.4 ? 2 : 3;
+          put(Math.round(p.col + dc), Math.round(p.row + dr), SHADE_BLOCKS[bi], "#070a12");
+        }
+      }
+    }
+
+    // 3 · edges (3D-sampled, depth-shaded, flow phase runs downstream)
     const edge = (a: MapNode, b: MapNode, color: string) => {
       const pa = project(a.x, a.y, a.z);
       const pb = project(b.x, b.y, b.z);
@@ -883,35 +932,54 @@ export function renderReviewMap(
       else edge(fn, bn, dimHex(fn.color));
     }
 
-    // 3 · nodes, painter's order (far → near), glyph-ramp discs with depth cueing
-    const disc = (n: MapNode, p: Proj, wob: number) => {
+    // 4 · nodes, painter's order (far → near): RAY-TRACED spheres. Each cell casts
+    //     a ray at the sphere; on hit we get the surface normal → Lambert diffuse +
+    //     Blinn-Phong specular from a slowly ORBITING light. ASCII, but lit.
+    const lt = cb.reduceMotion ? 0 : t * 0.25;
+    const Lx0 = Math.cos(lt) * 0.55 - 0.25;
+    const Ly0 = -0.62;
+    const Lz0 = Math.sin(lt) * 0.3 + 0.55;
+    const Llen = Math.hypot(Lx0, Ly0, Lz0);
+    const Lx = Lx0 / Llen;
+    const Ly = Ly0 / Llen;
+    const Lz = Lz0 / Llen;
+    // half-vector for Blinn (view = +z toward camera)
+    const Hl = Math.hypot(Lx, Ly, Lz + 1);
+    const Hx = Lx / Hl;
+    const Hy = Ly / Hl;
+    const Hz = (Lz + 1) / Hl;
+    const RAY_RAMP = " ·:=+*#%@";
+    const sphere = (n: MapNode, p: Proj, boost: number) => {
       const R = Math.max(n.r * p.s, 0.8);
-      const color = shade(n.color, p.depth);
       const rIn = Math.ceil(R);
       for (let dr = -rIn; dr <= rIn; dr++) {
         for (let dc = -Math.ceil(R * 1.9); dc <= Math.ceil(R * 1.9); dc++) {
-          const d = Math.hypot(dc / 1.9, dr) / R;
-          if (d > 1) continue;
-          const idx = Math.min(
-            DISC_RAMP.length - 1,
-            Math.floor(d * DISC_RAMP.length + wob * 0.6) % DISC_RAMP.length,
-          );
-          put(Math.round(p.col + dc), Math.round(p.row + dr), DISC_RAMP[Math.abs(idx)], color);
+          const nx = dc / 1.9 / R;
+          const ny = dr / R;
+          const rr = nx * nx + ny * ny;
+          if (rr > 1) continue; // the ray misses
+          const nz = Math.sqrt(1 - rr); // surface normal at the hit point
+          const diff = Math.max(0, nx * Lx + ny * Ly + nz * Lz);
+          const specD = Math.max(0, nx * Hx + ny * Hy + nz * Hz);
+          const spec = Math.pow(specD, 24);
+          const inten = Math.min(1, 0.13 + (0.78 * diff + spec * 1.1) * boost);
+          const ch = RAY_RAMP[Math.min(RAY_RAMP.length - 1, Math.floor(inten * RAY_RAMP.length))];
+          if (ch === " ") continue;
+          const base = shade(n.color, p.depth);
+          const color = spec > 0.45 ? lighten(n.color, Math.min(0.85, spec)) : base;
+          put(Math.round(p.col + dc), Math.round(p.row + dr), ch, color);
         }
       }
     };
     const breathe = cb.reduceMotion ? 0 : Math.sin(t * 1.6) * 0.4;
     core.r = 4.2 + breathe * 0.4;
-    const order = nodes
-      .map((n) => ({ n, p: project(n.x, n.y, n.z) }))
-      .sort((a, b) => b.p.depth - a.p.depth);
     for (const { n, p } of order) {
       if (n.kind === "core") {
-        disc(n, p, cb.reduceMotion ? 0 : t * 1.5);
+        sphere(n, p, 1.05);
         continue;
       }
       if (n.kind === "beat") {
-        disc(n, p, cb.reduceMotion ? 0 : t * 0.8);
+        sphere(n, p, 1);
         if (cam.zoom > 0.55 && n.label && p.depth < extent() * 0.45)
           text(
             Math.round(p.col + n.r * p.s * 1.9 + 2),
@@ -925,7 +993,7 @@ export function renderReviewMap(
       const pulse = f.severity === "blocker" && !cb.reduceMotion && Math.sin(t * 6) > 0;
       if (f.type === "question") put(Math.round(p.col), Math.round(p.row), "?", shade(n.color, p.depth));
       else if (f.type === "praise") put(Math.round(p.col), Math.round(p.row), "+", shade(n.color, p.depth));
-      else disc(n, p, pulse ? 2 : 0);
+      else sphere(n, p, pulse ? 1.45 : 1);
       if (f.status !== "open") put(Math.round(p.col), Math.round(p.row), "·", "#444c56");
       if (Object.values(f.engines).includes("dispute")) {
         const oa = cb.reduceMotion ? 0.8 : t * 2.2;
@@ -947,7 +1015,7 @@ export function renderReviewMap(
       }
     }
 
-    // 4 · FOCUS GLOW: the journey's current node wears a pulsing double ring
+    // 5 · FOCUS GLOW: the journey's current node wears a pulsing double ring
     if (focusNode) {
       const p = project(focusNode.x, focusNode.y, focusNode.z);
       const base = Math.max(focusNode.r * p.s, 1.4);
@@ -966,7 +1034,7 @@ export function renderReviewMap(
       }
     }
 
-    // 5 · hover halo + status line + fps
+    // 6 · hover halo + status line + fps
     if (hovered) {
       const p = project(hovered.x, hovered.y, hovered.z);
       const hr = Math.max(hovered.r * p.s + 1.5, 2.5);
