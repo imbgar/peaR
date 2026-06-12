@@ -82,6 +82,27 @@ const BG_RAMP = " ··::;;==++xxXX##";
 const FLOW = "·∙•∙"; // edge phase chars
 const VOID = { r: 0x15, g: 0x19, b: 0x2a }; // what depth fades toward
 
+// ── the gem-mosaic palette (the user's painting, dimmed to background level) ──
+// 30 hues × 3 shades (core/mid/rim) + a grayscale set for the skull masses.
+const GEM_HUES = 30;
+function hslCss(h: number, sat: number, l: number): string {
+  const a = sat * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const c = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(c * 255);
+  };
+  return `rgb(${f(0)},${f(8)},${f(4)})`;
+}
+const GEM_PAL: string[][] = [];
+const GRAY_PAL: string[] = [];
+for (let h = 0; h < GEM_HUES; h++) {
+  const hue = (h / GEM_HUES) * 360;
+  GEM_PAL.push([hslCss(hue, 0.62, 0.30), hslCss(hue, 0.58, 0.22), hslCss(hue, 0.5, 0.13)]);
+}
+GRAY_PAL.push(hslCss(220, 0.06, 0.30), hslCss(220, 0.06, 0.21), hslCss(220, 0.06, 0.12));
+const MORTAR = "#0a0d15";
+
 export interface MapCallbacks {
   onJump: (path: string, line: number | null) => void;
   onAsk: (finding: RdFinding, text: string) => void;
@@ -685,20 +706,57 @@ export function renderReviewMap(
     const ox = cam.yaw * 9;
     const oy = cam.pitch * 7;
     if (layout === "mandala") {
-      const m = nB();
+      // The painting, in pebbles: a bilateral rainbow gem MOSAIC whose hue bands
+      // radiate in arcs from the center; two grayscale masses flank it where the
+      // skulls sit; a diamond pulses at the third eye. Each pebble is a brick-offset
+      // lattice cell shaded core→rim by the disc ramp (flat gem color per pebble).
       const tt = cb.reduceMotion ? 0 : t;
+      const P = Math.max(5, Math.round(8 * (DENS / 3))); // pebble size scales w/ density
+      const PH = P * 0.78;
+      const skX = cols * 0.3; // skull-mass focus (mirrored)
+      const skY = -rows * 0.06;
+      const skRx = cols * 0.17;
+      const skRy = rows * 0.34;
       for (let r = 0; r < rows; r++) {
         const dy = (r - rows / 2) * (ASPECT / 1.05) + oy;
         for (let c = 0; c < cols; c++) {
-          const dx = c - cols / 2 + ox;
-          const rr = Math.sqrt(dx * dx + dy * dy);
-          const th_ = Math.atan2(dy, dx);
-          const v =
-            Math.sin(rr * 0.085 - tt * 1.1) +
-            Math.cos(th_ * m + tt * 0.45) +
-            Math.sin(rr * 0.034 + th_ * 2 - tt * 0.25);
-          const n = Math.floor(((v + 3) / 6) * 15);
-          if (n > 4) put(c, r, BG_RAMP[Math.min(n, BG_RAMP.length - 1)], n % 2 ? BG_A : BG_B);
+          const ax = Math.abs(c - cols / 2 + ox); // bilateral mirror
+          const ry = Math.floor((dy + rows) / PH);
+          const off = ry & 1 ? P / 2 : 0;
+          const pcx = (Math.floor((ax + off) / P) + 0.5) * P - off;
+          const pcy = (ry + 0.5) * PH - rows;
+          const ddx = (ax - pcx) / (P * 0.52);
+          const ddy = (dy - pcy) / (PH * 0.52);
+          const d = Math.sqrt(ddx * ddx + ddy * ddy);
+          if (d > 1.04) {
+            put(c, r, "·", MORTAR);
+            continue;
+          }
+          // hue from the pebble's center: bands arcing out of the face center
+          const pr = Math.sqrt(pcx * pcx + pcy * pcy);
+          const pth = Math.atan2(pcy, pcx);
+          const hueIdx =
+            ((Math.floor(pr * 0.22 + pth * 3.1 + tt * 0.5) % GEM_HUES) + GEM_HUES) % GEM_HUES;
+          const sdx = (ax - skX) / skRx;
+          const sdy = (dy - skY) / skRy;
+          const inSkull = sdx * sdx + sdy * sdy < 1;
+          const shade = d < 0.38 ? 0 : d < 0.78 ? 1 : 2;
+          const ch = DISC_RAMP[Math.min(DISC_RAMP.length - 1, Math.floor(d * DISC_RAMP.length))];
+          put(c, r, ch, inSkull ? GRAY_PAL[shade] : GEM_PAL[hueIdx][shade]);
+        }
+      }
+      // the third-eye diamond: a small pulsing rhombus above center
+      const dy0 = Math.round(rows * 0.18);
+      const k = 2.2 + (cb.reduceMotion ? 0 : Math.sin(t * 2.4) * 0.9);
+      for (let dr = -Math.ceil(k); dr <= Math.ceil(k); dr++) {
+        const half = (k - Math.abs(dr)) * 1.9;
+        for (let dc = -Math.ceil(half); dc <= Math.ceil(half); dc++) {
+          put(
+            Math.round(cols / 2 + dc - ox),
+            Math.round(rows / 2 - dy0 + dr - oy),
+            Math.abs(dc) + Math.abs(dr) < 1.5 ? "@" : "#",
+            Math.abs(dc) + Math.abs(dr) < 1.5 ? "#ffe9a8" : "#e8b34b",
+          );
         }
       }
     } else {
