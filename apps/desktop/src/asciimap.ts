@@ -108,6 +108,207 @@ for (let h = 0; h < GEM_HUES; h++) {
 GRAY_PAL.push(hslCss(220, 0.05, 0.46), hslCss(220, 0.05, 0.35), hslCss(220, 0.05, 0.24), hslCss(220, 0.05, 0.13));
 const MORTAR = "#0a0d15";
 
+// ── the finding-shape pool: exotic polyhedra, one per finding family ──────────
+// Wireframes in local space (unit radius), edge graphs DERIVED from the vertex sets
+// (nearest-neighbor at the minimal edge length), rendered as tumbling 3D cages.
+const PHI = (1 + Math.sqrt(5)) / 2;
+type V3 = [number, number, number];
+interface PolyShape {
+  verts: V3[];
+  edges: [number, number][];
+  /** second-tier chords (the great dodecahedron's pentagram diagonals) */
+  chords?: [number, number][];
+}
+function normShape(verts: V3[]): V3[] {
+  const m = Math.max(...verts.map(([x, y, z]) => Math.hypot(x, y, z)));
+  return verts.map(([x, y, z]) => [x / m, y / m, z / m] as V3);
+}
+function dedupe(verts: V3[]): V3[] {
+  const seen = new Set<string>();
+  const out: V3[] = [];
+  for (const v of verts) {
+    const k = v.map((c) => c.toFixed(4)).join(",");
+    if (!seen.has(k)) {
+      seen.add(k);
+      out.push(v);
+    }
+  }
+  return out;
+}
+function edgesByNearest(verts: V3[], tol = 1.06): [number, number][] {
+  let d0 = Infinity;
+  const D = (a: V3, b: V3) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  for (let i = 0; i < verts.length; i++)
+    for (let j = i + 1; j < verts.length; j++) d0 = Math.min(d0, D(verts[i], verts[j]));
+  const out: [number, number][] = [];
+  for (let i = 0; i < verts.length; i++)
+    for (let j = i + 1; j < verts.length; j++) if (D(verts[i], verts[j]) < d0 * tol) out.push([i, j]);
+  return out;
+}
+function icosaVerts(): V3[] {
+  const v: V3[] = [];
+  for (const s1 of [-1, 1])
+    for (const s2 of [-1, 1]) {
+      v.push([0, s1, s2 * PHI], [s1, s2 * PHI, 0], [s2 * PHI, 0, s1]);
+    }
+  return normShape(dedupe(v));
+}
+function dodecaVerts(): V3[] {
+  const v: V3[] = [];
+  for (const s1 of [-1, 1])
+    for (const s2 of [-1, 1]) {
+      for (const s3 of [-1, 1]) v.push([s1, s2, s3]);
+      v.push([0, s1 / PHI, s2 * PHI], [s1 / PHI, s2 * PHI, 0], [s2 * PHI, 0, s1 / PHI]);
+    }
+  return normShape(dedupe(v));
+}
+/** even (cyclic) permutations × all sign combos of |triple|. */
+function evenPermSigns(triples: V3[]): V3[] {
+  const out: V3[] = [];
+  for (const [a, b, c] of triples)
+    for (const cyc of [
+      [a, b, c],
+      [c, a, b],
+      [b, c, a],
+    ] as V3[])
+      for (const s1 of [-1, 1])
+        for (const s2 of [-1, 1])
+          for (const s3 of [-1, 1]) out.push([cyc[0] * s1, cyc[1] * s2, cyc[2] * s3]);
+  return dedupe(out);
+}
+function buildShapes(): Record<string, PolyShape> {
+  const shapes: Record<string, PolyShape> = {};
+  // GREAT RHOMBICOSIDODECAHEDRON — 120 verts, 180 edges (12 decagons·20 hexagons·30 squares)
+  const grVerts = normShape(
+    evenPermSigns([
+      [1 / PHI, 1 / PHI, 3 + PHI],
+      [2 / PHI, PHI, 1 + 2 * PHI],
+      [1 / PHI, PHI * PHI, 3 * PHI - 1],
+      [2 * PHI - 1, 2, 2 + PHI],
+      [PHI, 3, 2 * PHI],
+    ]),
+  );
+  shapes.grhombi = { verts: grVerts, edges: edgesByNearest(grVerts) };
+  // CHAMFERED DODECAHEDRON — Goldberg G(2,0): dual of the frequency-2 geodesic
+  // icosahedron (80 verts, 42 faces: 12 pentagons + 30 hexagons)
+  const iv = icosaVerts();
+  const ie = edgesByNearest(iv);
+  const adj = new Map<number, Set<number>>();
+  for (const [i, j] of ie) {
+    (adj.get(i) ?? adj.set(i, new Set()).get(i)!).add(j);
+    (adj.get(j) ?? adj.set(j, new Set()).get(j)!).add(i);
+  }
+  const ifaces: [number, number, number][] = [];
+  for (let i = 0; i < iv.length; i++)
+    for (let j = i + 1; j < iv.length; j++)
+      for (let k = j + 1; k < iv.length; k++)
+        if (adj.get(i)!.has(j) && adj.get(j)!.has(k) && adj.get(i)!.has(k)) ifaces.push([i, j, k]);
+  const mids = new Map<string, number>();
+  const gv: V3[] = [...iv];
+  const midOf = (a: number, b: number): number => {
+    const k = a < b ? `${a}-${b}` : `${b}-${a}`;
+    let m = mids.get(k);
+    if (m === undefined) {
+      const p_: V3 = [
+        (gv[a][0] + gv[b][0]) / 2,
+        (gv[a][1] + gv[b][1]) / 2,
+        (gv[a][2] + gv[b][2]) / 2,
+      ];
+      const l = Math.hypot(...p_);
+      m = gv.length;
+      gv.push([p_[0] / l, p_[1] / l, p_[2] / l]);
+      mids.set(k, m);
+    }
+    return m;
+  };
+  // frequency-2 faces (4 per icosa face), then take the DUAL
+  const gfaces: number[][] = [];
+  for (const [a, b, c] of ifaces) {
+    const ab = midOf(a, b);
+    const bc = midOf(b, c);
+    const ca = midOf(c, a);
+    gfaces.push([a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]);
+  }
+  const dualVerts: V3[] = gfaces.map((f) => {
+    const cx = f.reduce((s2, i) => s2 + gv[i][0], 0) / f.length;
+    const cy = f.reduce((s2, i) => s2 + gv[i][1], 0) / f.length;
+    const cz = f.reduce((s2, i) => s2 + gv[i][2], 0) / f.length;
+    const l = Math.hypot(cx, cy, cz);
+    return [cx / l, cy / l, cz / l];
+  });
+  const edgeFaces = new Map<string, number[]>();
+  gfaces.forEach((f, fi) => {
+    for (let i = 0; i < f.length; i++) {
+      const a = f[i];
+      const b = f[(i + 1) % f.length];
+      const k = a < b ? `${a}-${b}` : `${b}-${a}`;
+      (edgeFaces.get(k) ?? edgeFaces.set(k, []).get(k)!).push(fi);
+    }
+  });
+  const dualEdges: [number, number][] = [];
+  edgeFaces.forEach((fs) => {
+    if (fs.length === 2) dualEdges.push([fs[0], fs[1]]);
+  });
+  shapes.chamfered = { verts: dualVerts, edges: dualEdges };
+  // GREAT DODECAHEDRON — 12 verts; boundary = icosa edge graph, the star comes from
+  // the pentagram CHORDS (second-distance tier), drawn dimmer
+  const gdE = edgesByNearest(iv);
+  const dists: number[] = [];
+  for (let i = 0; i < iv.length; i++)
+    for (let j = i + 1; j < iv.length; j++)
+      dists.push(Math.hypot(iv[i][0] - iv[j][0], iv[i][1] - iv[j][1], iv[i][2] - iv[j][2]));
+  const uniq = [...new Set(dists.map((d) => d.toFixed(3)))].map(Number).sort((a, b) => a - b);
+  const chordD = uniq[1];
+  const chords: [number, number][] = [];
+  for (let i = 0; i < iv.length; i++)
+    for (let j = i + 1; j < iv.length; j++) {
+      const d = Math.hypot(iv[i][0] - iv[j][0], iv[i][1] - iv[j][1], iv[i][2] - iv[j][2]);
+      if (Math.abs(d - chordD) < 0.01) chords.push([i, j]);
+    }
+  shapes.greatdodeca = { verts: iv, edges: gdE, chords };
+  // GREAT STELLATED DODECAHEDRON (rendered as the stellation spikes): icosa core +
+  // 20 spike tips over the face centroids, three edges per spike
+  const stV: V3[] = [...iv];
+  const stE: [number, number][] = [];
+  for (const [a, b, c] of ifaces) {
+    const cx = (iv[a][0] + iv[b][0] + iv[c][0]) / 3;
+    const cy = (iv[a][1] + iv[b][1] + iv[c][1]) / 3;
+    const cz = (iv[a][2] + iv[b][2] + iv[c][2]) / 3;
+    const l = Math.hypot(cx, cy, cz);
+    const tip = stV.length;
+    stV.push([(cx / l) * 1.65, (cy / l) * 1.65, (cz / l) * 1.65]);
+    stE.push([a, tip], [b, tip], [c, tip]);
+  }
+  shapes.stellated = { verts: normShape(stV), edges: stE };
+  // 120-CELL — cell-first projection: nearest + farthest dodecahedral cells as two
+  // concentric shells, corresponding verts linked; the 4D tumble animates at draw time
+  const dv = dodecaVerts();
+  shapes.cell120 = { verts: dv, edges: edgesByNearest(dv) };
+  return shapes;
+}
+const SHAPES = buildShapes();
+// finding family → shape (the user's pool)
+const SHAPE_OF: Record<string, string> = {
+  bug: "stellated",
+  security: "stellated",
+  error_handling: "stellated",
+  api: "grhombi",
+  test: "grhombi",
+  compat: "grhombi",
+  design: "chamfered",
+  perf: "chamfered",
+  observability: "chamfered",
+  docs: "greatdodeca",
+  clarity: "greatdodeca",
+  style: "greatdodeca",
+  question: "cell120",
+};
+function phaseOf(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return ((h >>> 0) % 628) / 100;
+}
+
 export interface MapCallbacks {
   onJump: (path: string, line: number | null) => void;
   onAsk: (finding: RdFinding, text: string) => void;
@@ -979,6 +1180,77 @@ export function renderReviewMap(
         }
       }
     };
+    /** A tumbling polyhedron cage: local-rotated verts, depth-split edge shading
+     *  (front edges in the node color, back edges dimmed), bright vertex points when
+     *  the cage is large enough to resolve. The 120-cell adds the 4D act: an inner
+     *  shell counter-rotating and breathing through the w-axis. */
+    const drawPoly = (n: MapNode, p: Proj, kind: string, boost: number) => {
+      const shape = SHAPES[kind];
+      const R = Math.max(n.r * p.s * 1.45, 1.6) * (boost > 1 ? 1.12 : 1);
+      const ph = phaseOf(n.id);
+      const ry = (cb.reduceMotion ? 0 : t * 0.55) + ph;
+      const rx = (cb.reduceMotion ? 0 : t * 0.34) + ph * 1.7;
+      const cy_ = Math.cos(ry);
+      const sy_ = Math.sin(ry);
+      const cx_ = Math.cos(rx);
+      const sx_ = Math.sin(rx);
+      const rot = (v: V3, flip: number): V3 => {
+        const x1 = v[0] * cy_ + v[2] * sy_ * flip;
+        const z1 = -v[0] * sy_ * flip + v[2] * cy_;
+        const y1 = v[1] * cx_ - z1 * sx_;
+        const z2 = v[1] * sx_ + z1 * cx_;
+        return [x1, y1, z2];
+      };
+      const front = shade(n.color, p.depth);
+      const back = shade(dimHex(n.color), p.depth);
+      const seg = (a: V3, b: V3, scale: number, dimAll: boolean) => {
+        const ac = p.col + a[0] * R * 1.9 * scale;
+        const ar = p.row + a[1] * R * scale;
+        const bc = p.col + b[0] * R * 1.9 * scale;
+        const br = p.row + b[1] * R * scale;
+        const steps = Math.max(1, Math.ceil(Math.hypot(bc - ac, br - ar)));
+        for (let i = 0; i <= steps; i++) {
+          const s_ = i / steps;
+          const z = a[2] + (b[2] - a[2]) * s_;
+          put(
+            Math.round(ac + (bc - ac) * s_),
+            Math.round(ar + (br - ar) * s_),
+            z > 0 ? ":" : "·",
+            dimAll ? back : z > 0 ? front : back,
+          );
+        }
+      };
+      if (kind === "cell120") {
+        // 4D tumble: outer cell steady, inner cell counter-rotates + breathes in w
+        const w = cb.reduceMotion ? 0.55 : 0.45 + Math.sin(t * 0.9 + ph) * 0.18;
+        for (const [i, j] of shape.edges) seg(rot(shape.verts[i], 1), rot(shape.verts[j], 1), 1, false);
+        for (const [i, j] of shape.edges)
+          seg(rot(shape.verts[i], -1), rot(shape.verts[j], -1), w, true);
+        if (R > 3.2)
+          for (let i = 0; i < shape.verts.length; i += 2) {
+            const a = rot(shape.verts[i], 1);
+            const b = rot(shape.verts[i], -1);
+            seg(a, [b[0] * w, b[1] * w, b[2] * w] as V3, 1, true);
+          }
+      } else {
+        for (const [i, j] of shape.edges) seg(rot(shape.verts[i], 1), rot(shape.verts[j], 1), 1, false);
+        if (shape.chords && R > 2.4)
+          for (const [i, j] of shape.chords)
+            seg(rot(shape.verts[i], 1), rot(shape.verts[j], 1), 1, true);
+      }
+      if (R > 3.6) {
+        for (const v of shape.verts) {
+          const rv = rot(v, 1);
+          if (rv[2] > 0.15)
+            put(
+              Math.round(p.col + rv[0] * R * 1.9),
+              Math.round(p.row + rv[1] * R),
+              "+",
+              boost > 1 ? lighten(n.color, 0.5) : lighten(n.color, 0.25),
+            );
+        }
+      }
+    };
     const breathe = cb.reduceMotion ? 0 : Math.sin(t * 1.6) * 0.4;
     core.r = 4.2 + breathe * 0.4;
     for (const { n, p } of order) {
@@ -999,8 +1271,9 @@ export function renderReviewMap(
       }
       const f = n.finding!;
       const pulse = f.severity === "blocker" && !cb.reduceMotion && Math.sin(t * 6) > 0;
-      if (f.type === "question") put(Math.round(p.col), Math.round(p.row), "?", shade(n.color, p.depth));
-      else if (f.type === "praise") put(Math.round(p.col), Math.round(p.row), "+", shade(n.color, p.depth));
+      const shapeKind = SHAPE_OF[f.type];
+      if (f.type === "praise") put(Math.round(p.col), Math.round(p.row), "+", shade(n.color, p.depth));
+      else if (shapeKind) drawPoly(n, p, shapeKind, pulse ? 1.5 : 1);
       else sphere(n, p, pulse ? 1.45 : 1);
       if (f.status !== "open") put(Math.round(p.col), Math.round(p.row), "·", "#444c56");
       if (Object.values(f.engines).includes("dispute")) {
