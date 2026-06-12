@@ -789,6 +789,22 @@ export function renderReviewMap(
     return out;
   };
 
+  /** Mix two hex colors (quantized + cached) — point-light tinting. */
+  const mixCache = new Map<string, string>();
+  const mixHex = (a: string, b: string, t_: number): string => {
+    const q = Math.round(Math.max(0, Math.min(1, t_)) * 7) / 7;
+    const key = `${a}~${b}~${q}`;
+    let out = mixCache.get(key);
+    if (!out) {
+      const na = parseInt(a.slice(1), 16);
+      const nb = parseInt(b.slice(1), 16);
+      const mx = (x: number, y: number) => Math.round(x + (y - x) * q);
+      out = `rgb(${mx((na >> 16) & 255, (nb >> 16) & 255)},${mx((na >> 8) & 255, (nb >> 8) & 255)},${mx(na & 255, nb & 255)})`;
+      mixCache.set(key, out);
+    }
+    return out;
+  };
+
   /** Depth cue: far → dim toward the void (quantized so the atlas stays small). */
   const shadeCache = new Map<string, string>();
   const shade = (hex: string, depth: number): string => {
@@ -929,6 +945,15 @@ export function renderReviewMap(
 
     fb.fill(BG_PACKED);
     overlays = [];
+    // the orbiting key light (shared by spheres, caustics, flare)
+    const lt = cb.reduceMotion ? 0 : t * 0.25;
+    const Lx0 = Math.cos(lt) * 0.55 - 0.25;
+    const Ly0 = -0.62;
+    const Lz0 = Math.sin(lt) * 0.3 + 0.55;
+    const Llen = Math.hypot(Lx0, Ly0, Lz0);
+    const Lx = Lx0 / Llen;
+    const Ly = Ly0 / Llen;
+    const Lz = Lz0 / Llen;
 
     // 1 · the void: mandala mode breathes radial STANDING WAVES (m-fold symmetry,
     //     m = chapter count — the geometry of the review itself); flow/orbit keep
@@ -999,6 +1024,9 @@ export function renderReviewMap(
             ch = ":";
             shade = 3; // rim
           }
+          // CAUSTIC SWEEP: the orbiting key light drags a bright band across the gems
+          const az = Math.atan2(pcy, pcx);
+          if (Math.cos(az - lt * 2.2) > 0.82 && shade > 0) shade--;
           const pal = inSkull ? GRAY_PAL : GEM_PAL[hueIdx];
           put(c, r, ch, pal[shade]);
         }
@@ -1038,8 +1066,29 @@ export function renderReviewMap(
       .map((n) => ({ n, p: project(n.x, n.y, n.z) }))
       .sort((a, b) => b.p.depth - a.p.depth);
     const SHADE_BLOCKS = ["█", "▓", "▒", "░"];
+    // POINT LIGHTS: blocking findings emit light (blockers strong + pulsing,
+    // fix-before-merge faint). They tint neighbors and spill into their pockets.
+    const pointLights = order
+      .filter(
+        ({ n }) =>
+          n.finding &&
+          (n.finding.severity === "blocker" || n.finding.severity === "fix_before_merge"),
+      )
+      .map(({ n, p }) => ({
+        col: p.col,
+        row: p.row,
+        depth: p.depth,
+        color: n.color,
+        power:
+          (n.finding!.severity === "blocker" ? 1.15 : 0.55) *
+          (cb.reduceMotion ? 1 : 0.8 + 0.35 * Math.sin(t * 6 + phaseOf(n.id))),
+      }));
     for (const { n, p } of order) {
       const R = Math.max(n.r * p.s, 1.2);
+      const isLight =
+        n.finding &&
+        (n.finding.severity === "blocker" || n.finding.severity === "fix_before_merge");
+      const pocketColor = isLight ? mixHex("#070a12", n.color, 0.22) : "#070a12";
       // projected shadow: offset ellipse, light from upper-left
       const shR = R * 1.05;
       const shC = p.col + R * 0.85;
@@ -1061,7 +1110,7 @@ export function renderReviewMap(
           const w = Math.exp(-(dist * dist) / sig2);
           if (w < 0.22) continue;
           const bi = w > 0.85 ? 0 : w > 0.6 ? 1 : w > 0.4 ? 2 : 3;
-          put(Math.round(p.col + dc), Math.round(p.row + dr), SHADE_BLOCKS[bi], "#070a12");
+          put(Math.round(p.col + dc), Math.round(p.row + dr), SHADE_BLOCKS[bi], pocketColor);
         }
       }
     }
@@ -1145,23 +1194,54 @@ export function renderReviewMap(
     // 4 · nodes, painter's order (far → near): RAY-TRACED spheres. Each cell casts
     //     a ray at the sphere; on hit we get the surface normal → Lambert diffuse +
     //     Blinn-Phong specular from a slowly ORBITING light. ASCII, but lit.
-    const lt = cb.reduceMotion ? 0 : t * 0.25;
-    const Lx0 = Math.cos(lt) * 0.55 - 0.25;
-    const Ly0 = -0.62;
-    const Lz0 = Math.sin(lt) * 0.3 + 0.55;
-    const Llen = Math.hypot(Lx0, Ly0, Lz0);
-    const Lx = Lx0 / Llen;
-    const Ly = Ly0 / Llen;
-    const Lz = Lz0 / Llen;
     // half-vector for Blinn (view = +z toward camera)
     const Hl = Math.hypot(Lx, Ly, Lz + 1);
     const Hx = Lx / Hl;
     const Hy = Ly / Hl;
     const Hz = (Lz + 1) / Hl;
     const RAY_RAMP = " ·:=+*#%@";
+    /** SHADOW RAY: march from a node's center toward the key light; other spheres
+     *  occlude with a soft penumbra (closest-approach falloff). */
+    const shadowOf = (self: MapNode, p: Proj): number => {
+      let soft = 1;
+      for (const { n: o, p: po } of order) {
+        if (o === self || o.kind === "finding") continue; // orbs occlude
+        const ox_ = (po.col - p.col) / 1.9;
+        const oy_ = po.row - p.row;
+        const oz_ = (po.depth - p.depth) * cam.zoom * 0.5;
+        const tA = ox_ * Lx + oy_ * Ly + oz_ * Lz;
+        if (tA <= 0) continue; // behind, can't block the light
+        const dx_ = ox_ - Lx * tA;
+        const dy_ = oy_ - Ly * tA;
+        const dz_ = oz_ - Lz * tA;
+        const miss = Math.hypot(dx_, dy_, dz_);
+        const oR = Math.max(o.r * po.s, 1) * 1.35;
+        if (miss < oR) soft = Math.min(soft, Math.max(0.3, miss / oR));
+      }
+      return soft;
+    };
     const sphere = (n: MapNode, p: Proj, boost: number) => {
       const R = Math.max(n.r * p.s, 0.8);
       const rIn = Math.ceil(R);
+      const soft = shadowOf(n, p);
+      // the two strongest point lights on this node (direction + falloff, precomputed)
+      const pls = pointLights
+        .filter((L) => L.color !== n.color || n.kind !== "finding")
+        .map((L) => {
+          const dx_ = (L.col - p.col) / 1.9;
+          const dy_ = L.row - p.row;
+          const dz_ = (L.depth - p.depth) * cam.zoom * 0.5;
+          const d = Math.hypot(dx_, dy_, dz_) || 1;
+          return {
+            x: dx_ / d,
+            y: dy_ / d,
+            z: dz_ / d,
+            f: (L.power * 1.0) / (1 + (d / (16 * cam.zoom)) ** 2),
+            color: L.color,
+          };
+        })
+        .sort((a, b) => b.f - a.f)
+        .slice(0, 2);
       for (let dr = -rIn; dr <= rIn; dr++) {
         for (let dc = -Math.ceil(R * 1.9); dc <= Math.ceil(R * 1.9); dc++) {
           const nx = dc / 1.9 / R;
@@ -1169,14 +1249,41 @@ export function renderReviewMap(
           const rr = nx * nx + ny * ny;
           if (rr > 1) continue; // the ray misses
           const nz = Math.sqrt(1 - rr); // surface normal at the hit point
-          const diff = Math.max(0, nx * Lx + ny * Ly + nz * Lz);
+          const diff = Math.max(0, nx * Lx + ny * Ly + nz * Lz) * soft;
           const specD = Math.max(0, nx * Hx + ny * Hy + nz * Hz);
-          const spec = Math.pow(specD, 24);
-          const inten = Math.min(1, 0.13 + (0.78 * diff + spec * 1.1) * boost);
+          const spec = Math.pow(specD, 24) * soft;
+          let plSum = 0;
+          let plBest = 0;
+          let plColor = "";
+          for (const L of pls) {
+            const d2 = Math.max(0, nx * L.x + ny * L.y + nz * L.z) * L.f;
+            plSum += d2;
+            if (d2 > plBest) {
+              plBest = d2;
+              plColor = L.color;
+            }
+          }
+          const inten = Math.min(1, 0.13 + (0.78 * diff + spec * 1.1 + plSum * 0.85) * boost);
           const ch = RAY_RAMP[Math.min(RAY_RAMP.length - 1, Math.floor(inten * RAY_RAMP.length))];
           if (ch === " ") continue;
-          const base = shade(n.color, p.depth);
-          const color = spec > 0.45 ? lighten(n.color, Math.min(0.85, spec)) : base;
+          let color: string;
+          if (spec > 0.45) {
+            color = lighten(n.color, Math.min(0.85, spec));
+          } else if (plBest > 0.22) {
+            color = mixHex(shade(n.color, p.depth), plColor, Math.min(0.55, plBest)); // lit by a blocker
+          } else if (nz < 0.48 && bgMode === "mosaic") {
+            // SCREEN-SPACE REFLECTION: glancing rays bounce into the gem field —
+            // sample the mosaic's hue band at the reflected position (Fresnel-ish)
+            const rc = p.col + nx * R * 3.4;
+            const rrw = Math.sqrt(
+              Math.abs(rc - cols / 2) ** 2 + ((p.row + ny * R * 2) - rows / 2) ** 2 * 1.8,
+            );
+            const hueIdx =
+              ((Math.floor(((42 + rrw * 2.9) / 360) * GEM_HUES) % GEM_HUES) + GEM_HUES) % GEM_HUES;
+            color = mixHex(shade(n.color, p.depth), GEM_PAL[hueIdx][0], 0.3);
+          } else {
+            color = shade(n.color, p.depth);
+          }
           put(Math.round(p.col + dc), Math.round(p.row + dr), ch, color);
         }
       }
@@ -1294,6 +1401,27 @@ export function renderReviewMap(
         const off = Math.max(n.r * p.s * 1.9 + 1, 2);
         put(Math.round(p.col - off), Math.round(p.row), "[", "#ffd866");
         put(Math.round(p.col + off), Math.round(p.row), "]", "#ffd866");
+      }
+    }
+
+    // 4.5 · LENS FLARE: when the orbiting light swings toward the view axis it
+    //       streaks across the verdict eye
+    if (Lz > 0.74 && !cb.reduceMotion) {
+      const pc = project(core.x, core.y, core.z);
+      const fl = (Lz - 0.74) / 0.26;
+      const span = Math.round(core.r * pc.s * 3.2 * fl);
+      for (let dc = -span; dc <= span; dc++) {
+        const fall = 1 - Math.abs(dc) / (span || 1);
+        if (fall < 0.18) continue;
+        put(
+          Math.round(pc.col + dc),
+          Math.round(pc.row - dc * 0.12),
+          fall > 0.72 ? "─" : "·",
+          mixHex("#05070c", lighten(core.color, 0.6), fall * fl),
+        );
+      }
+      for (const k of [-1, 1]) {
+        put(Math.round(pc.col + span * 0.55 * k), Math.round(pc.row - span * 0.066 * k), "✦", lighten(core.color, 0.5));
       }
     }
 
