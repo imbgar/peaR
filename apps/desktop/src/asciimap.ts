@@ -841,8 +841,9 @@ export function renderReviewMap(
     camTarget = { x: 0, y: 0, z: 0, zoom: fitZoom() };
     rotTarget = { yaw: 0, pitch: 0 };
   });
-  // Zoom stays inside [just-wider-than-fit … 3×]: you can never lose the composition.
-  const clampZoom = (z: number) => Math.max(fitZoom() * 0.85, Math.min(3.0, z));
+  // Zoom stays inside [just-wider-than-fit … 8×]: never lost, and close enough to
+  // read a polyhedron's vertices.
+  const clampZoom = (z: number) => Math.max(fitZoom() * 0.85, Math.min(8.0, z));
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
     const f = e.deltaY < 0 ? 1.1 : 0.9;
@@ -1339,6 +1340,9 @@ export function renderReviewMap(
       ctx.fillStyle = o.color;
       ctx.fillText(o.s, o.col * TW, o.row * TH + TH / 2);
     }
+    ctx.fillStyle = "#39404d";
+    ctx.font = `${10 * dpr}px ui-monospace, Menlo, monospace`;
+    ctx.fillText("+/- zoom · wasd rotate · 0 reset · L layout · G bg · [ ] res", 10 * dpr, fbH - 10 * dpr);
   };
 
   const ro = new ResizeObserver(() => {
@@ -1353,6 +1357,7 @@ export function renderReviewMap(
   const dispose = () => {
     cancelAnimationFrame(raf);
     ro.disconnect();
+    document.removeEventListener("keydown", onMapKey);
     atlas.clear();
     shadeCache.clear();
     teardown = null;
@@ -1384,6 +1389,61 @@ export function renderReviewMap(
     localStorage.setItem("pear.map.bg", bgMode);
     syncBgBtn();
   });
+  // ── hotkeys: +/- zoom · WASD rotate · 0 reset · L layout · G background · [ ] res
+  const onMapKey = (e: KeyboardEvent) => {
+    if ((e.target as HTMLElement)?.tagName === "INPUT") return;
+    switch (e.key) {
+      case "+":
+      case "=":
+        if (camTarget) camTarget.zoom = clampZoom(camTarget.zoom * 1.18);
+        else cam.zoom = clampZoom(cam.zoom * 1.18);
+        break;
+      case "-":
+      case "_":
+        if (camTarget) camTarget.zoom = clampZoom(camTarget.zoom / 1.18);
+        else cam.zoom = clampZoom(cam.zoom / 1.18);
+        break;
+      case "w":
+      case "W":
+        rotTarget = null;
+        cam.pitch = Math.max(-1.25, cam.pitch - 0.07);
+        break;
+      case "s":
+      case "S":
+        rotTarget = null;
+        cam.pitch = Math.min(1.25, cam.pitch + 0.07);
+        break;
+      case "a":
+        if (document.querySelector(".jr")) break; // journey owns A (auto-play)
+        rotTarget = null;
+        cam.yaw += 0.07;
+        break;
+      case "d":
+        if (document.querySelector(".jr")) break; // journey owns D (detail card)
+        rotTarget = null;
+        cam.yaw -= 0.07;
+        break;
+      case "0":
+        resetView();
+        break;
+      case "l":
+      case "L":
+        modeBtn.click();
+        break;
+      case "g":
+      case "G":
+        bgBtn.click();
+        break;
+      case "[":
+        applyDensity(DENS - 0.25);
+        break;
+      case "]":
+        applyDensity(DENS + 0.25);
+        break;
+    }
+  };
+  document.addEventListener("keydown", onMapKey);
+
   const resetView = () => {
     focusNode = null;
     camTarget = { x: 0, y: 0, z: 0, zoom: fitZoom() };
@@ -1422,7 +1482,7 @@ export function renderReviewMap(
         x: node.x,
         y: node.y,
         z: node.z,
-        zoom: clampZoom(zoom ?? (node.kind === "finding" ? 2.6 : node.kind === "beat" ? 1.7 : fitZoom())),
+        zoom: clampZoom(zoom ?? (node.kind === "finding" ? 3.4 : node.kind === "beat" ? 1.8 : fitZoom())),
       };
     },
     focusWide() {
