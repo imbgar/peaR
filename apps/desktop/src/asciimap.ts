@@ -341,9 +341,17 @@ export function renderReviewMap(
   const beatOf = (n: MapNode): MapNode => beatNodes[n.beatIdx ?? 0];
 
   // ── two 3D layouts over the same nodes; targets lerp → switching MORPHS ──
-  type LayoutMode = "flow" | "orbit";
+  type LayoutMode = "mandala" | "flow" | "orbit";
+  const storedLayout = localStorage.getItem("pear.map.layout");
   let layout: LayoutMode =
-    (localStorage.getItem("pear.map.layout") as LayoutMode) === "orbit" ? "orbit" : "flow";
+    storedLayout === "flow" || storedLayout === "orbit" ? storedLayout : "mandala";
+  // The mandala's design radius (world units) — everything fits inside it, always.
+  const MRAD = 34;
+  const nB = () => Math.max(beatNodes.length, 1);
+  const sectorW = () => (Math.PI * 2) / nB();
+  const beatAngle = (i: number) => -Math.PI / 2 + i * sectorW(); // 12 o'clock, clockwise
+  /** Shallow dome: center toward the viewer, rim receding — the mandala's "eye" depth. */
+  const domeZ = (x: number, y: number) => ((x * x + y * y) / (MRAD * MRAD)) * 8 - 4;
   const applyLayout = (mode: LayoutMode) => {
     layout = mode;
     localStorage.setItem("pear.map.layout", mode);
@@ -354,7 +362,56 @@ export function renderReviewMap(
       e.n++;
       perBeat.set(i, e);
     });
-    if (mode === "orbit") {
+    if (mode === "mandala") {
+      // Alex Grey arrangement: verdict eye at center; chapters as petals on a ring
+      // (equal angles, clockwise from 12); each petal's findings fill arc BANDS
+      // outside the ring, severity-major (the worst sits closest to the eye's ring).
+      core.tx = core.ty = 0;
+      core.tz = domeZ(0, 0);
+      const R1 = 15;
+      beatNodes.forEach((bn, i) => {
+        const a = beatAngle(i);
+        bn.tx = Math.cos(a) * R1;
+        bn.ty = Math.sin(a) * R1;
+        bn.tz = domeZ(bn.tx, bn.ty);
+      });
+      // fill each petal row by row (rows = concentric bands)
+      const byBeat = new Map<number, MapNode[]>();
+      findingNodes.forEach((fn) => {
+        const i = fn.beatIdx ?? 0;
+        (byBeat.get(i) ?? byBeat.set(i, []).get(i)!).push(fn);
+      });
+      byBeat.forEach((fns, i) => {
+        const a0 = beatAngle(i);
+        const avail = sectorW() * 0.74;
+        let row = 0;
+        let pos = 0;
+        let cap = 0;
+        let rowR = 0;
+        const rowOf: { n: MapNode; row: number; pos: number }[] = [];
+        fns.forEach((fn) => {
+          if (pos >= cap) {
+            rowR = R1 + 6.5 + row * 4.8;
+            cap = Math.max(1, Math.floor((avail * rowR) / 4.0));
+            row++;
+            pos = 0;
+          }
+          rowOf.push({ n: fn, row: row - 1, pos: pos++ });
+        });
+        // center each row's occupants in the sector
+        const rowCounts = new Map<number, number>();
+        rowOf.forEach((e) => rowCounts.set(e.row, (rowCounts.get(e.row) ?? 0) + 1));
+        rowOf.forEach((e) => {
+          const r = R1 + 6.5 + e.row * 4.8;
+          const count = rowCounts.get(e.row)!;
+          const spacing = count > 1 ? avail / (count - 1) : 0;
+          const ang = a0 + (count > 1 ? -avail / 2 + e.pos * spacing : 0);
+          e.n.tx = Math.cos(ang) * r;
+          e.n.ty = Math.sin(ang) * r;
+          e.n.tz = domeZ(e.n.tx, e.n.ty);
+        });
+      });
+    } else if (mode === "orbit") {
       // spherical phyllotaxis at every scale (self-similar)
       core.tx = core.ty = core.tz = 0;
       const R = 15 + beatNodes.length * 1.1;
@@ -409,9 +466,11 @@ export function renderReviewMap(
   // ── orbit camera: yaw/pitch around a target, perspective projection ──
   const FOV = 42; // perspective strength (world units to the projection plane)
   const extent = () =>
-    nodes.reduce((m, n) => Math.max(m, Math.abs(n.tx) + 8, Math.abs(n.ty) + 6, Math.abs(n.tz) + 6), 18);
+    layout === "mandala"
+      ? MRAD + 2
+      : nodes.reduce((m, n) => Math.max(m, Math.abs(n.tx) + 8, Math.abs(n.ty) + 6, Math.abs(n.tz) + 6), 18);
   const fitZoom = () => Math.min(cols / (extent() * 2.3), rows / (extent() * 1.28));
-  const cam = { x: 0, y: 0, z: 0, zoom: fitZoom(), yaw: 0.35, pitch: 0.22 };
+  const cam = { x: 0, y: 0, z: 0, zoom: fitZoom(), yaw: 0, pitch: 0 };
   let camTarget: { x: number; y: number; z: number; zoom: number } | null = null;
   let focusNode: MapNode | null = null;
   const selected = new Set<string>();
@@ -570,23 +629,44 @@ export function renderReviewMap(
       cam.z += (camTarget.z - cam.z) * k;
       cam.zoom += (camTarget.zoom - cam.zoom) * k;
     }
-    if (!cb.reduceMotion && !dragging && !journeyMode) cam.yaw += 0.0009;
+    if (!cb.reduceMotion && !dragging && !journeyMode && layout !== "mandala") cam.yaw += 0.0009;
 
     fb.fill(BG_PACKED);
     overlays = [];
 
-    // 1 · Julia field (screen space with yaw/pitch parallax — the void turns with you)
-    const th = (cb.reduceMotion ? 0 : t * 0.05) + 2.2;
-    const jx = 0.7885 * Math.cos(th);
-    const jy = 0.7885 * Math.sin(th);
+    // 1 · the void: mandala mode breathes radial STANDING WAVES (m-fold symmetry,
+    //     m = chapter count — the geometry of the review itself); flow/orbit keep
+    //     the drifting Julia set. Both with camera parallax.
     const ox = cam.yaw * 9;
     const oy = cam.pitch * 7;
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const wx = (c - cols / 2) / cam.zoom + ox;
-        const wy = ((r - rows / 2) / cam.zoom) * (ASPECT / 1.05) + oy;
-        const n = julia(wx * 0.022, wy * 0.04, jx, jy);
-        if (n > 2) put(c, r, BG_RAMP[Math.min(n, BG_RAMP.length - 1)], n % 2 ? BG_A : BG_B);
+    if (layout === "mandala") {
+      const m = nB();
+      const tt = cb.reduceMotion ? 0 : t;
+      for (let r = 0; r < rows; r++) {
+        const dy = (r - rows / 2) * (ASPECT / 1.05) + oy;
+        for (let c = 0; c < cols; c++) {
+          const dx = c - cols / 2 + ox;
+          const rr = Math.sqrt(dx * dx + dy * dy);
+          const th_ = Math.atan2(dy, dx);
+          const v =
+            Math.sin(rr * 0.085 - tt * 1.1) +
+            Math.cos(th_ * m + tt * 0.45) +
+            Math.sin(rr * 0.034 + th_ * 2 - tt * 0.25);
+          const n = Math.floor(((v + 3) / 6) * 15);
+          if (n > 4) put(c, r, BG_RAMP[Math.min(n, BG_RAMP.length - 1)], n % 2 ? BG_A : BG_B);
+        }
+      }
+    } else {
+      const th = (cb.reduceMotion ? 0 : t * 0.05) + 2.2;
+      const jx = 0.7885 * Math.cos(th);
+      const jy = 0.7885 * Math.sin(th);
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const wx = (c - cols / 2) / cam.zoom + ox;
+          const wy = ((r - rows / 2) / cam.zoom) * (ASPECT / 1.05) + oy;
+          const n = julia(wx * 0.022, wy * 0.04, jx, jy);
+          if (n > 2) put(c, r, BG_RAMP[Math.min(n, BG_RAMP.length - 1)], n % 2 ? BG_A : BG_B);
+        }
       }
     }
 
@@ -608,7 +688,53 @@ export function renderReviewMap(
         );
       }
     };
-    if (layout === "orbit") {
+    // 3D point on the mandala dome at polar (ang, rad)
+    const dome3 = (ang: number, rad: number): [number, number, number] => {
+      const x = Math.cos(ang) * rad;
+      const y = Math.sin(ang) * rad;
+      return [x, y, domeZ(x, y)];
+    };
+    /** Sample a parametric 3D path with flowing phase chars. */
+    const path3 = (
+      f: (s: number) => [number, number, number],
+      samples: number,
+      color: string,
+      still = false,
+    ) => {
+      for (let i = 0; i <= samples; i++) {
+        const sN = i / samples;
+        const [x, y, z] = f(sN);
+        const p = project(x, y, z);
+        const phase = Math.floor(sN * samples - (cb.reduceMotion || still ? 0 : t * 7));
+        put(
+          Math.round(p.col),
+          Math.round(p.row),
+          still ? "·" : FLOW[((phase % FLOW.length) + FLOW.length) % FLOW.length],
+          shade(color, p.depth),
+        );
+      }
+    };
+    if (layout === "mandala") {
+      const R1 = 15;
+      // guide rings + sector meridians (the sacred-geometry scaffolding, whisper-dim)
+      path3((sN) => dome3(sN * Math.PI * 2, R1), 150, "#222a3e", true);
+      path3((sN) => dome3(sN * Math.PI * 2, R1 + 11.3), 190, "#1d2434", true);
+      for (let i = 0; i < nB(); i++) {
+        const b = beatAngle(i) + sectorW() / 2;
+        path3((sN) => dome3(b, R1 + 2 + sN * (MRAD - R1 - 4)), 16, "#1d2434", true);
+      }
+      // the FLOW CIRCUIT, clockwise: eye → chapter 1 → … → chapter n → back into the eye
+      path3((sN) => dome3(beatAngle(0), core.r + 1.5 + sN * (R1 - core.r - 3)), 14, "#46506a");
+      for (let i = 0; i + 1 < beatNodes.length; i++) {
+        const a0 = beatAngle(i);
+        const a1 = beatAngle(i + 1);
+        path3((sN) => dome3(a0 + (a1 - a0) * sN, R1), 26, "#46506a");
+      }
+      if (beatNodes.length > 1) {
+        const aL = beatAngle(beatNodes.length - 1);
+        path3((sN) => dome3(aL + sectorW() * 0.35 * sN, R1 - sN * (R1 - core.r - 1.5)), 18, "#46506a");
+      }
+    } else if (layout === "orbit") {
       for (const bn of beatNodes) edge(core, bn, "#3d4761");
     } else {
       for (let i = 0; i + 1 < beatNodes.length; i++) edge(beatNodes[i], beatNodes[i + 1], "#46506a");
@@ -616,8 +742,8 @@ export function renderReviewMap(
     }
     for (const fn of findingNodes) {
       const bn = beatOf(fn);
-      if (layout === "flow") edge(fn, bn, dimHex(fn.color));
-      else edge(bn, fn, dimHex(fn.color));
+      if (layout === "orbit") edge(bn, fn, dimHex(fn.color));
+      else edge(fn, bn, dimHex(fn.color));
     }
 
     // 3 · nodes, painter's order (far → near), glyph-ramp discs with depth cueing
@@ -727,13 +853,13 @@ export function renderReviewMap(
 
   const detail = buildDetailCard(slot, cb);
   const syncModeBtn = () => {
-    modeBtn.textContent = layout === "flow" ? "≋ flow" : "✿ orbit";
+    modeBtn.textContent = layout === "mandala" ? "❂ mandala" : layout === "flow" ? "≋ flow" : "✿ orbit";
     modeBtn.title =
-      "toggle layout: flow river ⇄ phyllotaxis orbit (morphs live) · drag rotates · wheel zooms · dblclick re-frames";
+      "cycle layout: mandala → flow → orbit (morphs live) · drag rotates · wheel zooms · dblclick re-frames";
   };
   syncModeBtn();
   modeBtn.addEventListener("click", () => {
-    applyLayout(layout === "flow" ? "orbit" : "flow");
+    applyLayout(layout === "mandala" ? "flow" : layout === "flow" ? "orbit" : "mandala");
     syncModeBtn();
     focusNode = null;
     camTarget = { x: 0, y: 0, z: 0, zoom: fitZoom() };
