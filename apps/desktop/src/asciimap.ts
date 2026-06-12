@@ -1,4 +1,9 @@
-// The peaRview review map — 3D ANIMATED ASCII (step 3 of docs/PEARVIEW.md, take 4).
+// The peaRview review map — 3D ANIMATED ASCII at 10× RESOLUTION (step 3, take 5).
+// Cells are ~2.2×4 px: glyphs become texture, the grid approaches a plotter. At ~90k
+// cells/frame, per-cell drawImage dies — so the blit path is a raw Uint32 FRAMEBUFFER
+// compositor: glyphs pre-bake to opaque pixel tiles (terminal semantics: a cell is
+// replaced, never blended), tiles block-copy into one ImageData, ONE putImageData per
+// frame. Readable text (labels, hover line, fps) draws as a fillText overlay pass.
 // donut.c's spirit, scaled up: a true 3D scene perspective-projected onto a character
 // grid through a glyph atlas, full redraw every frame on uncapped rAF.
 //
@@ -204,10 +209,10 @@ export function renderReviewMap(
   modeBtn.className = "rmap-mode";
   stage.appendChild(modeBtn);
 
-  // Cell metrics (a tight terminal grid).
-  const FONT = 11;
-  const CW = 6.6;
-  const CH = 12;
+  // Cell metrics — 10× density: glyphs are ~2×4 px texture, not letters.
+  const FONT = 3.8;
+  const CW = 2.2;
+  const CH = 4;
   const ASPECT = CH / CW; // a cell is ~1.8× taller than wide
   const SIDE_W = 380;
   let W = Math.max((host.clientWidth || 800) - SIDE_W - 12, 320);
@@ -215,42 +220,76 @@ export function renderReviewMap(
   let cols = 0;
   let rows = 0;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const TW = Math.round(CW * dpr); // tile size in device px (integer → clean copies)
+  const TH = Math.round(CH * dpr);
+  let fb: Uint32Array;
+  let fbImage: ImageData;
+  let fbW = 0;
+  let fbH = 0;
   const sizeCanvas = () => {
     cols = Math.floor(W / CW);
     rows = Math.floor(H / CH);
-    canvas.width = Math.floor(W * dpr);
-    canvas.height = Math.floor(H * dpr);
-    canvas.style.width = `${W}px`;
-    canvas.style.height = `${H}px`;
+    fbW = cols * TW;
+    fbH = rows * TH;
+    canvas.width = fbW;
+    canvas.height = fbH;
+    canvas.style.width = `${fbW / dpr}px`;
+    canvas.style.height = `${fbH / dpr}px`;
+    fbImage = ctx.createImageData(fbW, fbH);
+    fb = new Uint32Array(fbImage.data.buffer);
   };
   sizeCanvas();
 
-  // Glyph atlas — fillText is far too slow for full-grid redraw; drawImage isn't.
-  const atlas = new Map<string, HTMLCanvasElement>();
-  const tile = (ch: string, color: string): HTMLCanvasElement => {
+  // Glyph atlas as raw PIXEL TILES (opaque, baked on the void color): a cell is
+  // REPLACED by its glyph tile — terminal semantics, zero alpha math, pure memcpy.
+  const scratch = document.createElement("canvas");
+  scratch.width = TW;
+  scratch.height = TH;
+  const sctx = scratch.getContext("2d", { willReadFrequently: true })!;
+  const atlas = new Map<string, Uint32Array>();
+  const tile = (ch: string, color: string): Uint32Array => {
     const key = `${ch}|${color}`;
     let t = atlas.get(key);
     if (!t) {
-      t = document.createElement("canvas");
-      t.width = Math.ceil(CW * dpr);
-      t.height = Math.ceil(CH * dpr);
-      const tc = t.getContext("2d")!;
-      tc.scale(dpr, dpr);
-      tc.font = `${FONT}px ui-monospace, Menlo, monospace`;
-      tc.textBaseline = "middle";
-      tc.textAlign = "center";
-      tc.fillStyle = color;
-      tc.fillText(ch, CW / 2, CH / 2 + 0.5);
+      sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      sctx.fillStyle = "#05070c";
+      sctx.fillRect(0, 0, CW, CH);
+      sctx.font = `${FONT}px ui-monospace, Menlo, monospace`;
+      sctx.textBaseline = "middle";
+      sctx.textAlign = "center";
+      sctx.fillStyle = color;
+      sctx.fillText(ch, CW / 2, CH / 2 + 0.25);
+      t = new Uint32Array(sctx.getImageData(0, 0, TW, TH).data.buffer.slice(0));
       atlas.set(key, t);
     }
     return t;
   };
+  const BG_PACKED = tile(" ", "#05070c")[0]; // packed void color, endian-correct
   const put = (col: number, row: number, ch: string, color: string) => {
+    col = col | 0;
+    row = row | 0;
     if (col < 0 || row < 0 || col >= cols || row >= rows || ch === " ") return;
-    ctx.drawImage(tile(ch, color), Math.round(col * CW * dpr), Math.round(row * CH * dpr));
+    const t = tile(ch, color);
+    const x0 = col * TW;
+    let dst = row * TH * fbW + x0;
+    let src = 0;
+    for (let y = 0; y < TH; y++) {
+      fb.set(t.subarray(src, src + TW), dst);
+      src += TW;
+      dst += fbW;
+    }
   };
+  // Readable text overlays (labels, hover line, fps) — drawn AFTER the framebuffer
+  // blit at a legible size; grid cells are texture, not letters, at this density.
+  interface Overlay {
+    col: number;
+    row: number;
+    s: string;
+    color: string;
+  }
+  let overlays: Overlay[] = [];
   const text = (col: number, row: number, s: string, color: string) => {
-    for (let i = 0; i < s.length; i++) put(col + i, row, s[i], color);
+    overlays.push({ col, row, s, color });
   };
 
   // ── world: nodes in isotropic 3D units ──
@@ -411,7 +450,7 @@ export function renderReviewMap(
   const shadeCache = new Map<string, string>();
   const shade = (hex: string, depth: number): string => {
     const t = Math.max(0, Math.min(0.78, (depth + extent() * 0.55) / (extent() * 1.7)));
-    const q = Math.round(t * 7) / 7;
+    const q = Math.round(t * 11) / 11;
     const key = `${hex}@${q}`;
     let out = shadeCache.get(key);
     if (!out) {
@@ -533,8 +572,8 @@ export function renderReviewMap(
     }
     if (!cb.reduceMotion && !dragging && !journeyMode) cam.yaw += 0.0009;
 
-    ctx.fillStyle = "#05070c";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    fb.fill(BG_PACKED);
+    overlays = [];
 
     // 1 · Julia field (screen space with yaw/pitch parallax — the void turns with you)
     const th = (cb.reduceMotion ? 0 : t * 0.05) + 2.2;
@@ -657,9 +696,18 @@ export function renderReviewMap(
       const line = f
         ? `${SEV_GLYPH[f.severity] ?? ""} [${f.type}] ${f.id} — ${f.title}`
         : (hovered.label ?? "");
-      text(1, rows - 1, line.slice(0, cols - 14), f ? hovered.color : "#8b949e");
+      text(2, rows - 4, line.slice(0, 110), f ? hovered.color : "#8b949e");
     }
-    text(cols - 9, 0, `${String(fps).padStart(3, " ")} fps`, "#30363d");
+    text(cols - Math.ceil(60 / CW), 1, `${String(fps).padStart(3, " ")} fps`, "#39404d");
+
+    // blit the framebuffer, then the readable-text overlay pass
+    ctx.putImageData(fbImage, 0, 0);
+    ctx.font = `${11 * dpr}px ui-monospace, Menlo, monospace`;
+    ctx.textBaseline = "middle";
+    for (const o of overlays) {
+      ctx.fillStyle = o.color;
+      ctx.fillText(o.s, o.col * TW, o.row * TH + TH / 2);
+    }
   };
 
   const ro = new ResizeObserver(() => {
