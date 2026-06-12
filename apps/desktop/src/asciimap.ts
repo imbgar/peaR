@@ -205,14 +205,35 @@ export function renderReviewMap(
   const canvas = document.createElement("canvas");
   stage.appendChild(canvas);
   const ctx = canvas.getContext("2d")!;
+  const ctrls = document.createElement("div");
+  ctrls.className = "rmap-ctrls";
+  stage.appendChild(ctrls);
   const modeBtn = document.createElement("button");
   modeBtn.className = "rmap-mode";
-  stage.appendChild(modeBtn);
+  ctrls.appendChild(modeBtn);
+  const resetBtn = document.createElement("button");
+  resetBtn.className = "rmap-mode";
+  resetBtn.textContent = "⌖ reset view";
+  resetBtn.title = "fly home: frame everything, level the rotation";
+  ctrls.appendChild(resetBtn);
+  const resWrap = document.createElement("label");
+  resWrap.className = "rmap-res";
+  const resLabel = document.createElement("span");
+  const resInput = document.createElement("input");
+  resInput.type = "range";
+  resInput.min = "1";
+  resInput.max = "4";
+  resInput.step = "0.25";
+  resWrap.append(resLabel, resInput);
+  ctrls.appendChild(resWrap);
 
-  // Cell metrics — 10× density: glyphs are ~2×4 px texture, not letters.
-  const FONT = 3.8;
-  const CW = 2.2;
-  const CH = 4;
+  // Cell metrics — density is a USER DIAL: ×1 = classic readable terminal cells,
+  // ×3 ≈ the 10× texture look, ×4 = plotter-fine. Everything downstream (atlas,
+  // framebuffer, picking) derives from these and rebuilds on change.
+  let DENS = Math.min(4, Math.max(1, parseFloat(localStorage.getItem("pear.map.res") ?? "3") || 3));
+  let FONT = 11 / DENS;
+  let CW = 6.6 / DENS;
+  let CH = 12 / DENS;
   const ASPECT = CH / CW; // a cell is ~1.8× taller than wide
   const SIDE_W = 380;
   let W = Math.max((host.clientWidth || 800) - SIDE_W - 12, 320);
@@ -220,8 +241,8 @@ export function renderReviewMap(
   let cols = 0;
   let rows = 0;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const TW = Math.round(CW * dpr); // tile size in device px (integer → clean copies)
-  const TH = Math.round(CH * dpr);
+  let TW = Math.round(CW * dpr); // tile size in device px (integer → clean copies)
+  let TH = Math.round(CH * dpr);
   let fb: Uint32Array;
   let fbImage: ImageData;
   let fbW = 0;
@@ -243,14 +264,14 @@ export function renderReviewMap(
   // Glyph atlas as raw PIXEL TILES (opaque, baked on the void color): a cell is
   // REPLACED by its glyph tile — terminal semantics, zero alpha math, pure memcpy.
   const scratch = document.createElement("canvas");
-  scratch.width = TW;
-  scratch.height = TH;
   const sctx = scratch.getContext("2d", { willReadFrequently: true })!;
   const atlas = new Map<string, Uint32Array>();
   const tile = (ch: string, color: string): Uint32Array => {
     const key = `${ch}|${color}`;
     let t = atlas.get(key);
     if (!t) {
+      scratch.width = TW;
+      scratch.height = TH;
       sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       sctx.fillStyle = "#05070c";
       sctx.fillRect(0, 0, CW, CH);
@@ -264,7 +285,21 @@ export function renderReviewMap(
     }
     return t;
   };
-  const BG_PACKED = tile(" ", "#05070c")[0]; // packed void color, endian-correct
+  let BG_PACKED = tile(" ", "#05070c")[0]; // packed void color, endian-correct
+  const applyDensity = (d: number) => {
+    DENS = Math.min(4, Math.max(1, d));
+    localStorage.setItem("pear.map.res", String(DENS));
+    FONT = 11 / DENS;
+    CW = 6.6 / DENS;
+    CH = 12 / DENS;
+    TW = Math.round(CW * dpr);
+    TH = Math.round(CH * dpr);
+    atlas.clear(); // tiles are density-shaped — rebake lazily
+    sizeCanvas();
+    BG_PACKED = tile(" ", "#05070c")[0];
+    resLabel.textContent = `ascii ×${DENS.toFixed(2).replace(/\.?0+$/, "")}`;
+    resInput.value = String(DENS);
+  };
   const put = (col: number, row: number, ch: string, color: string) => {
     col = col | 0;
     row = row | 0;
@@ -472,6 +507,7 @@ export function renderReviewMap(
   const fitZoom = () => Math.min(cols / (extent() * 2.3), rows / (extent() * 1.28));
   const cam = { x: 0, y: 0, z: 0, zoom: fitZoom(), yaw: 0, pitch: 0 };
   let camTarget: { x: number; y: number; z: number; zoom: number } | null = null;
+  let rotTarget: { yaw: number; pitch: number } | null = null;
   let focusNode: MapNode | null = null;
   const selected = new Set<string>();
   let journeyMode = false;
@@ -527,6 +563,7 @@ export function renderReviewMap(
   canvas.addEventListener("pointerdown", (e) => {
     dragging = true;
     dragMoved = false;
+    rotTarget = null; // the user takes the wheel
     last = { x: e.clientX, y: e.clientY };
     canvas.setPointerCapture(e.pointerId);
   });
@@ -554,6 +591,7 @@ export function renderReviewMap(
   canvas.addEventListener("dblclick", () => {
     focusNode = null;
     camTarget = { x: 0, y: 0, z: 0, zoom: fitZoom() };
+    rotTarget = { yaw: 0, pitch: 0 };
   });
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
@@ -628,6 +666,13 @@ export function renderReviewMap(
       cam.y += (camTarget.y - cam.y) * k;
       cam.z += (camTarget.z - cam.z) * k;
       cam.zoom += (camTarget.zoom - cam.zoom) * k;
+    }
+    if (rotTarget) {
+      const k = 1 - Math.exp(-0.12);
+      cam.yaw += (rotTarget.yaw - cam.yaw) * k;
+      cam.pitch += (rotTarget.pitch - cam.pitch) * k;
+      if (Math.abs(rotTarget.yaw - cam.yaw) + Math.abs(rotTarget.pitch - cam.pitch) < 0.002)
+        rotTarget = null;
     }
     if (!cb.reduceMotion && !dragging && !journeyMode && layout !== "mandala") cam.yaw += 0.0009;
 
@@ -858,6 +903,20 @@ export function renderReviewMap(
       "cycle layout: mandala → flow → orbit (morphs live) · drag rotates · wheel zooms · dblclick re-frames";
   };
   syncModeBtn();
+  applyDensity(DENS); // initializes the slider label + value
+  resInput.addEventListener("input", () => {
+    applyDensity(parseFloat(resInput.value));
+    if (!journeyMode) {
+      focusNode = null;
+      camTarget = { x: 0, y: 0, z: 0, zoom: fitZoom() }; // re-frame at the new grid
+    }
+  });
+  const resetView = () => {
+    focusNode = null;
+    camTarget = { x: 0, y: 0, z: 0, zoom: fitZoom() };
+    rotTarget = { yaw: 0, pitch: 0 };
+  };
+  resetBtn.addEventListener("click", resetView);
   modeBtn.addEventListener("click", () => {
     applyLayout(layout === "mandala" ? "flow" : layout === "flow" ? "orbit" : "mandala");
     syncModeBtn();
