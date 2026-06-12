@@ -1,8 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main"],
+  "description": "Main window + the review-map theater (theater uses events + clipboard; BroadcastChannel does not cross WKWebView windows, so theater<->main messaging rides Tauri events through the Rust core)",
+  "windows": [
+    "main",
+    "review-map"
+  ],
   "permissions": [
     "core:default",
     "opener:default",

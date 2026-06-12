@@ -459,6 +459,10 @@ pub enum Command {
     /// Load the latest persisted review for the tab's PR into the Insight panel
     /// (replied via `Event::Panel`).
     LoadPanel { tab: TabId },
+    /// Load the structured `review.json` for the tab's PR (peaRview): read the
+    /// /tmp drop-box, validate, archive a revision, and reply `Event::ReviewDoc`
+    /// — falling back to the latest archived revision when the drop-box is empty.
+    LoadReviewDoc { tab: TabId },
     /// Set the permission mode used when launching Claude tabs. One of
     /// `"full"` (bypass — no prompts), `"edits"` (auto-accept edits, default),
     /// `"ask"` (default prompts), `"plan"` (read-only). Applies to future opens.
@@ -647,6 +651,10 @@ pub enum Command {
     /// Fetch a GitHub-hosted image (e.g. a private-repo comment attachment the webview can't load)
     /// with auth and return it as a data URL via `Event::Image`.
     FetchImage { url: String },
+    /// Synthesize narration locally (kokoro worker) for the review journey.
+    /// Replied via `Event::Speech` (empty `wav_b64` = unavailable, use a fallback).
+    /// Unknown extra fields (a removed backend/intensity surface) are ignored.
+    Speak { id: String, text: String },
 }
 
 /// Events the engine emits to the frontend.
@@ -736,6 +744,23 @@ pub enum Event {
     /// A proxied image (reply to `FetchImage`): the original `url` + a `data:` URL the webview can
     /// render. Only emitted on success.
     Image { url: String, data_url: String },
+    /// The validated structured review (peaRview) for a tab's PR — reply to
+    /// `LoadReviewDoc`. `warnings` are the non-fatal validation notes.
+    ReviewDoc {
+        tab: TabId,
+        doc: crate::review_doc::ReviewDoc,
+        warnings: Vec<String>,
+    },
+    /// Synthesized narration audio (reply to `Speak`): a base64 WAV chunk. Streaming
+    /// backends (chatterbox) send one chunk per sentence with `more: true` until the
+    /// last. Empty `wav_b64` on the final chunk = synthesis unavailable/failed — fall
+    /// back to a system voice.
+    Speech {
+        id: String,
+        wav_b64: String,
+        #[serde(default)]
+        more: bool,
+    },
     /// A non-fatal problem the UI should surface (toast).
     Notice { tab: Option<TabId>, message: String },
     /// A fatal-for-this-command error.

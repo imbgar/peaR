@@ -404,6 +404,36 @@ impl Store {
         fs::write(&path, content).map_err(|e| CoreError::Storage(e.to_string()))?;
         Ok(path)
     }
+
+    /// Archive a structured `review.json` revision for `pr` (peaRview; every revision
+    /// is kept — they're tiny — and the UI shows only the latest by default).
+    pub fn save_review_doc(&self, pr: &PrRef, json: &str, stamp: &str) -> Result<PathBuf> {
+        let dir = self.pr_dir(pr);
+        fs::create_dir_all(&dir).map_err(|e| CoreError::Storage(e.to_string()))?;
+        let path = dir.join(format!("review-{stamp}.json"));
+        fs::write(&path, json).map_err(|e| CoreError::Storage(e.to_string()))?;
+        Ok(path)
+    }
+
+    /// The most recently archived structured review doc for `pr`, as `(path, json)`.
+    pub fn latest_review_doc(&self, pr: &PrRef) -> Option<(PathBuf, String)> {
+        let dir = self.pr_dir(pr);
+        let mut newest: Option<PathBuf> = None;
+        for entry in fs::read_dir(&dir).ok()?.flatten() {
+            let path = entry.path();
+            let is_doc = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("review-") && n.ends_with(".json"))
+                .unwrap_or(false);
+            if is_doc && newest.as_ref().map(|p| path > *p).unwrap_or(true) {
+                newest = Some(path);
+            }
+        }
+        let path = newest?;
+        let json = fs::read_to_string(&path).ok()?;
+        Some((path, json))
+    }
 }
 
 #[cfg(test)]

@@ -28,6 +28,7 @@ pub mod shellenv;
 pub mod skills_install;
 pub mod store;
 pub mod summary;
+pub mod tts;
 pub mod workdir;
 
 pub use engine::Engine;
