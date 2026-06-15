@@ -1436,6 +1436,18 @@ function renderNotifPanel() {
   }
 }
 
+/** Anchor the (position:fixed) panel to the bell: right edge aligned to the
+ *  bell's right, growing UPWARD from just above the bell. Fixed positioning is
+ *  what lets it escape the status bar's `overflow: hidden` clip. */
+function positionNotifPanel() {
+  const panel = $("#notif-panel");
+  const r = $("#notif-bell").getBoundingClientRect();
+  panel.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
+  panel.style.bottom = `${window.innerHeight - r.top + 6}px`;
+  panel.style.left = "auto";
+  panel.style.top = "auto";
+}
+
 function toggleNotifPanel() {
   const panel = $("#notif-panel");
   if (!panel.classList.contains("hidden")) {
@@ -1443,6 +1455,7 @@ function toggleNotifPanel() {
     return;
   }
   renderNotifPanel();
+  positionNotifPanel();
   panel.classList.remove("hidden");
   notifs.forEach((n) => (n.read = true)); // opening marks all read
   renderNotifBadge();
