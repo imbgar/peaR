@@ -1184,6 +1184,17 @@ body.tiling-drag .terminal-host { cursor: grabbing; }
 .cv-who { font-weight: 600; font-size: 12px; color: var(--tx); }
 .cv-who.me { color: var(--accent); text-shadow: var(--glow); }
 .cv-when { font-size: 10px; color: var(--faint); font-family: var(--font-mono); }
+/* The PR description (opening message) — set off with a left accent rule + a tag. */
+#comments-body .cv-card.cv-cmt-desc, /* (when the card itself carries the class) */
+#comments-body .cv-card:has(.cv-cmt-desc) {
+  border-left: 2px solid var(--accent-d);
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+.cv-desc-tag {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.4px; text-transform: uppercase;
+  color: var(--accent); padding: 1px 6px; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+}
 /* PR review summary state badge (approved / requested changes / …) */
 .cv-review-state {
   font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.8px;

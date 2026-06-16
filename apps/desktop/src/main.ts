@@ -3718,9 +3718,9 @@ function renderConversation(tab: number) {
     commentsCountEl.textContent = "";
     return;
   }
-  commentsCountEl.textContent = c.conversation.length
-    ? `💬 See Threads (${c.conversation.length})`
-    : "";
+  // The PR description rides along as the first entry but isn't a "comment" for counts.
+  const realCount = c.conversation.filter((m) => !m.is_pr_body).length;
+  commentsCountEl.textContent = realCount ? `💬 See Threads (${realCount})` : "";
   if (!c.conversation.length) {
     const div = document.createElement("div");
     div.className = "panel-empty";
@@ -3745,7 +3745,8 @@ function buildConversationNav(comments: Comment[]) {
   const head = document.createElement("div");
   head.className = "dtl-head";
   const title = document.createElement("span");
-  title.textContent = `${comments.length} comment${comments.length > 1 ? "s" : ""}`;
+  const realN = comments.filter((m) => !m.is_pr_body).length;
+  title.textContent = `${realN} comment${realN === 1 ? "" : "s"}`;
   const close = document.createElement("button");
   close.type = "button";
   close.className = "dtl-close close-x";

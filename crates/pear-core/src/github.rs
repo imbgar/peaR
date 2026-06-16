@@ -312,6 +312,23 @@ impl GitHub {
         // COMMENTED/PENDING reviews (those are just containers for inline thread comments).
         let mut conversation: Vec<Comment> =
             nodes(&p["comments"]).iter().map(parse_comment).collect();
+        // The PR description IS the opening message of the conversation (that's where
+        // GitHub shows it). Surface it as a synthetic first entry; its createdAt is the
+        // PR's own, so the chronological sort below keeps it at the top. Skip an empty
+        // description.
+        let pr_body = p["body"].as_str().unwrap_or("");
+        if !pr_body.trim().is_empty() {
+            conversation.push(Comment {
+                id: format!("pr-body:{}", p["id"].as_str().unwrap_or("")),
+                author: p["author"]["login"].as_str().unwrap_or("ghost").to_string(),
+                body: pr_body.to_string(),
+                created_at: p["createdAt"].as_str().unwrap_or("").to_string(),
+                mine: p["viewerDidAuthor"].as_bool().unwrap_or(false),
+                reactions: Vec::new(),
+                review_state: None,
+                is_pr_body: true,
+            });
+        }
         for r in nodes(&p["reviews"]) {
             let state = r["state"].as_str().unwrap_or("");
             let empty_body = r["body"].as_str().unwrap_or("").trim().is_empty();
@@ -617,7 +634,7 @@ const PR_COMMENTS_QUERY: &str = r#"
 query($owner:String!,$repo:String!,$number:Int!){
   repository(owner:$owner,name:$repo){
     pullRequest(number:$number){
-      id headRefOid
+      id headRefOid body author{login} createdAt viewerDidAuthor
       comments(first:100){ nodes {
         id author{login} body createdAt viewerDidAuthor
         reactionGroups{ content viewerHasReacted reactors{ totalCount } }
@@ -699,5 +716,6 @@ fn parse_comment(node: &serde_json::Value) -> Comment {
         mine: node["viewerDidAuthor"].as_bool().unwrap_or(false),
         reactions: parse_reactions(node),
         review_state: None,
+        is_pr_body: false,
     }
 }
