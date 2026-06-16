@@ -55,6 +55,12 @@ pub struct Engine {
     reaper_rx: Receiver<TabId>,
     /// Stop flags for active brain (thinking-tail) watchers, keyed by tab.
     brain_watchers: HashMap<TabId, Arc<AtomicBool>>,
+    /// Lazy local-TTS worker (journey narration, kokoro); the dead flag stops respawn
+    /// storms — kokoro-unavailable → empty Speech (frontend uses the system voice).
+    tts: Option<crate::tts::Tts>,
+    tts_dead: bool,
+    /// Last `Speak` — the worker is reaped after sitting idle (~500 MB RSS).
+    tts_used: Option<std::time::Instant>,
 }
 
 /// Per-engine launch options chosen in the launcher (empty = engine default).
@@ -106,6 +112,9 @@ impl Engine {
             reaper_tx,
             reaper_rx,
             brain_watchers: HashMap::new(),
+            tts: None,
+            tts_dead: false,
+            tts_used: None,
         })
     }
 
@@ -182,6 +191,8 @@ impl Engine {
             } => self.start_tandem_review(tab, prs, claude_tier, co, first, codex_tier),
             Command::SaveReview { tab, content } => self.save_review(tab, &content),
             Command::LoadPanel { tab } => self.load_panel(tab),
+            Command::LoadReviewDoc { tab } => self.load_review_doc(tab),
+            Command::Speak { id, text } => self.speak(id, text),
             Command::SetClaudePermission { mode } => {
                 let mode = if CLAUDE_PERM_MODES.contains(&mode.as_str()) {
                     mode
@@ -875,6 +886,15 @@ impl Engine {
         if reaped {
             self.persist_layout(None);
         }
+        // Idle-reap the TTS worker (runs on every command, so at least at the
+        // notification-poll cadence). Dropping closes stdin → the worker exits
+        // cleanly; the dead-latch resets so the next use respawns fresh.
+        const KOKORO_IDLE: std::time::Duration = std::time::Duration::from_secs(900);
+        if self.tts.is_some() && self.tts_used.is_some_and(|t| t.elapsed() > KOKORO_IDLE) {
+            self.tts = None;
+            self.tts_used = None;
+            self.tts_dead = false;
+        }
     }
 
     /// Count of live tabs — observability + tests.
@@ -1091,6 +1111,104 @@ impl Engine {
                 tab: Some(tab),
                 message: "no saved review yet for this PR".into(),
             }),
+        }
+    }
+
+    /// Ingest the structured `review.json` (peaRview) for the tab's PR: prefer the
+    /// /tmp drop-box (what a skill just wrote), validate via `ReviewDoc::parse`,
+    /// archive the revision into the store, and emit `Event::ReviewDoc`. When the
+    /// drop-box is empty (reboot, old PR), fall back to the latest archived revision.
+    fn load_review_doc(&mut self, tab: TabId) {
+        let pr = match self.tabs.get(&tab) {
+            Some(t) => t.pr.clone(),
+            None => None,
+        };
+        let Some(pr) = pr else {
+            self.emit(Event::Notice {
+                tab: Some(tab),
+                message: "review map: tab is not a PR".into(),
+            });
+            return;
+        };
+        let drop = crate::review_doc::drop_path(&pr);
+        let (json, fresh) = match std::fs::read_to_string(&drop) {
+            Ok(s) => (s, true),
+            Err(_) => match self.store.latest_review_doc(&pr) {
+                Some((_, s)) => (s, false),
+                None => {
+                    self.emit(Event::Notice {
+                        tab: Some(tab),
+                        message: format!(
+                            "no review.json yet for {} — run a review that emits one",
+                            pr.short_label()
+                        ),
+                    });
+                    return;
+                }
+            },
+        };
+        match crate::review_doc::ReviewDoc::parse(&json) {
+            Ok((doc, warnings)) => {
+                // Archive only fresh drop-box content (re-loading history shouldn't
+                // duplicate revisions).
+                if fresh {
+                    if let Err(e) = self.store.save_review_doc(&pr, &json, &now_file_stamp()) {
+                        self.emit(Event::Notice {
+                            tab: Some(tab),
+                            message: format!("review map: archive failed: {e}"),
+                        });
+                    }
+                }
+                self.emit(Event::ReviewDoc { tab, doc, warnings });
+            }
+            Err(e) => self.emit(Event::Notice {
+                tab: Some(tab),
+                message: format!("review.json invalid: {e}"),
+            }),
+        }
+    }
+
+    /// Journey narration: synthesize `text` on a lazy local TTS worker. Backend
+    /// `"chatterbox"` (emotion dial) reroutes to kokoro when unavailable; a kokoro
+    /// failure emits an empty `Event::Speech` so the frontend falls back to the
+    /// system voice instead of waiting forever.
+    /// Journey narration: synthesize `text` on the lazy local kokoro worker. Any
+    /// failure path emits an empty `Event::Speech` so the frontend falls back to the
+    /// system voice instead of waiting forever.
+    fn speak(&mut self, id: String, text: String) {
+        let fallback = |sink: &EventSink, id: String| {
+            sink(Event::Speech {
+                id,
+                wav_b64: String::new(),
+                more: false,
+            })
+        };
+        if self.tts_dead {
+            fallback(&self.sink, id);
+            return;
+        }
+        self.tts_used = Some(std::time::Instant::now());
+        if self.tts.is_none() {
+            match crate::tts::Tts::spawn_kokoro(self.sink.clone()) {
+                Ok(t) => self.tts = Some(t),
+                Err(e) => {
+                    self.tts_dead = true;
+                    self.emit(Event::Notice {
+                        tab: None,
+                        message: format!("tts unavailable ({e}) — using the system voice"),
+                    });
+                    fallback(&self.sink, id);
+                    return;
+                }
+            }
+        }
+        if let Some(t) = self.tts.as_mut() {
+            if t.speak(&id, &text).is_err() {
+                // Worker gone mid-flight; its reader thread already notified.
+                self.tts = None;
+                self.tts_dead = true;
+                fallback(&self.sink, id);
+            }
         }
     }
 

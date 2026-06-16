@@ -107,3 +107,57 @@ Each item: `[severity] title — path:line (A·B agree | A only | B only)`.
 
 Output the merged review as markdown — no preamble. Keep `$W` around (the user may
 hit Save Review).
+
+## Phase 4 — emit the structured review (`review.pear.v1`)
+
+After printing the merged review, ALSO write it as a structured document so peaR can
+render the review map. Write to the pear drop-box (exact path matters):
+
+```bash
+D=/tmp/pear-reviews/<owner>__<repo>__<pr#> && mkdir -p $D   # __ between all three
+# write $D/review.json
+```
+
+Shape (all of phases 1-3 maps onto this; emit ONLY valid JSON):
+
+```jsonc
+{
+  "schema": "review.pear.v1",
+  "mode": "single",
+  "engines": [ { "name": "claude", "role": "reviewer", "depth": "<claude depth>" },
+               { "name": "codex", "role": "cross_examiner", "depth": "<codex depth>" } ],
+  "subjects": [ { "ref": "owner/repo#N", "title": "<PR title>", "head_sha": "<sha>" } ],
+  "understanding": {                          // the narrative — REQUIRED
+    "purpose": "what this PR is and why, one paragraph",
+    "walkthrough": [ { "id": "W1", "title": "…", "body": "…",
+                       "risk": "low|medium|high",
+                       "anchors": [ { "subject": 0, "path": "…", "line": 123 } ] } ],
+    "verified": [ "what you actually did: read every hunk, ran X, traced Y" ]
+  },
+  "findings": [ {
+    "id": "F1",
+    "type": "bug|test|api|docs|clarity|style|error_handling|design|compat|perf|security|observability|question|praise",
+    "severity": "blocker|fix_before_merge|follow_up|take_or_leave",  // = required response behavior; question/praise are always take_or_leave
+    "confidence": 0.9,
+    "rule": { "id": "kebab-case-reusable-rule", "why": "why this matters in general — the teachable part" },
+    "title": "one line", "evidence": "why it's wrong + the failing case",
+    "anchor": { "subject": 0, "path": "…", "line": 123 },
+    "suggestion": { "patch": "committable replacement hunk (omit if none)" },
+    "engines": { "claude": "found|agree|dispute|uncertain", "codex": "…" },  // the cross-exam verdicts from phase 2
+    "status": "open"
+  } ],
+  "verdict": {
+    "ledger": { "blocker": 0, "fix_before_merge": 1, "follow_up": 2, "take_or_leave": 3, "question": 1, "praise": 1 },
+    "per_subject": [ { "subject": 0, "state": "ready|ready_with_nits|needs_work|blocked",
+                       "blocked_by": [ "F1" ],   // REQUIRED non-empty for needs_work/blocked
+                       "scope": "what this pass did NOT cover",
+                       "justification": "one sentence" } ]
+  }
+}
+```
+
+Rules: include EVERY confirmed/disputed finding from phase 3 (disputed ⇒ the engines
+map shows the disagreement); killed findings are omitted; `question`/`praise` are
+first-class entries; prefer a real `rule.why` on every defect finding. Validate your
+JSON parses before writing. Then tell the user: `review.json written — open the
+Insight panel ⊞ to load the review map`.

@@ -50,6 +50,30 @@ fn set_vibrancy_material(window: tauri::WebviewWindow, material: String) -> Resu
     Ok(())
 }
 
+/// Open (or focus) the review-map theater — a separate window rendering the WebGL
+/// review galaxy from `map.html`. The doc travels via localStorage (same origin);
+/// jump/ask actions come back over a BroadcastChannel, so this window needs no IPC.
+#[tauri::command]
+fn open_map_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("review-map") {
+        let _ = w.set_focus();
+        // Nudge the page to re-read the (just-rewritten) doc from localStorage.
+        let _ = w.eval("window.dispatchEvent(new Event('pear-map-refresh'))");
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "review-map",
+        tauri::WebviewUrl::App("map.html".into()),
+    )
+    .title("peaR · review map")
+    .inner_size(1120.0, 800.0)
+    .min_inner_size(640.0, 480.0)
+    .build()
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -83,7 +107,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             pear_command,
-            set_vibrancy_material
+            set_vibrancy_material,
+            open_map_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

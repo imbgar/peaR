@@ -20,6 +20,16 @@ use serde::{Deserialize, Serialize};
 /// The exact `schema` discriminator a v1 document must carry.
 pub const SCHEMA_V1: &str = "review.pear.v1";
 
+/// The drop-box where review skills write their `review.json` for a PR — a
+/// pear-defined convention shared by EVERY review skill (coreview, tandem, tier),
+/// keyed by PR rather than by skill: `/tmp/pear-reviews/<owner>__<repo>__<N>/review.json`.
+/// The engine ingests from here and archives revisions into the store (history).
+pub fn drop_path(pr: &crate::protocol::PrRef) -> std::path::PathBuf {
+    std::path::PathBuf::from("/tmp/pear-reviews")
+        .join(format!("{}__{}", pr.slug(), pr.number))
+        .join("review.json")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewDoc {
     /// Must equal [`SCHEMA_V1`].

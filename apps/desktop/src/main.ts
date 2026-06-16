@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
-import { listen } from "@tauri-apps/api/event";
+import { emitTo, listen } from "@tauri-apps/api/event";
 import {
   isPermissionGranted,
   requestPermission,
@@ -48,6 +48,8 @@ import {
   DiffComment,
   Favorites,
   PanelPayload,
+  RdFinding,
+  ReviewDoc,
   PrComments,
   PrMeta,
   PrRecord,
@@ -2774,9 +2776,27 @@ function handle(ev: CoreEvent) {
       renderPanel(ev.payload);
       break;
     }
+    case "review_doc": {
+      openReviewTheater(ev.doc, ev.warnings);
+      setStatus(`review map → theater — ${ev.doc.findings.length} findings`);
+      break;
+    }
+    case "speech": {
+      // Narration audio for the journey — relay to the theater window.
+      void emitTo("review-map", "pear-map-back", {
+        kind: "speech",
+        id: ev.id,
+        b64: ev.wav_b64,
+        more: ev.more ?? false,
+      });
+      break;
+    }
     case "diff": {
       const prev = diffCache.get(ev.tab);
       diffCache.set(ev.tab, { diff: ev.diff, comments: ev.comments });
+      // Keep the review-theater's copy fresh (journey diff excerpts read it cross-window).
+      if (ev.tab === diffAnchor() && localStorage.getItem("pear.reviewmap.doc"))
+        localStorage.setItem("pear.reviewmap.diff", ev.diff);
       // Only (re)render if this tab is showing and the content actually changed — keeps
       // scroll position + collapse state on a background refresh.
       const changed =
@@ -4258,6 +4278,62 @@ function renderPanel(p: PanelPayload) {
   setPanel(true);
 }
 
+// ── peaRview map theater ──────────────────────────────────────────────────────
+// The galaxy renders in its OWN window (map.html): the doc travels via localStorage,
+// the window opens/focuses through the open_map_window command, and the theater's
+// jump/ask actions come back over a BroadcastChannel (executed here, where the diff
+// panel + terminals live).
+function openReviewTheater(doc: ReviewDoc, warnings: string[]) {
+  localStorage.setItem("pear.reviewmap.doc", JSON.stringify({ doc, warnings }));
+  // Ship the PR's unified diff alongside (the journey renders inline excerpts).
+  const anchor = diffAnchor();
+  const cached = anchor !== null ? diffCache.get(anchor) : undefined;
+  if (cached) localStorage.setItem("pear.reviewmap.diff", cached.diff);
+  else {
+    localStorage.removeItem("pear.reviewmap.diff");
+    if (anchor !== null) send({ type: "load_diff", tab: anchor }); // arrives via the diff event
+  }
+  void invoke("open_map_window").catch((e) => setStatus(`review map: ${e}`, true));
+}
+
+// Theater↔main messaging rides Tauri events through the Rust core (BroadcastChannel
+// does NOT cross WKWebView windows): theater emits "pear-map", we reply "pear-map-back".
+function initMapChannel() {
+  void listen("pear-map", (tev) => {
+    const m = tev.payload as
+      | { kind: "jump"; path: string; line: number | null }
+      | { kind: "ask"; finding: RdFinding; text: string }
+      | { kind: "need-diff" }
+      | { kind: "tts"; id: string; text: string }
+      | { kind: "draft"; markdown: string; count: number };
+    if (m.kind === "tts") {
+      // → Event::Speech → back over the channel
+      send({ type: "speak", id: m.id, text: m.text });
+    } else if (m.kind === "need-diff") {
+      const tab = diffAnchor();
+      if (tab !== null) send({ type: "load_diff", tab }); // lands in localStorage via the diff event
+    } else if (m.kind === "draft") {
+      void writeText(m.markdown);
+      setStatus(`review draft copied — ${m.count} finding${m.count === 1 ? "" : "s"} 📋`);
+    } else if (m.kind === "jump") {
+      // Open the diff (anchored to the same PR) and scroll to the file's card.
+      loadDiff();
+      window.setTimeout(() => {
+        const card = document.querySelector(`[data-path="${CSS.escape(m.path)}"]`);
+        card?.scrollIntoView({ behavior: prefs.reduceMotion ? "auto" : "smooth", block: "start" });
+      }, 350);
+    } else if (m.kind === "ask") {
+      const tab = diffAnchor();
+      if (tab === null) return;
+      const f = m.finding;
+      const where = f.anchor ? ` at ${f.anchor.path}${f.anchor.line ? `:${f.anchor.line}` : ""}` : "";
+      const prompt = `Regarding review question ${f.id}${where} ("${f.title}"): ${m.text}\r`;
+      send({ type: "input", tab, bytes: Array.from(new TextEncoder().encode(prompt)) });
+      setStatus(`asked the agent about ${f.id}`);
+    }
+  });
+}
+
 // ── launcher wiring (segmented engine + intensity chips) ─────────────────────
 // Engine pill bar drives which intensities are offered; an intensity chip selects the
 // review to auto-run on Open (click the selected one again = "just open", no review).
@@ -4737,6 +4813,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   panelToggleBtn.addEventListener("click", togglePanel);
   $("#panel-close").addEventListener("click", () => setPanel(false));
   $("#panel-load").addEventListener("click", loadPanel);
+  const loadReviewDoc = () => {
+    const anchor = diffAnchor(); // PR of the parent tab, same anchoring as the diff
+    if (anchor !== null) send({ type: "load_review_doc", tab: anchor });
+  };
+  $("#panel-map").addEventListener("click", loadReviewDoc);
+  $("#map-btn").addEventListener("click", loadReviewDoc);
   $("#diff-btn").addEventListener("click", loadDiff);
   $("#comments-btn").addEventListener("click", loadComments);
   $("#approve-btn").addEventListener("click", (e) =>
@@ -5045,6 +5127,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   new ResizeObserver(refit).observe(terminalsEl);
 
   initNotifications(); // wire the bell + polling before the (Tauri-only) event listener
+  initMapChannel(); // execute jump/ask actions sent back from the review-map theater
   setImageProxy(wireCommentImages); // proxy private GitHub comment images that fail to load
   $("#settings-btn").addEventListener("click", openSettings);
   applyPrefs(); // apply persisted appearance/notification/behavior prefs on startup
