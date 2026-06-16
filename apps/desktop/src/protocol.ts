@@ -227,6 +227,7 @@ export type Command =
   | { type: "watch_user"; login: string; on: boolean }
   | { type: "watch_team"; org: string; team: string; on: boolean }
   | { type: "load_team_prs" }
+  | { type: "load_my_prs" }
   | { type: "summarize_diff"; tab: number; path?: string }
   | { type: "fetch_image"; url: string };
 
@@ -264,6 +265,7 @@ export type Event =
   | { type: "pr_statuses"; statuses: PrStatus[] }
   | { type: "watches"; watches: Watches }
   | { type: "team_prs"; prs: PrStatus[] }
+  | { type: "my_prs"; prs: PrStatus[] }
   | { type: "diff_summaries"; tab: number; summaries: FileSummary[] }
   | { type: "image"; url: string; data_url: string }
   | { type: "notice"; tab: number | null; message: string }

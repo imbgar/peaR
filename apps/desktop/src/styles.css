@@ -459,9 +459,14 @@ button:disabled { opacity: 0.38; cursor: default; }
 .mini.icon { padding: 2px 6px; font-size: 11px; letter-spacing: 0; }
 .mini.icon.on, #fav-only.on { color: var(--accent); border-color: var(--accent-d); }
 /* History ⇄ Tree segmented tabs */
-.hist-tabs { display: inline-flex; }
+/* Full-width segmented strip: the tabs share the row equally so the set always
+   fits the sidebar (the ★/+ actions wrap to their own line beneath) — adding a
+   view never pushes the strip into horizontal overflow. */
+.hist-tabs { display: flex; flex: 1 1 100%; min-width: 0; }
 .hist-tab {
-  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.3px; padding: 2px 9px;
+  flex: 1 1 0; min-width: 0; text-align: center;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0; padding: 2px 4px;
   background: transparent; border: 1px solid var(--bd2); color: var(--faint); cursor: pointer;
 }
 .hist-tab:first-child { border-radius: 5px 0 0 5px; border-right: none; }
@@ -636,6 +641,22 @@ button:disabled { opacity: 0.38; cursor: default; }
 /* teams view: watch bar + chips + USER node */
 .tn-user > .tree-row { color: var(--accent); font-weight: 600; font-size: 11.5px; }
 .teams-bar { padding: 4px 4px 8px; display: flex; flex-direction: column; gap: 6px; }
+/* "Mine" view header: refresh + freshness + per-org filter chips. */
+.myprs-bar { gap: 7px; }
+.myprs-refresh {
+  align-self: flex-start; font-family: var(--font-mono); font-size: 11px; cursor: pointer;
+  color: var(--dim); background: var(--inp); border: 1px solid var(--bd2);
+  border-radius: var(--r-sm); padding: 4px 9px;
+}
+.myprs-refresh:hover:not(:disabled) { color: var(--accent); border-color: var(--accent-d); }
+.myprs-when { font-size: 10px; color: var(--faint); font-family: var(--font-mono); margin-left: 7px; }
+.myprs-org-chip {
+  font-family: var(--font-mono); font-size: 11px; cursor: pointer; padding: 3px 8px;
+  border-radius: 999px; background: transparent; color: var(--faint);
+  border: 1px solid var(--bd2);
+}
+.myprs-org-chip.on { color: var(--accent); border-color: var(--accent-d); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.myprs-org-chip:not(.on) { opacity: 0.5; text-decoration: line-through; }
 .teams-add {
   width: 100%; box-sizing: border-box; padding: 6px 9px; border-radius: var(--r-sm);
   background: var(--inp); border: 1px solid var(--bd2); color: var(--tx);

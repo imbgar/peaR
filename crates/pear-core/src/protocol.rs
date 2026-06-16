@@ -641,6 +641,9 @@ pub enum Command {
     /// Fetch open PRs authored by every watched user (+ expanded team members), with status.
     /// Replied via `Event::TeamPrs`.
     LoadTeamPrs,
+    /// Fetch the authed user's own open PRs across all visible orgs (`author:@me`), with
+    /// status — drives the "Mine" view. Uses the primary `gh` token. Replied via `MyPrs`.
+    LoadMyPrs,
     /// Generate a one-line Haiku summary for the tab's PR diff. With `path`, summarize only that
     /// one file (per-file button); without it, every changed file. Replied via `DiffSummaries`.
     SummarizeDiff {
@@ -732,6 +735,8 @@ pub enum Event {
     Watches { watches: Watches },
     /// Open PRs from watched users/teams (reply to `LoadTeamPrs`) — drives the Teams view.
     TeamPrs { prs: Vec<PrStatus> },
+    /// The authed user's own open PRs (reply to `LoadMyPrs`) — drives the "Mine" view.
+    MyPrs { prs: Vec<PrStatus> },
     /// One-line per-file Haiku summaries for the tab's diff (reply to `SummarizeDiff`).
     DiffSummaries {
         tab: TabId,

@@ -309,6 +309,7 @@ impl Engine {
                 });
             }
             Command::LoadTeamPrs => self.load_team_prs(),
+            Command::LoadMyPrs => self.load_my_prs(),
             Command::SummarizeDiff { tab, path } => self.summarize_diff(tab, path),
             Command::FetchImage { url } => self.fetch_image(url),
             Command::CheckSkills => self.emit(Event::SkillsStatus {
@@ -1245,6 +1246,24 @@ impl Engine {
                 }
             }
             sink(Event::TeamPrs { prs });
+        });
+    }
+
+    /// The authed user's own open PRs across every org they can see (`author:@me`),
+    /// each with status — drives the "Mine" view. One search via the primary token.
+    fn load_my_prs(&mut self) {
+        let Some(gh) = self.github() else {
+            self.emit(Event::Notice {
+                tab: None,
+                message: "no GitHub token — “Mine” needs `gh auth login`".into(),
+            });
+            return;
+        };
+        let sink = self.sink.clone();
+        std::thread::spawn(move || {
+            let q = "is:pr is:open archived:false sort:updated-desc author:@me";
+            let prs = gh.search_prs(q, 100).unwrap_or_default();
+            sink(Event::MyPrs { prs });
         });
     }
 

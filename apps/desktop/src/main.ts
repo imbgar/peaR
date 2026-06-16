@@ -1196,10 +1196,12 @@ function toggleSessionPop(rec: PrRecord, anchor: HTMLElement) {
 let historyEntries: PrRecord[] = [];
 let favorites: Favorites = { repos: [], prs: [] };
 let queue: Queue = { items: [] };
-type HistView = "list" | "tree" | "queue" | "teams";
+type HistView = "list" | "tree" | "queue" | "teams" | "mine";
 const savedView = localStorage.getItem("pear.histView");
 let historyView: HistView =
-  savedView === "tree" || savedView === "queue" || savedView === "teams" ? savedView : "list";
+  savedView === "tree" || savedView === "queue" || savedView === "teams" || savedView === "mine"
+    ? savedView
+    : "list";
 let favOnly = localStorage.getItem("pear.favOnly") === "1";
 let histQuery = "";
 
@@ -1211,6 +1213,21 @@ const statusRequested = new Set<string>();
 // Teams view state: watched users/teams + the PRs they authored.
 let watches: Watches = { users: [], teams: [] };
 let teamPrs: PrStatus[] = [];
+function readJson<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+// "Mine" view: the authed user's own open PRs across orgs. Cached to localStorage so the
+// view paints instantly on open, then refreshes via the primary token. `myPrsHiddenOrgs`
+// is the set of orgs the user has toggled OFF (selected-orgs filter).
+let myPrs: PrStatus[] = readJson<PrStatus[]>("pear.myPrs", []);
+let myPrsAt = Number(localStorage.getItem("pear.myPrs.at") ?? "0");
+let myPrsLoading = false;
+const myPrsHiddenOrgs = new Set<string>(readJson<string[]>("pear.myPrs.hiddenOrgs", []));
 const prKey = (pr: PrRef) => `${pr.owner}/${pr.repo}#${pr.number}`;
 function requestStatuses(prs: PrRef[]) {
   const missing = prs.filter((p) => !statusRequested.has(prKey(p)));
@@ -1348,6 +1365,82 @@ function renderTeams() {
 function refreshTeams() {
   send({ type: "load_watches" });
   send({ type: "load_team_prs" });
+}
+
+/** (Re)fetch the authed user's own open PRs via the primary token. */
+function refreshMyPrs() {
+  myPrsLoading = true;
+  send({ type: "load_my_prs" });
+  if (historyView === "mine") renderHistory();
+}
+
+/** "Mine" view: the authed user's open PRs across orgs, grouped org → repo → PR, each
+ *  with its review/state status. A top bar refreshes (primary token) and toggles which
+ *  orgs are shown. Served from the localStorage cache first, then refreshed. */
+function renderMyPrs() {
+  const orgs = [...new Set(myPrs.map((s) => s.pr.owner))].sort((a, b) => a.localeCompare(b));
+
+  const bar = document.createElement("div");
+  bar.className = "teams-bar myprs-bar";
+  const refresh = document.createElement("button");
+  refresh.className = "myprs-refresh";
+  refresh.textContent = myPrsLoading ? "↻ refreshing…" : "↻ refresh";
+  refresh.disabled = myPrsLoading;
+  refresh.onclick = () => refreshMyPrs();
+  const when = document.createElement("span");
+  when.className = "myprs-when";
+  when.textContent = myPrsAt ? `updated ${relTime(new Date(myPrsAt).toISOString())}` : "";
+  bar.append(refresh, when);
+  // Per-org toggle chips (the "selected orgs" filter), persisted.
+  if (orgs.length > 1) {
+    const chips = document.createElement("div");
+    chips.className = "teams-chips myprs-orgs";
+    for (const org of orgs) {
+      const on = !myPrsHiddenOrgs.has(org);
+      const chip = document.createElement("button");
+      chip.className = "myprs-org-chip" + (on ? " on" : "");
+      const n = myPrs.filter((s) => s.pr.owner === org).length;
+      chip.textContent = `${org} ${n}`;
+      chip.onclick = () => {
+        if (myPrsHiddenOrgs.has(org)) myPrsHiddenOrgs.delete(org);
+        else myPrsHiddenOrgs.add(org);
+        localStorage.setItem("pear.myPrs.hiddenOrgs", JSON.stringify([...myPrsHiddenOrgs]));
+        renderHistory();
+      };
+      chips.appendChild(chip);
+    }
+    bar.appendChild(chips);
+  }
+  historyEl.appendChild(bar);
+
+  const shown = myPrs.filter((s) => !myPrsHiddenOrgs.has(s.pr.owner));
+  if (!myPrs.length) {
+    emptyRow(myPrsLoading ? "loading your open PRs…" : "no open PRs authored by you");
+    return;
+  }
+  if (!shown.length) {
+    emptyRow("every org is hidden — toggle one back on above");
+    return;
+  }
+  // Group org → owner/repo → PRs.
+  const byOrg = new Map<string, Map<string, PrStatus[]>>();
+  for (const s of shown) {
+    const org = byOrg.get(s.pr.owner) ?? byOrg.set(s.pr.owner, new Map()).get(s.pr.owner)!;
+    const rk = `${s.pr.owner}/${s.pr.repo}`;
+    (org.get(rk) ?? org.set(rk, []).get(rk)!).push(s);
+  }
+  for (const org of [...byOrg.keys()].sort((a, b) => a.localeCompare(b))) {
+    const repos = byOrg.get(org)!;
+    const count = [...repos.values()].reduce((n, a) => n + a.length, 0);
+    const orgNode = treeNode("user", org, `${count}`);
+    for (const rk of [...repos.keys()].sort((a, b) => a.localeCompare(b))) {
+      const repoNode = treeNode("repo", rk, "");
+      for (const s of repos.get(rk)!.sort((a, b) => b.pr.number - a.pr.number))
+        repoNode.children.appendChild(teamPrNode(s));
+      orgNode.children.appendChild(repoNode.el);
+    }
+    historyEl.appendChild(orgNode.el);
+  }
 }
 
 // ── notifications (native OS + in-app bell) ───────────────────────────────────
@@ -1703,19 +1796,24 @@ function renderHistory() {
   $("#view-tree").classList.toggle("on", historyView === "tree");
   $("#view-queue").classList.toggle("on", historyView === "queue");
   $("#view-teams")?.classList.toggle("on", historyView === "teams");
+  $("#view-mine")?.classList.toggle("on", historyView === "mine");
   $("#fav-only").classList.toggle("on", favOnly);
   // Queue tab badge: number of items not yet done.
   const pending = queue.items.filter((i) => i.status !== "done").length;
   const qc = $("#queue-count");
   qc.textContent = pending ? String(pending) : "";
   qc.classList.toggle("hidden", pending === 0);
-  // Search + favorites filters apply to history/tree only, not queue/teams.
-  const noFilter = historyView === "queue" || historyView === "teams";
+  // Search + favorites filters apply to history/tree only, not queue/teams/mine.
+  const noFilter =
+    historyView === "queue" || historyView === "teams" || historyView === "mine";
   $("#hist-search").classList.toggle("hidden", noFilter);
   $("#fav-only").classList.toggle("hidden", noFilter);
-  historyEl.classList.toggle("tree-mode", historyView === "tree" || historyView === "teams");
+  historyEl.classList.toggle(
+    "tree-mode",
+    historyView === "tree" || historyView === "teams" || historyView === "mine",
+  );
   historyEl.classList.toggle("queue-mode", historyView === "queue");
-  historyEl.classList.toggle("teams-mode", historyView === "teams");
+  historyEl.classList.toggle("teams-mode", historyView === "teams" || historyView === "mine");
   historyEl.innerHTML = "";
   if (historyView === "queue") {
     renderQueue();
@@ -1723,6 +1821,10 @@ function renderHistory() {
   }
   if (historyView === "teams") {
     renderTeams();
+    return;
+  }
+  if (historyView === "mine") {
+    renderMyPrs();
     return;
   }
   const entries = visibleEntries();
@@ -2733,6 +2835,17 @@ function handle(ev: CoreEvent) {
       for (const s of ev.prs) prStatusCache.set(prKey(s.pr), s);
       maybeNotifyFromStatuses(ev.prs);
       if (historyView === "teams") renderHistory();
+      break;
+    }
+    case "my_prs": {
+      myPrs = ev.prs;
+      myPrsAt = Date.now();
+      myPrsLoading = false;
+      localStorage.setItem("pear.myPrs", JSON.stringify(ev.prs));
+      localStorage.setItem("pear.myPrs.at", String(myPrsAt));
+      for (const s of ev.prs) prStatusCache.set(prKey(s.pr), s);
+      maybeNotifyFromStatuses(ev.prs);
+      if (historyView === "mine") renderHistory();
       break;
     }
     case "diff_summaries": {
@@ -4564,12 +4677,15 @@ window.addEventListener("DOMContentLoaded", async () => {
     historyView = v;
     localStorage.setItem("pear.histView", v);
     if (v === "teams") refreshTeams();
+    // Entering Mine: paint the cache instantly, then refresh if it's stale (>2 min) or empty.
+    if (v === "mine" && (!myPrs.length || Date.now() - myPrsAt > 120_000)) refreshMyPrs();
     renderHistory();
   };
   $("#view-list").addEventListener("click", () => setHistView("list"));
   $("#view-tree").addEventListener("click", () => setHistView("tree"));
   $("#view-queue").addEventListener("click", () => setHistView("queue"));
   $("#view-teams")?.addEventListener("click", () => setHistView("teams"));
+  $("#view-mine")?.addEventListener("click", () => setHistView("mine"));
   $("#fav-only").addEventListener("click", () => {
     favOnly = !favOnly;
     localStorage.setItem("pear.favOnly", favOnly ? "1" : "0");
@@ -4946,6 +5062,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     .catch(() => {});
   send({ type: "load_history" });
   if (historyView === "teams") refreshTeams(); // restore the Teams view on launch
+  if (historyView === "mine") refreshMyPrs(); // restore the Mine view on launch
   send({ type: "check_skills" }); // → skills_status; consent modal if /pr-* missing
   // Always sync the engine's tabs into this (possibly reloaded) frontend; the engine only
   // *restores* the saved layout on a genuinely fresh start, so a reload never duplicates.
