@@ -727,7 +727,7 @@ export function relTime(iso: string): string {
  */
 export function commentEl(c: Comment): HTMLElement {
   const wrap = document.createElement("div");
-  wrap.className = "cv-cmt";
+  wrap.className = "cv-cmt" + (c.is_pr_body ? " cv-cmt-desc" : "");
   const top = document.createElement("div");
   top.className = "cv-top";
   // A small GitHub avatar (roughly font-size) — lives in the sticky header so it floats.
@@ -744,6 +744,12 @@ export function commentEl(c: Comment): HTMLElement {
   when.className = "cv-when";
   when.textContent = relTime(c.created_at);
   top.append(av, who);
+  if (c.is_pr_body) {
+    const tag = document.createElement("span");
+    tag.className = "cv-desc-tag";
+    tag.textContent = "opened · description";
+    top.appendChild(tag);
+  }
   if (c.review_state) top.appendChild(reviewBadge(c.review_state));
   top.appendChild(when);
   if (onAsk && c.body.trim()) top.appendChild(askInsightGroup(c));

@@ -174,6 +174,10 @@ pub struct Comment {
     /// plain issue comment.
     #[serde(default)]
     pub review_state: Option<String>,
+    /// True for the synthetic first entry that carries the PR *description* (the PR
+    /// body), so the UI can render it as the opening message rather than a comment.
+    #[serde(default)]
+    pub is_pr_body: bool,
 }
 
 /// One inline review thread anchored to a file + line in the diff, with its
