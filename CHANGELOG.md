@@ -6,6 +6,34 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.15] — 2026-06-16
+
+peaRview review ingestion, a "Mine" view for your own open PRs, a richer conversation
+panel, and a tab right-click menu — plus a notification fix and dependency bumps.
+
+### Added
+- **peaRview review.json ingestion + structured readout.** The review map can now ingest
+  a structured `review.json` and render it as a structured readout (PEARVIEW.md build step 2).
+- **"Mine" view.** A new sidebar tab listing your own open PRs across orgs (`author:@me`
+  via the primary `gh` token), grouped org → repo → PR with per-PR review/state status.
+  Cached for an instant paint, refreshed on demand (↻) or when stale; per-org toggle
+  chips filter which orgs show. The view-tab strip is now full-width so the set never
+  overflows the sidebar.
+- **PR description as the conversation's opening message.** The PR body now appears as the
+  first entry in the conversation panel (tagged `opened · description`), where GitHub shows
+  it; the toolbar button is relabeled **Comments → Conversation**.
+- **Tab right-click context menu.** Copy PR Link · Close tab · Close all tabs (the last
+  behind an are-you-sure confirm).
+
+### Fixed
+- **Notification bell popover no longer clipped behind the terminal** — it was an
+  `overflow: hidden` clip on the status bar, not a z-order issue; the popover is now
+  `position: fixed`, anchored to the bell.
+
+### Dependencies
+- Bump the frontend-dependencies group (3 updates), `uuid` 1.23.2 → 1.23.3, and
+  `window-vibrancy` 0.5.3 → 0.6.0.
+
 ## [0.1.14] — 2026-06-10
 
 Multi-engine review workflows: a pipelined claude ⇄ codex co-review, tandem review of
