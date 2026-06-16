@@ -1742,6 +1742,11 @@ button.close-x:hover { color: var(--red); border-color: color-mix(in srgb, var(-
 .modal-status { font-family: var(--font-mono); font-size: 11.5px; color: var(--accent); text-shadow: var(--glow); }
 .modal-status.warn { color: var(--red); }
 
+/* Compact confirm dialog (showModal): the base .modal-card is sized for the big
+   copy-text modal — a short "are you sure?" should hug its content, not fill the
+   screen. */
+.modal-card.confirm-card { width: min(380px, 88vw); height: auto; max-height: 80vh; }
+
 /* "Review changes" popover (Approve / Request changes / Comment) — anchored to the button. */
 .pop-scrim { position: fixed; inset: 0; z-index: 60; }
 .modal-card.review-card { width: min(420px, 88vw); height: auto; }

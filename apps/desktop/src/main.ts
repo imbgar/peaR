@@ -2876,7 +2876,7 @@ function showModal(opts: ModalOpts) {
   const overlay = document.createElement("div");
   overlay.className = "modal";
   overlay.innerHTML = `
-    <div class="modal-card">
+    <div class="modal-card confirm-card">
       <div class="modal-head">
         <span class="modal-title"></span>
         <button class="modal-x" title="Close (Esc)">×</button>
