@@ -765,6 +765,7 @@ function renderTabBar() {
       if ((e.target as HTMLElement).closest(".tab-close")) return; // let the × button work
       startTileDrag(e, { kind: "win", winId: w.id }, pill);
     });
+    pill.oncontextmenu = (e) => tabContextMenu(e, w, t);
     tabbarEl.appendChild(pill);
   }
   if (windows.size === 0) {
@@ -786,6 +787,43 @@ function renderTabBar() {
     };
     tabbarEl.appendChild(reopen);
   }
+}
+
+/** Right-click a tab pill: copy its PR link, close just this tab, or close every
+ *  open tab. "Close all" is guarded by an are-you-sure modal — it can wipe the
+ *  whole workspace in one click. Copy PR Link only appears for PR tabs (a plain
+ *  shell tab has no PR). Closing a tab is non-destructive: sessions keep running
+ *  and can be resumed from the sidebar or reopened with ⌘⇧T. */
+function tabContextMenu(e: MouseEvent, w: Win, t: TabView) {
+  e.preventDefault();
+  e.stopPropagation();
+  const items: CtxItem[] = [];
+  if (t.pr) {
+    const url = t.meta?.url || `https://github.com/${t.pr.owner}/${t.pr.repo}/pull/${t.pr.number}`;
+    items.push({ label: "🔗 Copy PR Link", on: () => void copyToClipboard(url) });
+  }
+  // "Close tab" closes the whole window (every pane in it) — same as the × button.
+  items.push({
+    label: "× Close tab",
+    on: () => forEachLeaf(w.layout, (tab) => send({ type: "close_tab", tab })),
+  });
+  const tabCount = windows.size;
+  items.push({
+    label: "⊗ Close all tabs",
+    danger: true,
+    on: () =>
+      showModal({
+        title: "Close all tabs?",
+        body: `This closes all <b>${tabCount}</b> open tab${tabCount === 1 ? "" : "s"}. Sessions keep running and can be resumed from the sidebar or reopened with ⌘⇧T.`,
+        confirmLabel: "Close all",
+        onConfirm: () => {
+          // snapshot — closing mutates `windows` as the backend acks each tab
+          for (const win of [...windows.values()])
+            forEachLeaf(win.layout, (tab) => send({ type: "close_tab", tab }));
+        },
+      }),
+  });
+  openHistCtx(e.clientX, e.clientY, items);
 }
 
 function renderToolbar() {
@@ -2838,7 +2876,7 @@ function showModal(opts: ModalOpts) {
   const overlay = document.createElement("div");
   overlay.className = "modal";
   overlay.innerHTML = `
-    <div class="modal-card">
+    <div class="modal-card confirm-card">
       <div class="modal-head">
         <span class="modal-title"></span>
         <button class="modal-x" title="Close (Esc)">×</button>
