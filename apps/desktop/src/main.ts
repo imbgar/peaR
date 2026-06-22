@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { emitTo, listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   isPermissionGranted,
   requestPermission,
@@ -462,6 +463,22 @@ function rerenderOpenDiff() {
 }
 /** Apply every live-applicable pref to the running app (CSS vars, body classes, terminal
  *  font, diff sort, notification cadence, native vibrancy material). Idempotent. */
+// macOS native fullscreen gives the window no desktop behind it for the native vibrancy
+// layer to sample, so the translucent surfaces wash out to a flat grey. Track the fullscreen
+// state and toggle `body.fullscreen`; the stylesheet then paints solid theme surfaces instead
+// (same dark look, just not see-through). See the `body.translucent.fullscreen` rules.
+async function syncFullscreen(): Promise<void> {
+  try {
+    document.body.classList.toggle("fullscreen", await getCurrentWindow().isFullscreen());
+  } catch {
+    /* browser preview has no Tauri window — leave it translucent */
+  }
+}
+function initFullscreenSync(): void {
+  void syncFullscreen();
+  void getCurrentWindow().onResized(() => void syncFullscreen());
+}
+
 function applyPrefs() {
   const root = document.documentElement;
   document.body.classList.toggle("translucent", prefs.translucent);
@@ -5131,6 +5148,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setImageProxy(wireCommentImages); // proxy private GitHub comment images that fail to load
   $("#settings-btn").addEventListener("click", openSettings);
   applyPrefs(); // apply persisted appearance/notification/behavior prefs on startup
+  initFullscreenSync(); // solid (not washed-out) surfaces when macOS goes fullscreen
 
   await listen<CoreEvent>("pear:event", (e) => handle(e.payload));
 

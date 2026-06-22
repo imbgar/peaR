@@ -210,6 +210,19 @@ body.translucent #brain-drawer,
 body.translucent #statusbar { background: color-mix(in srgb, var(--panel) var(--vib-panel), transparent); }
 body.translucent #toolbar { background: color-mix(in srgb, var(--elev) var(--vib-toolbar), transparent); }
 
+/* macOS fullscreen has no desktop behind the window for the native vibrancy to sample, so the
+   frosted surfaces wash out to grey. Rather than flatten them opaque, fake the transparency:
+   lay an opaque dark backdrop on the body and let the existing translucent surfaces composite
+   over IT instead of the absent vibrancy. Same frosted tint, over near-black — no see-through.
+   A faint theme-tinted lift mimics the vibrancy's soft depth so it isn't dead-flat. The whole
+   body subtree (sidebar/toolbar/terminal glass) keeps its --vib opacities and reads correctly
+   over this. `.fullscreen` is toggled from main.ts (syncFullscreen). */
+body.translucent.fullscreen {
+  background:
+    radial-gradient(135% 115% at 50% -8%, color-mix(in srgb, var(--bg) 78%, #fff) 0%, transparent 60%),
+    color-mix(in srgb, var(--bg) 88%, #fff);
+}
+
 /* ── CRT overlay (phosphor only) ───────────────────────────────────────── */
 #crt {
   position: fixed;
