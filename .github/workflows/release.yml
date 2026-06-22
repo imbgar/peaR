@@ -28,6 +28,20 @@ jobs:
       - name: install frontend deps
         run: npm ci
         working-directory: apps/desktop
+      - name: extract release notes from CHANGELOG
+        id: notes
+        # The GitHub release body MUST be this version's actual CHANGELOG.md section, not a
+        # pointer (see CLAUDE.md → Releases). Pull the `## [x.y.z]` block; FAIL the release if
+        # it's missing, so a stub body can never ship again.
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          awk -v ver="$ver" '$0 ~ "^## \\[" ver "\\]" {f=1; next} /^## \[/ {f=0} f' CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::error::No CHANGELOG.md section for $ver — refusing to publish a stub release. Add the entry and re-tag."
+            exit 1
+          fi
+          printf '\n---\n_Unsigned build — right-click → **Open** on first launch._\n' >> notes.md
+          { echo 'body<<PEAR_NOTES_EOF'; cat notes.md; echo 'PEAR_NOTES_EOF'; } >> "$GITHUB_OUTPUT"
       - name: build & publish (draft release)
         uses: tauri-apps/tauri-action@v0
         env:
@@ -36,7 +50,7 @@ jobs:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name }}
           releaseName: 'peaR ${{ github.ref_name }}'
-          releaseBody: 'See [CHANGELOG.md](https://github.com/imbgar/pear/blob/main/CHANGELOG.md). Unsigned build — right-click → Open on first launch.'
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: false
           prerelease: false
           args: --target universal-apple-darwin
