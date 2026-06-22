@@ -21,7 +21,7 @@
         </div>
 
         <form id="open-form" class="open">
-          <input id="pr-input" placeholder="owner/repo#123  ·  or paste a GitHub URL" autocomplete="off" spellcheck="false" />
+          <input id="pr-input" placeholder="owner/repo#123  |  paste PR URL" autocomplete="off" spellcheck="false" />
 
           <div id="engine-seg" class="seg" role="tablist">
             <button type="button" data-engine="claude" class="on">claude</button>
@@ -77,7 +77,7 @@
             <button type="button" id="view-teams" class="hist-tab">Teams</button>
             <button type="button" id="view-mine" class="hist-tab">Mine</button>
           </span>
-          <span class="section-actions">
+          <span class="section-actions" id="hist-actions">
             <button type="button" id="fav-only" class="mini icon" title="Show only favorites">★</button>
             <button type="button" id="hist-add" class="mini icon" title="Add a repo or PR (owner/repo or owner/repo#123)">+</button>
             <button type="button" id="history-clear" class="mini" title="Clear history (restorable)">clear</button>
@@ -89,6 +89,7 @@
           <input type="text" id="hist-search-input" class="hist-search-input" placeholder="search · repo:x org:y pr:123" autocomplete="off" spellcheck="false" />
         </div>
         <ul id="history"></ul>
+        <div id="left-status" class="left-status hidden"></div>
       </aside>
 
       <section id="workspace">

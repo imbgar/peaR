@@ -8,6 +8,7 @@ import {
   sendNotification,
 } from "@tauri-apps/plugin-notification";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -1232,6 +1233,53 @@ const statusRequested = new Set<string>();
 // Teams view state: watched users/teams + the PRs they authored.
 let watches: Watches = { users: [], teams: [] };
 let teamPrs: PrStatus[] = [];
+let teamPrsAt = Number(localStorage.getItem("pear.teamPrs.at") ?? "0");
+let teamPrsLoading = false;
+let teamDefaultScope = localStorage.getItem("pear.teams.defaultScope") ?? ""; // "" / "all" = every org
+const teamUserScopes: Record<string, string> = readJson<Record<string, string>>(
+  "pear.teams.userScopes",
+  {},
+);
+/** Parse a free-text org scope ("roboflow, foo" / "all" / "") into a lowercase org allowlist,
+ *  or null for "no restriction". */
+function parseScope(s: string): string[] | null {
+  const t = (s || "").trim().toLowerCase();
+  if (!t || t === "all" || t === "*") return null;
+  return t.split(/[\s,]+/).filter(Boolean);
+}
+/** The org allowlist for a watched user: their per-user scope if set, else the Teams default. */
+function userScopeOrgs(login: string): string[] | null {
+  return parseScope(teamUserScopes[login] ?? teamDefaultScope);
+}
+// Per-user org denylist (right-click "Hide this org for @user") — layered on top of the scope.
+const teamUserHiddenOrgs: Record<string, string[]> = readJson<Record<string, string[]>>(
+  "pear.teams.userHiddenOrgs",
+  {},
+);
+function saveUserHiddenOrgs() {
+  localStorage.setItem("pear.teams.userHiddenOrgs", JSON.stringify(teamUserHiddenOrgs));
+  if (historyView === "teams") renderHistory();
+}
+function hideOrgForUser(user: string, org: string) {
+  const set = new Set((teamUserHiddenOrgs[user] ?? []).map((x) => x.toLowerCase()));
+  set.add(org.toLowerCase());
+  teamUserHiddenOrgs[user] = [...set];
+  saveUserHiddenOrgs();
+}
+/** Clear a watched user's org scope + denylist (show everything again). */
+function clearUserOrgFilters(user: string) {
+  delete teamUserHiddenOrgs[user];
+  delete teamUserScopes[user];
+  localStorage.setItem("pear.teams.userScopes", JSON.stringify(teamUserScopes));
+  saveUserHiddenOrgs();
+}
+function userHasOrgFilter(user: string): boolean {
+  return !!(teamUserScopes[user] || teamUserHiddenOrgs[user]?.length);
+}
+/** Open an external URL in the default browser (falls back to copying the link). */
+function openExternal(url: string) {
+  void openUrl(url).catch(() => void copyToClipboard(url));
+}
 function readJson<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
@@ -1318,6 +1366,24 @@ function teamPrNode(s: PrStatus): HTMLElement {
   li.appendChild(row);
   return li;
 }
+/** Parse the Teams watch box: a github user/org-team URL, an `org/team` slug, or a bare @user. */
+function parseWatchInput(raw: string): Command | null {
+  const v = raw.trim();
+  if (!v) return null;
+  // Team URL: github.com/orgs/<org>/teams/<team>
+  const team = v.match(/github\.com\/orgs\/([^/\s]+)\/teams\/([^/\s?#]+)/i);
+  if (team) return { type: "watch_team", org: team[1], team: team[2], on: true };
+  // User/profile URL: github.com/<login> (single path segment)
+  const userUrl = v.match(/github\.com\/([^/\s?#]+)\/?(?:[?#]|$)/i);
+  if (userUrl) return { type: "watch_user", login: userUrl[1], on: true };
+  const slug = v.replace(/^@/, "");
+  if (slug.includes("/")) {
+    const [org, t] = slug.split("/");
+    return org && t ? { type: "watch_team", org, team: t, on: true } : null;
+  }
+  return slug ? { type: "watch_user", login: slug, on: true } : null;
+}
+
 function renderTeams() {
   // Watch-management bar: add a user / org-team, plus removable chips for current watches.
   const bar = document.createElement("div");
@@ -1327,51 +1393,76 @@ function renderTeams() {
   input.placeholder = "watch a github user — or org/team …";
   input.onkeydown = (e) => {
     if (e.key !== "Enter") return;
-    const v = input.value.trim().replace(/^@/, "");
+    const cmd = parseWatchInput(input.value);
     input.value = "";
-    if (!v) return;
-    if (v.includes("/")) {
-      const [org, team] = v.split("/");
-      if (org && team) send({ type: "watch_team", org, team, on: true });
-    } else {
-      send({ type: "watch_user", login: v, on: true });
-    }
+    if (cmd) send(cmd);
   };
   bar.appendChild(input);
-  const chips = document.createElement("div");
-  chips.className = "teams-chips";
-  for (const u of watches.users)
-    chips.appendChild(watchChip(`@${u}`, () => send({ type: "watch_user", login: u, on: false })));
-  for (const t of watches.teams)
-    chips.appendChild(
-      watchChip(`⛣ ${t}`, () => {
-        const [org, team] = t.split("/");
-        send({ type: "watch_team", org, team, on: false });
-      }),
-    );
-  bar.appendChild(chips);
+  // Watched USERS now live directly in the tree below (no token chips); unwatch is in their ⚙.
+  // Org/team watches have no tree node of their own, so they keep a removable chip.
+  if (watches.teams.length) {
+    const chips = document.createElement("div");
+    chips.className = "teams-chips";
+    for (const t of watches.teams)
+      chips.appendChild(
+        watchChip(`⛣ ${t}`, () => {
+          const [org, team] = t.split("/");
+          send({ type: "watch_team", org, team, on: false });
+        }),
+      );
+    bar.appendChild(chips);
+  }
   historyEl.appendChild(bar);
 
   if (!watches.users.length && !watches.teams.length) {
     emptyRow("add a github user (or org/team) to watch their open PRs");
     return;
   }
-  // Group the watched PRs: USER → owner/repo → PRs.
+  // (Refresh + last-updated/loading status lives in the floating left-pane bar now —
+  // see renderLeftStatus().)
+  // Org scope: show each watched user's PRs only in their scoped orgs (per-user override via the
+  // ⚙ on each user, else the global Teams default; empty/"all" = no restriction).
+  // Group the watched PRs: USER → owner/repo → PRs (scope-filtered).
+  const shown = teamPrs.filter((s) => {
+    const owner = s.pr.owner.toLowerCase();
+    const sc = userScopeOrgs(s.author);
+    if (sc && !sc.includes(owner)) return false; // allowlist scope
+    const hidden = teamUserHiddenOrgs[s.author]; // per-user denylist
+    return !hidden || !hidden.some((o) => o.toLowerCase() === owner);
+  });
   const byUser = new Map<string, Map<string, PrStatus[]>>();
-  for (const s of teamPrs) {
+  for (const s of shown) {
     const u = byUser.get(s.author) ?? byUser.set(s.author, new Map()).get(s.author)!;
     const rk = `${s.pr.owner}/${s.pr.repo}`;
     (u.get(rk) ?? u.set(rk, []).get(rk)!).push(s);
   }
   if (byUser.size === 0) {
-    emptyRow("no open PRs from watched users yet");
+    emptyRow(
+      teamPrsLoading
+        ? "loading watched users' PRs…"
+        : teamPrs.length
+          ? "nothing in scope — widen the org scope with ⚙"
+          : "no open PRs from watched users yet",
+    );
     return;
   }
   for (const user of [...byUser.keys()].sort((a, b) => a.localeCompare(b))) {
-    const un = treeNode("user", `@${user}`, "");
+    const un = treeNode("user", `@${user}`, "", user);
+    const gear = document.createElement("span");
+    gear.className = "tn-gear cfg-gear";
+    gear.textContent = "⚙";
+    gear.title = `Org scope for @${user}`;
+    gear.onclick = (e) => {
+      e.stopPropagation(); // don't toggle the node's expand/collapse
+      openUserScope(user);
+    };
+    un.rowBtn.appendChild(gear);
+    un.rowBtn.oncontextmenu = (e) => teamsUserContextMenu(e, user);
     const repos = byUser.get(user)!;
     for (const rk of [...repos.keys()].sort((a, b) => a.localeCompare(b))) {
-      const repoNode = treeNode("repo", rk, "");
+      const owner = rk.split("/")[0]; // a watched user's PR can live in another org → show that org's avatar
+      const repoNode = treeNode("repo", rk, "", owner !== user ? owner : undefined);
+      repoNode.rowBtn.oncontextmenu = (e) => teamsRepoContextMenu(e, owner, rk.split("/")[1] ?? "", user);
       for (const s of repos.get(rk)!.sort((a, b) => b.pr.number - a.pr.number))
         repoNode.children.appendChild(teamPrNode(s));
       un.children.appendChild(repoNode.el);
@@ -1382,8 +1473,218 @@ function renderTeams() {
 
 /** (Re)fetch the watch list + the watched users' open PRs for the Teams view. */
 function refreshTeams() {
+  teamPrsLoading = true;
   send({ type: "load_watches" });
   send({ type: "load_team_prs" });
+  if (historyView === "teams") renderHistory();
+}
+
+/** A small modal with a free-text input — used for the Teams org-scope config (per-user + the
+ *  global default). Saves the trimmed value; Enter confirms, Esc/backdrop cancels. */
+function openScopePopup(opts: {
+  title: string;
+  current: string;
+  placeholder: string;
+  hint: string;
+  onSave: (value: string) => void;
+  onRemove?: { label: string; run: () => void };
+}) {
+  const overlay = document.createElement("div");
+  overlay.className = "modal";
+  const card = document.createElement("div");
+  card.className = "modal-card confirm-card";
+  card.innerHTML = `
+    <div class="modal-head">
+      <span class="modal-title"></span>
+      <button class="modal-x" title="Close (Esc)">×</button>
+    </div>
+    <div class="consent-body modal-prose">
+      <input class="scope-input" type="text" autocomplete="off" spellcheck="false" />
+      <p class="scope-hint"></p>
+    </div>
+    <div class="modal-foot">
+      <span class="toolbar-spacer"></span>
+      <button class="action subtle" data-act="cancel">Cancel</button>
+      <button class="primary" data-act="ok">Save</button>
+    </div>`;
+  card.querySelector(".modal-title")!.textContent = opts.title;
+  const input = card.querySelector<HTMLInputElement>(".scope-input")!;
+  input.value = opts.current;
+  input.placeholder = opts.placeholder;
+  card.querySelector(".scope-hint")!.textContent = opts.hint;
+  overlay.appendChild(card);
+
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  const save = () => {
+    const v = input.value.trim();
+    close();
+    opts.onSave(v);
+  };
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === "Escape") close();
+    else if (e.key === "Enter") save();
+  };
+  document.addEventListener("keydown", onKey);
+  card.querySelector(".modal-x")!.addEventListener("click", close);
+  card.querySelector('[data-act="cancel"]')!.addEventListener("click", close);
+  card.querySelector('[data-act="ok"]')!.addEventListener("click", save);
+  if (opts.onRemove) {
+    const rm = document.createElement("button");
+    rm.className = "action danger";
+    rm.textContent = opts.onRemove.label;
+    rm.addEventListener("click", () => {
+      close();
+      opts.onRemove!.run();
+    });
+    card.querySelector(".modal-foot")!.prepend(rm);
+  }
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+  document.body.appendChild(overlay);
+  input.focus();
+  input.select();
+}
+
+/** Configure the GLOBAL default org scope for the Teams view. */
+function openTeamsDefaultScope() {
+  openScopePopup({
+    title: "Teams — default org scope",
+    current: teamDefaultScope,
+    placeholder: "all orgs",
+    hint: 'Comma-separated orgs to show for every watched user, e.g. "roboflow". Empty or "all" shows every org. A per-user ⚙ overrides this.',
+    onSave: (v) => {
+      teamDefaultScope = v;
+      localStorage.setItem("pear.teams.defaultScope", v);
+      if (historyView === "teams") renderHistory();
+    },
+  });
+}
+
+/** Configure a single watched user's org scope override. */
+function openUserScope(login: string) {
+  openScopePopup({
+    title: `@${login} — org scope`,
+    current: teamUserScopes[login] ?? "",
+    placeholder: teamDefaultScope ? `default: ${teamDefaultScope}` : "all orgs",
+    hint: `Comma-separated orgs to show for @${login}. Empty = use the Teams default (${teamDefaultScope || "all"}).`,
+    onSave: (v) => {
+      if (v) teamUserScopes[login] = v;
+      else delete teamUserScopes[login];
+      localStorage.setItem("pear.teams.userScopes", JSON.stringify(teamUserScopes));
+      if (historyView === "teams") renderHistory();
+    },
+    onRemove: {
+      label: `Unwatch @${login}`,
+      run: () => send({ type: "watch_user", login, on: false }),
+    },
+  });
+}
+
+/** One-time onboarding the first time the Teams view is opened: how to scope orgs. */
+/** First-run Teams coach-mark: a small popover with an arrow pointing at the ⚙ scope config
+ *  in the left-pane bar (not a full-screen modal). Retries briefly while the bar renders. */
+function showTeamsOnboarding() {
+  document.getElementById("teams-coach")?.remove();
+  let tries = 0;
+  const place = () => {
+    const gear = document.querySelector<HTMLElement>("#left-status .ls-gear");
+    if (!gear && tries++ < 20) {
+      setTimeout(place, 80); // wait for the Teams bar (+ its ⚙) to mount
+      return;
+    }
+    const anchor = gear ?? document.getElementById("view-teams");
+    if (!anchor) return;
+    const pop = document.createElement("div");
+    pop.id = "teams-coach";
+    pop.className = "coachmark";
+    const body = document.createElement("div");
+    body.className = "coach-body";
+    body.innerHTML =
+      "Set a <b>default org scope</b> here so Teams only shows the orgs you care about — not everyone's entire GitHub. Override it per-user with the ⚙ on each user.";
+    const ok = document.createElement("button");
+    ok.className = "coach-ok";
+    ok.textContent = "Got it";
+    pop.append(body, ok);
+    document.body.appendChild(pop);
+
+    const r = anchor.getBoundingClientRect();
+    const pr = pop.getBoundingClientRect();
+    let left = r.left + r.width / 2 - pr.width / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - pr.width - 8));
+    const top = Math.max(8, r.top - pr.height - 12); // above the ⚙; arrow points down to it
+    pop.style.left = `${left}px`;
+    pop.style.top = `${top}px`;
+    pop.style.setProperty("--arrow-x", `${r.left + r.width / 2 - left}px`);
+
+    const close = () => {
+      pop.remove();
+      document.removeEventListener("mousedown", onDoc);
+    };
+    const onDoc = (e: MouseEvent) => {
+      if (!pop.contains(e.target as Node)) close();
+    };
+    ok.addEventListener("click", close);
+    setTimeout(() => document.addEventListener("mousedown", onDoc), 0);
+  };
+  place();
+}
+function maybeOnboardTeams() {
+  if (localStorage.getItem("pear.teams.onboarded")) return;
+  localStorage.setItem("pear.teams.onboarded", "1");
+  showTeamsOnboarding();
+}
+
+/** Floating bottom bar of the left pane. Today it surfaces the Teams refresh + last-updated/
+ *  loading status; a reusable home for other left-pane-only context later. Hidden otherwise. */
+function renderLeftStatus() {
+  const el = $("#left-status");
+  el.innerHTML = "";
+  el.classList.remove("hidden"); // present for EVERY left-pane view (content is per-view)
+
+  const refreshBtn = (loading: boolean, run: () => void) => {
+    const b = document.createElement("button");
+    b.className = "ls-refresh";
+    b.textContent = loading ? "↻ loading…" : "↻ refresh";
+    b.disabled = loading;
+    b.onclick = run;
+    return b;
+  };
+  const whenSpan = (text: string) => {
+    const s = document.createElement("span");
+    s.className = "ls-when";
+    s.textContent = text;
+    return s;
+  };
+  const rel = (at: number) => (at ? `updated ${relTime(new Date(at).toISOString())}` : "");
+
+  if (historyView === "teams") {
+    const gear = document.createElement("button");
+    gear.className = "ls-gear cfg-gear";
+    gear.textContent = "⚙";
+    gear.title = "Teams default org scope";
+    gear.onclick = () => openTeamsDefaultScope();
+    el.append(
+      refreshBtn(teamPrsLoading, () => refreshTeams()),
+      whenSpan(teamPrsLoading ? "fetching watched users' PRs…" : rel(teamPrsAt)),
+      gear,
+    );
+  } else if (historyView === "mine") {
+    el.append(
+      refreshBtn(myPrsLoading, () => refreshMyPrs()),
+      whenSpan(myPrsLoading ? "fetching your open PRs…" : rel(myPrsAt)),
+    );
+  } else {
+    // list / tree / queue — a quiet count for now; room for per-view controls later.
+    const n =
+      historyView === "queue"
+        ? queue.items.filter((i) => i.status !== "done").length
+        : visibleEntries().length;
+    el.append(whenSpan(`${n} ${historyView === "queue" ? "queued" : "reviews"}`));
+  }
 }
 
 /** (Re)fetch the authed user's own open PRs via the primary token. */
@@ -1399,19 +1700,11 @@ function refreshMyPrs() {
 function renderMyPrs() {
   const orgs = [...new Set(myPrs.map((s) => s.pr.owner))].sort((a, b) => a.localeCompare(b));
 
-  const bar = document.createElement("div");
-  bar.className = "teams-bar myprs-bar";
-  const refresh = document.createElement("button");
-  refresh.className = "myprs-refresh";
-  refresh.textContent = myPrsLoading ? "↻ refreshing…" : "↻ refresh";
-  refresh.disabled = myPrsLoading;
-  refresh.onclick = () => refreshMyPrs();
-  const when = document.createElement("span");
-  when.className = "myprs-when";
-  when.textContent = myPrsAt ? `updated ${relTime(new Date(myPrsAt).toISOString())}` : "";
-  bar.append(refresh, when);
+  // Refresh + last-updated live in the floating left-pane bar now (see renderLeftStatus).
   // Per-org toggle chips (the "selected orgs" filter), persisted.
   if (orgs.length > 1) {
+    const bar = document.createElement("div");
+    bar.className = "teams-bar myprs-bar";
     const chips = document.createElement("div");
     chips.className = "teams-chips myprs-orgs";
     for (const org of orgs) {
@@ -1429,8 +1722,8 @@ function renderMyPrs() {
       chips.appendChild(chip);
     }
     bar.appendChild(chips);
+    historyEl.appendChild(bar);
   }
-  historyEl.appendChild(bar);
 
   const shown = myPrs.filter((s) => !myPrsHiddenOrgs.has(s.pr.owner));
   if (!myPrs.length) {
@@ -1451,9 +1744,11 @@ function renderMyPrs() {
   for (const org of [...byOrg.keys()].sort((a, b) => a.localeCompare(b))) {
     const repos = byOrg.get(org)!;
     const count = [...repos.values()].reduce((n, a) => n + a.length, 0);
-    const orgNode = treeNode("user", org, `${count}`);
+    const orgNode = treeNode("user", org, `${count}`, org);
+    orgNode.rowBtn.oncontextmenu = (e) => orgContextMenu(e, org, { mine: true });
     for (const rk of [...repos.keys()].sort((a, b) => a.localeCompare(b))) {
-      const repoNode = treeNode("repo", rk, "");
+      const repoNode = treeNode("repo", rk, ""); // same owner as the org → no redundant avatar
+      repoNode.rowBtn.oncontextmenu = (e) => repoContextMenu(e, org, rk.split("/")[1] ?? "");
       for (const s of repos.get(rk)!.sort((a, b) => b.pr.number - a.pr.number))
         repoNode.children.appendChild(teamPrNode(s));
       orgNode.children.appendChild(repoNode.el);
@@ -1827,6 +2122,11 @@ function renderHistory() {
     historyView === "queue" || historyView === "teams" || historyView === "mine";
   $("#hist-search").classList.toggle("hidden", noFilter);
   $("#fav-only").classList.toggle("hidden", noFilter);
+  // The history-action group (★ · + · clear · restore) acts on history, so only show it on
+  // the History (list) view — never Tree/Queue/Teams/Mine (where 'clear' would still wipe
+  // history from an unrelated view).
+  $("#hist-actions").classList.toggle("hidden", historyView !== "list");
+  renderLeftStatus(); // floating left-pane footer (Teams refresh/status; reusable later)
   historyEl.classList.toggle(
     "tree-mode",
     historyView === "tree" || historyView === "teams" || historyView === "mine",
@@ -2081,11 +2381,12 @@ function renderHistTree(entries: PrRecord[]) {
   }
 
   for (const owner of [...orgs.keys()].sort((a, b) => a.localeCompare(b))) {
-    const org = treeNode("org", owner, "");
+    const org = treeNode("org", owner, "", owner);
+    org.rowBtn.oncontextmenu = (e) => orgContextMenu(e, owner);
     const repos = orgs.get(owner)!;
     for (const repo of [...repos.keys()].sort((a, b) => a.localeCompare(b))) {
       const fav = isRepoFav(owner, repo);
-      const repoNode = treeNode("repo", repo, fav ? "★" : "");
+      const repoNode = treeNode("repo", repo, fav ? "★" : ""); // owner == org above → no avatar
       repoNode.rowBtn.oncontextmenu = (e) => repoContextMenu(e, owner, repo);
       const cells = repos.get(repo)!;
       const nums = [...cells.keys()].sort((a, b) => b - a);
@@ -2108,6 +2409,7 @@ function treeNode(
   kind: "org" | "repo" | "user",
   label: string,
   mark: string,
+  avatarLogin?: string,
 ): { el: HTMLElement; rowBtn: HTMLElement; children: HTMLElement } {
   const el = document.createElement("li");
   el.className = `tree-node tn-${kind}`;
@@ -2120,7 +2422,18 @@ function treeNode(
   const name = document.createElement("span");
   name.className = "tree-name";
   name.textContent = label;
-  rowBtn.append(chev, name);
+  rowBtn.append(chev);
+  // GitHub serves public avatars at github.com/<login>.png for users AND orgs (no auth).
+  if (avatarLogin) {
+    const av = document.createElement("img");
+    av.className = "tree-avatar";
+    av.src = `https://github.com/${encodeURIComponent(avatarLogin)}.png?size=40`;
+    av.alt = "";
+    av.loading = "lazy";
+    av.onerror = () => av.remove(); // network/unknown login → no broken-image icon
+    rowBtn.append(av);
+  }
+  rowBtn.append(name);
   if (mark) {
     const m = document.createElement("span");
     m.className = "tree-mark on";
@@ -2204,8 +2517,63 @@ function repoContextMenu(e: MouseEvent, owner: string, repo: string) {
   e.preventDefault();
   e.stopPropagation();
   const fav = isRepoFav(owner, repo);
+  const url = `https://github.com/${owner}/${repo}`;
   openHistCtx(e.clientX, e.clientY, [
     { label: fav ? "★ Unfavorite repo" : "☆ Favorite repo", on: () => favRepo(owner, repo, !fav) },
+    { label: "Open on GitHub", on: () => openExternal(url) },
+    { label: "Copy repo URL", on: () => void copyToClipboard(url) },
+  ]);
+}
+/** Org/owner node — Tree (open/copy) and Mine (also hide-org). */
+function orgContextMenu(e: MouseEvent, owner: string, opts?: { mine?: boolean }) {
+  e.preventDefault();
+  e.stopPropagation();
+  const url = `https://github.com/${owner}`;
+  const items: CtxItem[] = [];
+  if (opts?.mine) {
+    const hidden = myPrsHiddenOrgs.has(owner);
+    items.push({
+      label: hidden ? `Show ${owner}` : `Hide ${owner}`,
+      on: () => {
+        if (hidden) myPrsHiddenOrgs.delete(owner);
+        else myPrsHiddenOrgs.add(owner);
+        localStorage.setItem("pear.myPrs.hiddenOrgs", JSON.stringify([...myPrsHiddenOrgs]));
+        renderHistory();
+      },
+    });
+  }
+  items.push(
+    { label: "Open on GitHub", on: () => openExternal(url) },
+    { label: "Copy org URL", on: () => void copyToClipboard(url) },
+  );
+  openHistCtx(e.clientX, e.clientY, items);
+}
+/** Watched-user node (Teams): scope, unwatch, open, reset filters. */
+function teamsUserContextMenu(e: MouseEvent, login: string) {
+  e.preventDefault();
+  e.stopPropagation();
+  const url = `https://github.com/${login}`;
+  const items: CtxItem[] = [{ label: "Org scope…", on: () => openUserScope(login) }];
+  if (userHasOrgFilter(login))
+    items.push({ label: "Show all orgs", on: () => clearUserOrgFilters(login) });
+  items.push(
+    { label: "Open on GitHub", on: () => openExternal(url) },
+    { label: "Copy profile URL", on: () => void copyToClipboard(url) },
+    { label: `Unwatch @${login}`, danger: true, on: () => send({ type: "watch_user", login, on: false }) },
+  );
+  openHistCtx(e.clientX, e.clientY, items);
+}
+/** Repo node under a watched user (Teams) — knows the org AND which user. */
+function teamsRepoContextMenu(e: MouseEvent, owner: string, repo: string, user: string) {
+  e.preventDefault();
+  e.stopPropagation();
+  const fav = isRepoFav(owner, repo);
+  const url = `https://github.com/${owner}/${repo}`;
+  openHistCtx(e.clientX, e.clientY, [
+    { label: `Hide ${owner} for @${user}`, on: () => hideOrgForUser(user, owner) },
+    { label: fav ? "★ Unfavorite repo" : "☆ Favorite repo", on: () => favRepo(owner, repo, !fav) },
+    { label: "Open on GitHub", on: () => openExternal(url) },
+    { label: "Copy repo URL", on: () => void copyToClipboard(url) },
   ]);
 }
 function prContextMenu(e: MouseEvent, pr: PrRef, rec: PrRecord | null) {
@@ -2869,6 +3237,9 @@ function handle(ev: CoreEvent) {
     }
     case "team_prs": {
       teamPrs = ev.prs;
+      teamPrsLoading = false;
+      teamPrsAt = Date.now();
+      localStorage.setItem("pear.teamPrs.at", String(teamPrsAt));
       for (const s of ev.prs) prStatusCache.set(prKey(s.pr), s);
       maybeNotifyFromStatuses(ev.prs);
       if (historyView === "teams") renderHistory();
@@ -3146,9 +3517,22 @@ function initThemePicker() {
   }
   $("#theme-toggle").addEventListener("click", (e) => {
     e.stopPropagation();
+    if (menu.classList.contains("hidden")) positionThemeMenu(); // anchor before showing
     menu.classList.toggle("hidden");
   });
   document.addEventListener("click", () => menu.classList.add("hidden"));
+}
+
+/** Anchor the theme menu above the toggle. The menu is `position: fixed` (it can't live inside
+ *  #statusbar's `overflow: hidden`), so it's placed in viewport coords each time it opens —
+ *  mirrors positionNotifPanel(). */
+function positionThemeMenu() {
+  const menu = $("#theme-menu");
+  const r = $("#theme-toggle").getBoundingClientRect();
+  menu.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
+  menu.style.bottom = `${window.innerHeight - r.top + 6}px`;
+  menu.style.left = "auto";
+  menu.style.top = "auto";
 }
 
 // ── insight panel ───────────────────────────────────────────────────────────
@@ -4588,6 +4972,17 @@ function sSelect(
   });
   return sel;
 }
+function sText(get: () => string, set: (v: string) => void, placeholder: string): HTMLElement {
+  const inp = document.createElement("input");
+  inp.type = "text";
+  inp.className = "s-text";
+  inp.value = get();
+  inp.placeholder = placeholder;
+  inp.autocomplete = "off";
+  inp.spellcheck = false;
+  inp.addEventListener("change", () => set(inp.value.trim()));
+  return inp;
+}
 function sRow(label: string, control: HTMLElement, hint?: string): HTMLElement {
   const row = document.createElement("div");
   row.className = "s-row";
@@ -4683,7 +5078,37 @@ function openSettings() {
     sRow("Codex depth", sSelect(COREVIEW_TIER_OPTS, () => coreviewDepth(prefs.coReviewCodexTier), (v) => (prefs.coReviewCodexTier = v))),
   );
 
-  body.append(ap, nt, bh, cr);
+  const tm = sSection("Teams");
+  tm.append(
+    sRow(
+      "Default org scope",
+      sText(
+        () => teamDefaultScope,
+        (v) => {
+          teamDefaultScope = v;
+          localStorage.setItem("pear.teams.defaultScope", v);
+          if (historyView === "teams") renderHistory();
+        },
+        "all orgs",
+      ),
+      'comma-separated orgs, e.g. "roboflow" — empty = all. Per-user ⚙ overrides this.',
+    ),
+  );
+  // Dev-only: replay the first-run Teams intro. `import.meta.env.DEV` is false in the
+  // production bundle, so this row is stripped from the shipped app.
+  if (import.meta.env.DEV) {
+    const replay = document.createElement("button");
+    replay.className = "s-btn";
+    replay.textContent = "Replay intro";
+    replay.onclick = () => {
+      localStorage.removeItem("pear.teams.onboarded"); // reset so it also re-fires on next entry
+      x.click(); // close the settings sheet
+      showTeamsOnboarding();
+    };
+    tm.append(sRow("Onboarding (dev)", replay, "reset + show the first-run intro"));
+  }
+
+  body.append(ap, nt, bh, cr, tm);
   sheet.append(head, body);
   back.appendChild(sheet);
   document.body.appendChild(back);
@@ -4769,7 +5194,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   const setHistView = (v: HistView) => {
     historyView = v;
     localStorage.setItem("pear.histView", v);
-    if (v === "teams") refreshTeams();
+    if (v === "teams") {
+      refreshTeams();
+      maybeOnboardTeams();
+    }
     // Entering Mine: paint the cache instantly, then refresh if it's stale (>2 min) or empty.
     if (v === "mine" && (!myPrs.length || Date.now() - myPrsAt > 120_000)) refreshMyPrs();
     renderHistory();
@@ -5162,7 +5590,10 @@ window.addEventListener("DOMContentLoaded", async () => {
     })
     .catch(() => {});
   send({ type: "load_history" });
-  if (historyView === "teams") refreshTeams(); // restore the Teams view on launch
+  if (historyView === "teams") {
+    refreshTeams(); // restore the Teams view on launch
+    maybeOnboardTeams();
+  }
   if (historyView === "mine") refreshMyPrs(); // restore the Mine view on launch
   send({ type: "check_skills" }); // → skills_status; consent modal if /pr-* missing
   // Always sync the engine's tabs into this (possibly reloaded) frontend; the engine only
