@@ -564,12 +564,18 @@ impl GitHub {
 
     /// Search PRs (GitHub search syntax, e.g. `is:pr is:open author:octocat`), returning
     /// status records. Used by the Teams view to pull watched users' open PRs.
+    ///
+    /// Uses `graphql_partial`: a broad `author:` search spans every repo the token can see,
+    /// and GitHub returns a top-level `errors` array (alongside valid `data`) for any result
+    /// node in an org with OAuth/SAML access restrictions. The strict `graphql` helper would
+    /// discard the whole response on those partial errors, so Teams would silently show
+    /// nothing even when watched users have open PRs we *can* read.
     pub fn search_prs(&self, query: &str, limit: u32) -> Result<Vec<PrStatus>> {
         let q = format!(
             "query($q:String!,$n:Int!){{ search(query:$q,type:ISSUE,first:$n){{ \
              nodes{{ ... on PullRequest {{ {PR_STATUS_FIELDS} }} }} }} }}"
         );
-        let data = self.graphql(&q, serde_json::json!({ "q": query, "n": limit }))?;
+        let data = self.graphql_partial(&q, serde_json::json!({ "q": query, "n": limit }))?;
         Ok(nodes(&data["search"])
             .iter()
             .filter_map(parse_pr_status)
