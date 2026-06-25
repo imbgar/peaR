@@ -1,3 +1,6 @@
+/// <reference types="vite/client" />
+// Provides `import.meta.env` (DEV/PROD/etc.) and other Vite client types.
+
 // TypeScript 6 (error TS2882) requires a *side-effect* import to resolve to a module
 // that has type declarations. Our CSS and webfont imports are handled by Vite at build
 // time and ship no `.d.ts`, so declare them as ambient modules. Covers:

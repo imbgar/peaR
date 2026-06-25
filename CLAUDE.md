@@ -35,6 +35,9 @@ stub while the real notes sat in the repo. Fixed in `release.yml`; do not regres
 - **Translucent + fullscreen.** Surfaces composite over the native `HudWindow` vibrancy, which
   has no backdrop to sample in macOS fullscreen and washes out to grey. Lay an opaque dark
   backdrop on `body.fullscreen` and let the surfaces fake the glass over it.
+- **Config/settings gear buttons use `.cfg-gear`.** Every settings/config gear (Teams scope,
+  etc.) gets the house style — a yellow (accent) outline, no fill or glow — via the shared
+  `.cfg-gear` class. Don't restyle gears ad hoc; add `.cfg-gear` so they stay consistent.
 
 ## Backend (`crates/pear-core`)
 

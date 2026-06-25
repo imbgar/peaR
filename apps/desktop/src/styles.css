@@ -457,6 +457,89 @@ button:disabled { opacity: 0.38; cursor: default; }
 .section-head { padding: 4px 3px 0; }
 .section-head-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 5px; }
 .section-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+#hist-actions.hidden { display: none; }
+
+/* Floating left-pane footer: #history is flex:1, so this pins to the sidebar bottom. Bleeds to
+   the sidebar's padded edges; translucent + blurred so the list reads as scrolling under it. */
+.left-status {
+  flex: none;
+  display: flex; align-items: center; gap: 8px;
+  margin: 4px -13px -15px; padding: 8px 13px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+  border-top: 1px solid var(--bd);
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--dim);
+}
+.left-status.hidden { display: none; }
+.ls-refresh {
+  flex: none; background: var(--inp); border: 1px solid var(--bd2); color: var(--dim);
+  border-radius: 999px; padding: 3px 10px; font-family: var(--font-mono); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.5px; cursor: pointer;
+}
+.ls-refresh:hover:not(:disabled) { color: var(--accent); border-color: var(--accent-d); box-shadow: var(--glow); }
+.ls-refresh:disabled { opacity: 0.6; cursor: default; }
+.ls-when { flex: 1; min-width: 0; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ls-gear { flex: none; background: transparent; border: none; color: var(--faint); cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 4px; }
+.ls-gear:hover { color: var(--accent); text-shadow: var(--glow); }
+/* per-user ⚙ on a Teams user row — reveals on row hover */
+.tn-gear { flex: none; margin-left: 7px; color: var(--faint); cursor: pointer; font-size: 14px; line-height: 1; opacity: 0.5; transition: opacity 120ms var(--ease), color 120ms var(--ease); }
+.tn-gear:hover { opacity: 1; color: var(--accent); }
+.tn-user > .tree-row .tree-name { flex: 0 1 auto; } /* keep the ⚙ snug to the username */
+/* Config/settings gear buttons — the house style: just a yellow (accent) outline, no fill or
+   glow. Apply `.cfg-gear` to every settings/config gear so they read consistently. (See CLAUDE.md.) */
+.cfg-gear {
+  flex: none; cursor: pointer; line-height: 1; opacity: 1;
+  display: inline-flex; align-items: center; justify-content: center; padding: 2px 6px;
+  background: transparent;
+  border: 1px solid var(--accent); border-radius: var(--r-sm);
+  transition: color 120ms var(--ease);
+}
+.cfg-gear:hover { color: var(--accent); }
+/* org-scope config popup */
+.scope-input {
+  width: 100%; box-sizing: border-box; margin: 2px 0 9px;
+  background: var(--inp); border: 1px solid var(--bd2); border-radius: var(--r-sm);
+  color: var(--tx); font-family: var(--font-mono); font-size: 13px; padding: 8px 10px;
+}
+.scope-input:focus { outline: none; border-color: var(--accent-d); box-shadow: var(--glow); }
+.scope-hint { color: var(--faint); font-size: 11.5px; line-height: 1.5; margin: 0; }
+/* settings-sheet text field */
+.s-text {
+  background: var(--inp); border: 1px solid var(--bd2); border-radius: var(--r-sm);
+  color: var(--tx); font-family: var(--font-mono); font-size: 12px; padding: 5px 8px; min-width: 140px;
+}
+.s-text:focus { outline: none; border-color: var(--accent-d); box-shadow: var(--glow); }
+.s-btn {
+  background: var(--inp); border: 1px solid var(--bd2); color: var(--dim); border-radius: var(--r-sm);
+  font-family: var(--font-mono); font-size: 11px; padding: 5px 12px; cursor: pointer;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.s-btn:hover { color: var(--accent); border-color: var(--accent-d); box-shadow: var(--glow); }
+.modal-foot .action.danger { margin-right: auto; color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, transparent); }
+.modal-foot .action.danger:hover { background: color-mix(in srgb, var(--red) 14%, transparent); }
+/* first-run Teams coach-mark — small popover with an arrow pointing at the ⚙ scope config */
+.coachmark {
+  position: fixed; z-index: 95; max-width: 234px;
+  background: var(--elev); border: 1px solid var(--accent-d); border-radius: var(--r);
+  box-shadow: var(--shadow-modal); padding: 11px 13px;
+  font-family: var(--font-ui); font-size: 12px; line-height: 1.5; color: var(--tx);
+  animation: coach-in 150ms var(--ease);
+}
+.coachmark::before, .coachmark::after {
+  content: ""; position: absolute; left: var(--arrow-x, 50%); transform: translateX(-50%);
+  width: 0; height: 0; border-left: 8px solid transparent; border-right: 8px solid transparent;
+}
+.coachmark::before { bottom: -8px; border-top: 8px solid var(--accent-d); }
+.coachmark::after { bottom: -7px; border-left-width: 7px; border-right-width: 7px; border-top: 7px solid var(--elev); }
+.coach-body b { color: var(--accent); }
+.coach-ok {
+  margin-top: 9px; background: var(--accent); color: var(--on-accent); border: none;
+  border-radius: 999px; padding: 4px 13px; font-family: var(--font-mono); font-size: 11px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; cursor: pointer;
+}
+.coach-ok:hover { box-shadow: var(--glow-strong); }
+@keyframes coach-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
 .mini {
   padding: 2px 7px;
   font-family: var(--font-mono);
@@ -477,9 +560,9 @@ button:disabled { opacity: 0.38; cursor: default; }
    view never pushes the strip into horizontal overflow. */
 .hist-tabs { display: flex; flex: 1 1 100%; min-width: 0; }
 .hist-tab {
-  flex: 1 1 0; min-width: 0; text-align: center;
+  flex: 1 1 auto; min-width: 0; text-align: center;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0; padding: 2px 4px;
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0; padding: 2px 5px;
   background: transparent; border: 1px solid var(--bd2); color: var(--faint); cursor: pointer;
 }
 .hist-tab:first-child { border-radius: 5px 0 0 5px; border-right: none; }
@@ -629,6 +712,7 @@ button:disabled { opacity: 0.38; cursor: default; }
 .tn-org > .tree-row { color: var(--faint); text-transform: uppercase; letter-spacing: 0.5px; font-size: 10px; }
 .tn-repo > .tree-row { color: var(--accent); }
 .tree-chev { color: var(--faint); font-size: 9px; width: 9px; flex: none; transition: transform 120ms var(--ease); }
+.tree-avatar { width: 15px; height: 15px; border-radius: 50%; flex: none; object-fit: cover; box-shadow: 0 0 0 1px var(--bd2); background: var(--inp); }
 .tree-row.collapsed .tree-chev { transform: rotate(-90deg); }
 .tree-name { overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
 .tree-mark { flex: none; font-size: 10px; color: var(--faint); width: 11px; text-align: center; }
@@ -1902,7 +1986,11 @@ button.close-x:hover { color: var(--red); border-color: color-mix(in srgb, var(-
 /* theme picker popover (opens upward from the status bar) */
 .theme-picker { position: relative; }
 .theme-menu {
-  position: absolute; bottom: calc(100% + 6px); right: 0; z-index: 50;
+  /* FIXED, not absolute: #statusbar is `overflow: hidden` (keeps the bar one thin line),
+     which clips this upward popover to nothing — the menu would open but stay invisible.
+     Fixed escapes the ancestor clip; anchored above the toggle via positionThemeMenu() on
+     open. Same pattern as .notif-panel. */
+  position: fixed; z-index: 90;
   min-width: 150px; padding: 4px;
   background: var(--elev); border: 1px solid var(--bd2); border-radius: var(--r);
   box-shadow: var(--shadow-modal);
