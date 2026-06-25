@@ -760,7 +760,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "pear-core",
  "serde",
@@ -2636,7 +2636,7 @@ checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
 
 [[package]]
 name = "pear-core"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "anyhow",
  "directories",

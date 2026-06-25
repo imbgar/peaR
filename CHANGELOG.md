@@ -6,6 +6,36 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.16] — 2026-06-25
+
+A big **Teams view overhaul** — browse the open PRs of the users and orgs you watch in a
+real org → repo → PR tree with avatars and right-click menus — plus a more resilient
+watched-PR search, a fullscreen glass fix, and a release-notes standard.
+
+### Added
+- **Teams view overhaul.** Watched users' and orgs' open PRs now render as a real
+  user/org → repo → PR tree, each entity node carrying its GitHub avatar, with an org-scope
+  filter and right-click context menus (open, scope, unwatch). Watched users live directly
+  in the tree (unwatch from their ⚙ menu); org/team watches keep a small removable chip since
+  they have no node of their own. (#90)
+
+### Changed
+- **Release notes now come from the CHANGELOG.** Every GitHub release body is that version's
+  actual `CHANGELOG.md` section — the build fails on a missing/stub section — instead of a
+  bare "see CHANGELOG" pointer. (#88)
+
+### Fixed
+- **Theme menu no longer clipped behind the terminal.** The picker popover escapes the status
+  bar's `overflow: hidden` (position: fixed, anchored to the toggle on open), the same fix as
+  the notification bell. (#90)
+- **Watched-PR search tolerates partial GraphQL errors** — one bad node no longer drops the
+  entire watched-user PR list. (#86)
+- **Fullscreen frosted glass** now renders over a dark backdrop instead of washing out to grey. (#87)
+
+### Dependencies
+- Bump the frontend-dependencies group (#89, #80), window-vibrancy 0.6.0 → 0.7.1 (#82),
+  dompurify 3.4.10 → 3.4.11 (#83), and the rust-dependencies group (#81).
+
 ## [0.1.15] — 2026-06-16
 
 peaRview review ingestion, a "Mine" view for your own open PRs, a richer conversation
