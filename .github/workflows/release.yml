@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  actions: write # dispatch the Homebrew cask update after publishing
 
 jobs:
   release:
@@ -54,3 +55,11 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: --target universal-apple-darwin
+
+      # The release is published with GITHUB_TOKEN, which does NOT fire `release: published` for
+      # other workflows — so dispatch the Homebrew cask update explicitly (workflow_dispatch is
+      # exempt from that rule). Runs after the .dmg is live on the release.
+      - name: update Homebrew cask
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run homebrew.yml -R ${{ github.repository }} -f tag=${{ github.ref_name }}
