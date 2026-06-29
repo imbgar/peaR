@@ -52,7 +52,7 @@ jobs:
       - name: Write cask
         run: |
           mkdir -p tap/Casks
-          cat > tap/Casks/peaR.rb <<EOF
+          cat > tap/Casks/pear.rb <<EOF
           cask "pear" do
             version "${{ steps.rel.outputs.version }}"
             sha256 "${{ steps.rel.outputs.sha }}"
@@ -60,9 +60,11 @@ jobs:
             url "${{ steps.rel.outputs.url }}"
             name "peaR"
             desc "Terminal-native PR review control center"
-            homepage "https://github.com/imbgar/pear"
+            homepage "https://github.com/imbgar/peaR"
 
             app "peaR.app"
+
+            caveats "peaR is unsigned — on first launch right-click it in /Applications and choose Open, or run: xattr -dr com.apple.quarantine /Applications/peaR.app"
 
             zap trash: [
               "~/Library/Application Support/dev.pear.app",
@@ -76,6 +78,6 @@ jobs:
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Casks/peaR.rb
+          git add Casks/pear.rb
           git commit -m "peaR ${{ steps.rel.outputs.version }}" || { echo "no changes"; exit 0; }
           git push

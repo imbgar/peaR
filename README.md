@@ -59,7 +59,7 @@ and [docs/ROADMAP.md](docs/ROADMAP.md) for what's shipped and what's next.
 
 ### Homebrew (macOS)
 ```bash
-brew install --cask imbgar/tap/peaR
+brew install --cask imbgar/tap/pear
 ```
 Unsigned build — on first launch, right-click the app → **Open**.
 
