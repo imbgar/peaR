@@ -554,6 +554,20 @@ button:disabled { opacity: 0.38; cursor: default; }
 .mini:hover { color: var(--accent); border-color: var(--accent-d); }
 .mini.icon { padding: 2px 6px; font-size: 11px; letter-spacing: 0; }
 .mini.icon.on, #fav-only.on { color: var(--accent); border-color: var(--accent-d); }
+/* PR-list sort dropdown — a compact .mini-styled native select. */
+.hist-sort {
+  padding: 2px 6px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  background: var(--inp);
+  border: 1px solid var(--bd2);
+  color: var(--dim);
+  border-radius: 5px;
+  cursor: pointer;
+  max-width: 130px;
+}
+.hist-sort:hover { color: var(--tx); border-color: var(--accent-d); }
+.hist-sort.hidden { display: none; }
 /* History ⇄ Tree segmented tabs */
 /* Full-width segmented strip: the tabs share the row equally so the set always
    fits the sidebar (the ★/+ actions wrap to their own line beneath) — adding a
