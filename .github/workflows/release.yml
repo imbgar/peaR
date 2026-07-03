@@ -44,7 +44,7 @@ jobs:
           printf '\n---\n_Unsigned build — right-click → **Open** on first launch._\n' >> notes.md
           { echo 'body<<PEAR_NOTES_EOF'; cat notes.md; echo 'PEAR_NOTES_EOF'; } >> "$GITHUB_OUTPUT"
       - name: build & publish (draft release)
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
