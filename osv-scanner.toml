@@ -77,3 +77,12 @@ reason = "Transitive via tauri-build -> urlpattern (build-time unicode); unmaint
 [[IgnoredVulns]]
 id = "RUSTSEC-2025-0098" # unic-ucd-version unmaintained
 reason = "Transitive via tauri-build -> urlpattern (build-time unicode); unmaintained, no fixed version."
+
+# ── quick-xml quadratic-parse DoS (fixed in 0.41.0; upstreams pin an incompatible 0.x) ──
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0194" # quick-xml O(N^2) attribute-dedup DoS
+reason = "Transitive quick-xml only reaches pear off the macOS runtime: tauri-winres (Windows build), wayland-scanner (Linux), plist via tauri-codegen/tauri-utils (build-time, our own Info.plist). No untrusted XML at runtime. Fixed in 0.41.0 but tauri-winres/wayland-scanner/plist pin an incompatible 0.x."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0195" # quick-xml DoS (sibling advisory)
+reason = "Same transitive, off-runtime quick-xml as RUSTSEC-2026-0194; no untrusted XML at runtime, no compatible fixed version pullable here yet."

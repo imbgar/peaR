@@ -6,6 +6,32 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.17] — 2026-07-03
+
+A maintenance release: the Homebrew cask now installs end-to-end, plus a sweep of
+dependency and toolchain updates and a security-scanner policy update.
+
+### Fixed
+- **`brew install --cask imbgar/tap/pear` works end-to-end.** Created the missing tap
+  repository, renamed the cask to match its token (`pear.rb`), and had the release
+  workflow dispatch the tap-update job — GitHub does not fire `release: published` for
+  token-created releases, so the cask never refreshed before. (#96)
+
+### Security
+- **Suppressed two unreachable `quick-xml` advisories** (RUSTSEC-2026-0194 / -0195, a
+  quadratic attribute-parse DoS fixed in 0.41.0). Every `quick-xml` path in peaR is
+  transitive and off the macOS runtime — `tauri-winres` (Windows build), `wayland-scanner`
+  (Linux), and `plist` via `tauri-codegen`/`tauri-utils` (build-time, our own Info.plist);
+  peaR never feeds untrusted XML to it at runtime. The upstream crates pin an incompatible
+  `0.x`, so 0.41.0 can't be pulled in yet.
+
+### Dependencies
+- Bump `tauri-apps/tauri-action` 0 → 1 and `actions/checkout` (github-actions group). (#97, #91)
+- Bump the frontend-dependencies group — `@tauri-apps/cli`, `eslint`, `typescript-eslint`,
+  `vite`. (#98, #92)
+- Bump the rust-dependencies group — `anyhow`, `time`, `tauri`; clears advisory
+  RUSTSEC-2026-0190 (`anyhow` 1.0.102). (#99, #93)
+
 ## [0.1.16] — 2026-06-25
 
 A big **Teams view overhaul** — browse the open PRs of the users and orgs you watch in a
