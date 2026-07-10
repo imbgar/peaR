@@ -8,6 +8,8 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
+import { renderMarkdown } from "./markdown";
+
 const REPO = "imbgar/peaR";
 const RELEASES = `https://github.com/${REPO}/releases`;
 const API_LATEST = `https://api.github.com/repos/${REPO}/releases/latest`;
@@ -72,8 +74,10 @@ function showCard(rel: Release) {
 
   const notes = document.createElement("div");
   notes.className = "uc-notes";
-  // Plain text only — release notes are shown verbatim, never as HTML.
-  notes.textContent = rel.notes || "A new version is available.";
+  // Release notes are the version's CHANGELOG markdown (release.yml extracts it) —
+  // render it through the same sanitized marked → DOMPurify path as PR comment bodies.
+  if (rel.notes) renderMarkdown(notes, rel.notes);
+  else notes.textContent = "A new version is available.";
 
   const view = document.createElement("button");
   view.className = "uc-view";
