@@ -2238,9 +2238,24 @@ button.close-x:hover { color: var(--red); border-color: color-mix(in srgb, var(-
 .uc-x:hover { color: var(--accent); }
 .uc-notes {
   padding: 10px 11px; overflow: auto; font-size: 11.5px; line-height: 1.5;
-  color: var(--dim); white-space: pre-wrap; word-break: break-word;
+  color: var(--dim); word-break: break-word;
   border-bottom: 1px solid var(--bd);
 }
+/* The notes are rendered CHANGELOG markdown — compact typography at card scale. */
+.uc-notes > :first-child { margin-top: 0; }
+.uc-notes > :last-child { margin-bottom: 0; }
+.uc-notes p { margin: 0 0 6px; }
+.uc-notes h1, .uc-notes h2, .uc-notes h3, .uc-notes h4 {
+  color: var(--tx); margin: 8px 0 4px; line-height: 1.3; font-size: 11.5px;
+}
+.uc-notes a { color: var(--blue); }
+.uc-notes code {
+  font-family: var(--font-mono); font-size: 10.5px;
+  background: var(--inp); padding: 1px 4px; border-radius: 4px;
+}
+.uc-notes ul, .uc-notes ol { padding-left: 16px; margin: 4px 0 6px; }
+.uc-notes li { margin: 1px 0; }
+.uc-notes hr { border: none; border-top: 1px solid var(--bd); margin: 8px 0; }
 .uc-view {
   margin: 9px 11px 4px; padding: 6px 10px; cursor: pointer;
   background: var(--accent); color: var(--on-accent); border: none; border-radius: var(--r-sm);
