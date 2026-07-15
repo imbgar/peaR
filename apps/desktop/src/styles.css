@@ -2367,3 +2367,5 @@ body.reduce-motion *::after {
 .deck-dots .dd { width: 7px; height: 7px; border-radius: 50%; background: var(--bd); cursor: pointer; }
 .deck-dots .dd.sel { background: var(--accent); }
 .deck-dots .dd.cur { outline: 2px solid var(--tx); outline-offset: 1.5px; }
+/* 🎬 video-queue badge turns green once every job is done */
+.notif-count.vq-done { background: var(--green, #16a34a); }

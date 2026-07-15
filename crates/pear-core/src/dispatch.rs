@@ -172,23 +172,29 @@ pub fn tandem_keystrokes(
 
 /// Keystrokes for an action [`ReviewButton`] under `cli`, targeting `pr` (trailing CR).
 /// `review_dir` is the per-PR review drop dir (where the structured `review.json`
-/// goes) — only SaveReview uses it.
+/// goes) — only SaveReview uses it. `arg` is free-text appended before the Enter
+/// (only the video buttons use it — the target-runtime cue).
 pub fn keystrokes(
     button: ReviewButton,
     cli: CliKind,
     pr: Option<&PrRef>,
     review_dir: Option<&Path>,
+    arg: Option<&str>,
 ) -> Option<String> {
     use CliKind::*;
     use ReviewButton::*;
+    let with_arg = |base: &str| match arg {
+        Some(a) if !a.trim().is_empty() => format!("{base} {}\r", a.trim()),
+        _ => format!("{base}\r"),
+    };
     let s = match (cli, button) {
         // The /pr-* skills self-detect the PR from the checked-out branch via `gh`.
         (Claude, PostReview) => "/pr-post-review\r".to_string(),
         (Claude, Distill) => "/pr-distill\r".to_string(),
         (Claude, WalkThrough) => "/pr-walkthru\r".to_string(),
         (Claude, Explain) => "/pr-explain\r".to_string(),
-        (Claude, VideoPr) => "/pr-video purpose\r".to_string(),
-        (Claude, VideoReview) => "/pr-video review\r".to_string(),
+        (Claude, VideoPr) => with_arg("/pr-video purpose"),
+        (Claude, VideoReview) => with_arg("/pr-video review"),
         (Claude, Ultra) => code_review("ultra", pr), // paid cloud review of THIS PR
         (Claude, CopyContent) => "/pr-copy\r".to_string(),
         (Claude, SaveReview) => save_review_prompt(pr, review_dir),
@@ -290,7 +296,7 @@ mod tests {
             ReviewButton::VideoPr,
             ReviewButton::VideoReview,
         ] {
-            let k = keystrokes(b, CliKind::Claude, None, None).unwrap();
+            let k = keystrokes(b, CliKind::Claude, None, None, None).unwrap();
             assert!(k.ends_with('\r'), "{b:?} must end with CR (Enter), not LF");
             assert!(!k.contains('\n'), "{b:?} must not contain LF");
             assert!(k.starts_with("/pr-"), "{b:?} not a /pr- macro");
@@ -310,7 +316,7 @@ mod tests {
         assert!(!complex.contains("ultra"));
         // The paid cloud review lives only on the Ultra button.
         assert_eq!(
-            keystrokes(ReviewButton::Ultra, CliKind::Claude, None, None).unwrap(),
+            keystrokes(ReviewButton::Ultra, CliKind::Claude, None, None, None).unwrap(),
             "/code-review ultra\r"
         );
     }
@@ -324,7 +330,7 @@ mod tests {
             "/code-review high 42\r"
         );
         assert_eq!(
-            keystrokes(ReviewButton::Ultra, CliKind::Claude, Some(&p), None).unwrap(),
+            keystrokes(ReviewButton::Ultra, CliKind::Claude, Some(&p), None, None).unwrap(),
             "/code-review ultra 42\r"
         );
         // Complex names the PR and pins the agent to the exact diff.
@@ -397,8 +403,8 @@ mod tests {
 
     #[test]
     fn shell_has_no_macros() {
-        assert!(keystrokes(ReviewButton::PostReview, CliKind::Shell, None, None).is_none());
-        assert!(keystrokes(ReviewButton::Ultra, CliKind::Shell, None, None).is_none());
+        assert!(keystrokes(ReviewButton::PostReview, CliKind::Shell, None, None, None).is_none());
+        assert!(keystrokes(ReviewButton::Ultra, CliKind::Shell, None, None, None).is_none());
         assert!(tier_keystrokes(ReviewTier::Light, CliKind::Shell, None).is_none());
     }
 }

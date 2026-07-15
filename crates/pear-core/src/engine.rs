@@ -173,7 +173,7 @@ impl Engine {
             Command::CloseTab { tab } => self.close(tab),
             Command::Input { tab, bytes } => self.input(tab, &bytes),
             Command::Resize { tab, cols, rows } => self.resize(tab, cols, rows),
-            Command::Button { tab, button, agent } => self.button(tab, button, agent),
+            Command::Button { tab, button, agent, arg } => self.button(tab, button, agent, arg),
             Command::StartReview { tab, tier, agent } => self.start_review(tab, tier, agent),
             Command::StartCoReview {
                 tab,
@@ -925,7 +925,7 @@ impl Engine {
         }
     }
 
-    fn button(&mut self, tab: TabId, button: ReviewButton, agent: Option<CliKind>) {
+    fn button(&mut self, tab: TabId, button: ReviewButton, agent: Option<CliKind>, arg: Option<String>) {
         let (cli, pr) = match self.tabs.get(&tab) {
             Some(t) => (agent.unwrap_or(t.cli), t.pr.clone()),
             None => {
@@ -940,7 +940,7 @@ impl Engine {
         // structured `review.json` (review.pear.v1) — the same path load_review_doc reads.
         let drop = pr.as_ref().map(crate::review_doc::drop_path);
         let review_dir = drop.as_deref().and_then(|p| p.parent());
-        let Some(keys) = dispatch::keystrokes(button, cli, pr.as_ref(), review_dir) else {
+        let Some(keys) = dispatch::keystrokes(button, cli, pr.as_ref(), review_dir, arg.as_deref()) else {
             self.emit(Event::Notice {
                 tab: Some(tab),
                 message: format!("{:?} has no macro for {:?}", button, cli),

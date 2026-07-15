@@ -152,7 +152,7 @@ export type Command =
   | { type: "close_tab"; tab: number }
   | { type: "input"; tab: number; bytes: number[] }
   | { type: "resize"; tab: number; cols: number; rows: number }
-  | { type: "button"; tab: number; button: ReviewButton; agent?: CliKind }
+  | { type: "button"; tab: number; button: ReviewButton; agent?: CliKind; arg?: string | null }
   | { type: "start_review"; tab: number; tier: ReviewTier; agent?: CliKind }
   | {
       type: "start_co_review";

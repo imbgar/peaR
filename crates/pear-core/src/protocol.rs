@@ -429,6 +429,10 @@ pub enum Command {
         button: ReviewButton,
         #[serde(default)]
         agent: Option<CliKind>,
+        /// Free-text appended to the macro before Enter (currently only the video
+        /// buttons use it — the target-runtime cue, e.g. "(aim for ~2 min runtime)").
+        #[serde(default)]
+        arg: Option<String>,
     },
     /// Launch a review at a given intensity; the engine writes the mapped review
     /// command to the PTY. `agent` overrides the dispatch CLI (see `Button`).

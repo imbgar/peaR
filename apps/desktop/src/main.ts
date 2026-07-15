@@ -401,6 +401,10 @@ interface Prefs {
   // behavior
   autoSummarize: boolean; // auto-run Haiku summaries when a PR diff first opens
   confirmNest: boolean; // confirm before nesting a whole multi-pane tab on drag-to-tile
+  // video explainers (narrated MP4 via /pr-video)
+  autoVideoOnReview: boolean; // queue a REVIEW explainer behind every launched review
+  autoVideoOnOpen: boolean; // queue a PR explainer whenever a PR tab opens
+  videoTargetSecs: number; // target runtime for generated explainers
   restoreTiling: boolean; // rebuild split layouts on restore (vs one window per tab)
   diffSort: string;
   commentMode: string; // "inline" thread under the line, or "hover" pop-out bubble
@@ -426,6 +430,9 @@ const DEFAULT_PREFS: Prefs = {
   pollSecs: 90,
   autoSummarize: false,
   confirmNest: true,
+  autoVideoOnReview: false,
+  autoVideoOnOpen: false,
+  videoTargetSecs: 120,
   restoreTiling: true,
   diffSort: "default",
   commentMode: "inline",
@@ -1066,6 +1073,128 @@ const REVIEW_MIN_MS = 1800;
 const REVIEW_MAX_MS = 20000;
 const pendingReviews = new Map<number, { sel: LaunchReview; openedAt: number; timer: number }>();
 
+// ── video explainer queue (scrappy PoC) ───────────────────────────────────────
+// A job = one /pr-video macro typed into the job's tab. The AGENT's own prompt queue
+// is the real scheduler (Claude Code queues submitted prompts and runs them in order),
+// so "queued behind the review" is free. We track jobs for the 🎬 statusbar popover,
+// and mark a job done by spotting an .mp4 path in that tab's terminal output.
+interface VideoJob {
+  id: number;
+  tab: number;
+  label: string; // PR short label (or tab title)
+  kind: "pr" | "review";
+  targetSecs: number;
+  state: "queued" | "dispatched" | "done";
+  at: number;
+  path?: string; // the produced .mp4, once spotted in the output
+}
+const videoJobs: VideoJob[] = [];
+let videoJobSeq = 1;
+// Rolling per-tab output tail so an .mp4 path split across PTY chunks still matches.
+const videoScanTail = new Map<number, string>();
+const videoTailDecoder = new TextDecoder();
+
+const VIDEO_TARGET_OPTS: [string, string][] = [
+  ["30", "30 s"], ["60", "1 min"], ["120", "2 min"], ["180", "3 min"],
+  ["240", "4 min"], ["300", "5 min"], ["420", "7 min"], ["600", "10 min"],
+];
+function videoTargetLabel(secs: number): string {
+  return VIDEO_TARGET_OPTS.find(([v]) => v === String(secs))?.[1] ?? `${secs} s`;
+}
+/** The free-text runtime cue appended to the /pr-video macro. */
+function videoTargetArg(): string {
+  return `(aim for a ~${videoTargetLabel(prefs.videoTargetSecs)} runtime)`;
+}
+
+/** Queue a video job and type its macro into the tab. `defer` skips the typing (the
+ *  CLI is still booting — fireReview / the fallback timer flushes it once ready). */
+function enqueueVideo(tab: number, kind: "pr" | "review", defer = false): void {
+  const v = tabs.get(tab);
+  const job: VideoJob = {
+    id: videoJobSeq++,
+    tab,
+    label: v?.pr ? shortLabel(v.pr) : (v?.title ?? `tab ${tab}`),
+    kind,
+    targetSecs: prefs.videoTargetSecs,
+    state: "queued",
+    at: Date.now(),
+  };
+  videoJobs.unshift(job);
+  renderVideoQueueBtn();
+  if (!defer) dispatchVideoJob(job);
+  else window.setTimeout(() => flushVideoJobs(tab), REVIEW_MAX_MS); // boot fallback
+}
+
+function dispatchVideoJob(job: VideoJob): void {
+  if (job.state !== "queued") return;
+  const v = tabs.get(job.tab);
+  if (!v) return;
+  job.state = "dispatched";
+  send({
+    type: "button",
+    tab: job.tab,
+    button: job.kind === "pr" ? "video_pr" : "video_review",
+    agent: resolveAgent(v),
+    arg: videoTargetArg(),
+  });
+  markReviewed(job.tab); // harmless for "pr"; keeps the gating honest for "review"
+  setStatus(`🎬 ${job.kind === "pr" ? "PR" : "review"} explainer queued → ${job.label} (~${videoTargetLabel(job.targetSecs)})`);
+  renderVideoQueueBtn();
+}
+
+/** Type every still-queued job for `tab` (called once the agent is ready). */
+function flushVideoJobs(tab: number): void {
+  for (const j of [...videoJobs].reverse()) if (j.tab === tab && j.state === "queued") dispatchVideoJob(j);
+}
+
+/** Spot produced videos in the tab's output (an absolute .mp4 path) → mark the oldest
+ *  dispatched job for that tab done. Chunk-split paths are caught by the rolling tail. */
+function scanOutputForVideo(tab: number, bytes: number[]): void {
+  if (!videoJobs.some((j) => j.tab === tab && j.state === "dispatched")) return;
+  const text = (videoScanTail.get(tab) ?? "") + videoTailDecoder.decode(new Uint8Array(bytes));
+  // eslint-disable-next-line no-control-regex -- deliberately matching the ANSI ESC byte
+  const clean = text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ""); // strip ANSI so paths match
+  const m = clean.match(/(?:\/[\w.@%+~-]+)+\.mp4\b/g);
+  if (m) {
+    const path = m[m.length - 1];
+    const job = [...videoJobs].reverse().find((j) => j.tab === tab && j.state === "dispatched");
+    if (job && job.path !== path) {
+      job.state = "done";
+      job.path = path;
+      setStatus(`🎬 explainer ready — ${job.label}`);
+      renderVideoQueueBtn();
+    }
+  }
+  videoScanTail.set(tab, clean.slice(-512));
+}
+
+function renderVideoQueueBtn(): void {
+  const btn = document.getElementById("video-queue");
+  const count = document.getElementById("video-count");
+  if (!btn || !count) return;
+  const activeJobs = videoJobs.filter((j) => j.state !== "done").length;
+  const done = videoJobs.filter((j) => j.state === "done").length;
+  count.textContent = String(activeJobs || done);
+  count.classList.toggle("hidden", videoJobs.length === 0);
+  count.classList.toggle("vq-done", activeJobs === 0 && done > 0);
+}
+
+function openVideoQueue(anchor: HTMLElement): void {
+  const r = anchor.getBoundingClientRect();
+  const items: CtxItem[] = videoJobs.length
+    ? videoJobs.slice(0, 12).map((j) => ({
+        label: `${j.state === "done" ? "✅" : j.state === "dispatched" ? "⏳" : "•"} ${
+          j.kind === "pr" ? "PR" : "review"
+        } explainer · ${j.label} · ~${videoTargetLabel(j.targetSecs)}${j.state === "done" ? " — open ▸" : ""}`,
+        disabled: j.state !== "done",
+        on: () => {
+          if (j.path) void openUrl(`file://${j.path}`).catch(() => setStatus(`⚠ can't open ${j.path}`, true));
+        },
+      }))
+    : [{ label: "no explainer jobs yet — 🎥 Video on a PR tab, or turn on auto-generate in Settings", disabled: true, on: () => {} }];
+  openHistCtx(r.left - 220, r.top - 8 - Math.min(videoJobs.length, 12) * 26, items);
+}
+
 // Tabs where a review has actually been launched/produced — gates the review-
 // dependent toolbar buttons (Distill, Walk). A stopgap until the structured review
 // state (peaRview) lands and can report review readiness precisely. Marked when a
@@ -1115,6 +1244,10 @@ function fireReview(tab: number) {
       codex_tier: coreviewDepth(prefs.coReviewCodexTier),
     });
   else send({ type: "start_review", tab, tier: p.sel, agent });
+  // Video explainers queue BEHIND the review macro in the agent's own prompt queue, so
+  // "generate on review completion" is literally the next prompt the agent processes.
+  if (prefs.autoVideoOnReview) enqueueVideo(tab, "review");
+  flushVideoJobs(tab); // any deferred PR-explainer job (auto-on-open) rides along too
 }
 
 function scheduleAutoReview(tab: number, sel: LaunchReview) {
@@ -3169,6 +3302,9 @@ function handle(ev: CoreEvent) {
         setStatus(`auto-review (${pendingAutoReview}) — waiting for ${ev.title} to be ready…`);
         scheduleAutoReview(ev.tab, pendingAutoReview);
       }
+      // Auto PR explainer on open: DEFERRED — the CLI is still booting, so the job is
+      // typed by fireReview (queued behind the review) or the boot-fallback timer.
+      if (ev.pr && ev.cli !== "shell" && prefs.autoVideoOnOpen) enqueueVideo(ev.tab, "pr", true);
       pendingAutoReview = null; // consume — resumes/new opens never carry it
       // Co-review: the first engine's tab just opened — open the second engine as a split pane
       // beside it (it lands via pendingSplit on its own tab_opened) and auto-review it too.
@@ -3194,6 +3330,7 @@ function handle(ev: CoreEvent) {
     case "output": {
       tabs.get(ev.tab)?.term.write(new Uint8Array(ev.bytes));
       nudgeReview(ev.tab); // booting output resets the "ready when quiet" timer
+      scanOutputForVideo(ev.tab, ev.bytes); // spot produced .mp4 paths → mark jobs done
       break;
     }
     case "tab_closed": {
@@ -3381,12 +3518,15 @@ function openVideoMenu(anchor: HTMLElement) {
   if (active === null) return;
   const reviewed = reviewedTabs.has(active);
   const r = anchor.getBoundingClientRect();
-  openHistCtx(r.right - 210, r.bottom + 4, [
-    { label: "🎬 PR explainer — orient to the change", on: () => pressButton("video_pr") },
+  const tgt = videoTargetLabel(prefs.videoTargetSecs);
+  openHistCtx(r.right - 240, r.bottom + 4, [
+    { label: `🎬 PR explainer — orient to the change (~${tgt})`, on: () => active !== null && enqueueVideo(active, "pr") },
     {
-      label: reviewed ? "🎬 Review explainer — walk the findings" : "🎬 Review explainer — run a review first",
+      label: reviewed
+        ? `🎬 Review explainer — walk the findings (~${tgt})`
+        : "🎬 Review explainer — run a review first",
       disabled: !reviewed,
-      on: () => pressButton("video_review"),
+      on: () => active !== null && enqueueVideo(active, "review"),
     },
   ]);
 }
@@ -5136,6 +5276,25 @@ function openSettings() {
     sRow("Diff comments", sSelect(COMMENTMODE_OPTS, () => prefs.commentMode, (v) => (prefs.commentMode = v)), "inline thread vs hover bubble"),
   );
 
+  const vx = sSection("Video explainers");
+  vx.append(
+    sRow(
+      "Auto-generate on review",
+      sToggle(() => prefs.autoVideoOnReview, (v) => (prefs.autoVideoOnReview = v)),
+      "review explainer queued behind every launched review",
+    ),
+    sRow(
+      "Auto-generate on PR open",
+      sToggle(() => prefs.autoVideoOnOpen, (v) => (prefs.autoVideoOnOpen = v)),
+      "PR explainer whenever a PR tab opens",
+    ),
+    sRow(
+      "Target runtime",
+      sSelect(VIDEO_TARGET_OPTS, () => String(prefs.videoTargetSecs), (v) => (prefs.videoTargetSecs = parseInt(v, 10) || 120)),
+      "the explainer aims for roughly this length",
+    ),
+  );
+
   const cr = sSection("Co-review");
   cr.append(
     sRow("Mode", sSelect(COREVIEW_MODE_OPTS, () => prefs.coReviewMode, (v) => (prefs.coReviewMode = v)), "pipeline = cross-examined merged verdict"),
@@ -5174,7 +5333,7 @@ function openSettings() {
     tm.append(sRow("Onboarding (dev)", replay, "reset + show the first-run intro"));
   }
 
-  body.append(ap, nt, bh, cr, tm);
+  body.append(ap, nt, bh, vx, cr, tm);
   sheet.append(head, body);
   back.appendChild(sheet);
   document.body.appendChild(back);
@@ -5323,6 +5482,11 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#video-btn").addEventListener("click", (e) => {
     e.stopPropagation();
     openVideoMenu(e.currentTarget as HTMLElement);
+  });
+  // 🎬 statusbar queue — every generated / in-flight explainer, done ones open the MP4.
+  $("#video-queue").addEventListener("click", (e) => {
+    e.stopPropagation();
+    openVideoQueue(e.currentTarget as HTMLElement);
   });
 
   // Insight panel + auto-review.
