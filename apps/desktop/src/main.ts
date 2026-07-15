@@ -1436,17 +1436,18 @@ function renderTeams() {
     const rk = `${s.pr.owner}/${s.pr.repo}`;
     (u.get(rk) ?? u.set(rk, []).get(rk)!).push(s);
   }
-  if (byUser.size === 0) {
-    emptyRow(
-      teamPrsLoading
-        ? "loading watched users' PRs…"
-        : teamPrs.length
-          ? "nothing in scope — widen the org scope with ⚙"
-          : "no open PRs from watched users yet",
-    );
+  // Render EVERY directly-watched user, even when the org scope filters them to zero —
+  // otherwise a too-narrow (or typo'd) scope removes the node AND the ⚙ that could fix it,
+  // permanently locking the user out of their own filter. byUser may also hold authors that
+  // came in via watched org/teams; render those too (they only exist while they have PRs).
+  const users = [...new Set([...watches.users, ...byUser.keys()])].sort((a, b) =>
+    a.localeCompare(b),
+  );
+  if (users.length === 0) {
+    emptyRow(teamPrsLoading ? "loading watched users' PRs…" : "no open PRs from watched users yet");
     return;
   }
-  for (const user of [...byUser.keys()].sort((a, b) => a.localeCompare(b))) {
+  for (const user of users) {
     const un = treeNode("user", `@${user}`, "", user);
     const gear = document.createElement("span");
     gear.className = "tn-gear cfg-gear";
@@ -1458,7 +1459,22 @@ function renderTeams() {
     };
     un.rowBtn.appendChild(gear);
     un.rowBtn.oncontextmenu = (e) => teamsUserContextMenu(e, user);
-    const repos = byUser.get(user)!;
+    const repos = byUser.get(user);
+    if (!repos) {
+      // Watched, but nothing to show — say WHY (scoped-out vs none open) and keep the
+      // node interactive so the ⚙ / right-click always work.
+      const hint = document.createElement("div");
+      hint.className = "history-empty";
+      hint.style.padding = "4px 8px 6px 26px"; // align under the node's label, not the gutter
+      hint.textContent = teamPrsLoading
+        ? "loading…"
+        : userScopeOrgs(user) || teamUserHiddenOrgs[user]?.length
+          ? "nothing in scope — widen the org scope with ⚙"
+          : "no open PRs";
+      un.children.appendChild(hint);
+      historyEl.appendChild(un.el);
+      continue;
+    }
     for (const rk of [...repos.keys()].sort((a, b) => a.localeCompare(b))) {
       const owner = rk.split("/")[0]; // a watched user's PR can live in another org → show that org's avatar
       const repoNode = treeNode("repo", rk, "", owner !== user ? owner : undefined);
