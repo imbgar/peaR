@@ -14,6 +14,8 @@
 //! Returning `None` means "no terminal macro for this combo" — the engine turns that
 //! into a `Notice` toast instead (e.g. a review launched in a plain shell).
 
+use std::path::Path;
+
 use crate::protocol::{CliKind, PrRef, ReviewButton, ReviewTier};
 
 /// `/code-review <effort> [<pr#>]`. The PR number targets THIS pull request. (Verified
@@ -52,15 +54,55 @@ fn aider_ask(prompt: &str, pr: Option<&PrRef>) -> String {
     }
 }
 
-/// Instruct the agent to persist the review it just produced as a markdown file.
-fn save_review_prompt(pr: Option<&PrRef>) -> String {
+/// Instruct the agent to persist the review it just produced: the verbatim markdown AND,
+/// when `review_dir` is known (the per-PR review drop dir), a structured `review.json`
+/// in the `review.pear.v1` shape so the review map/deck can render it. The JSON shape is
+/// described compactly inline so the agent emits a doc that passes `ReviewDoc::parse`.
+fn save_review_prompt(pr: Option<&PrRef>, review_dir: Option<&Path>) -> String {
     let name = pr
         .map(|p| format!("pr-review-{}.md", p.number))
         .unwrap_or_else(|| "pr-review.md".to_string());
-    format!(
+    let mut s = format!(
         "Save the full review you just produced — verbatim and uncondensed, every section — \
-         to a markdown file `{name}` in this repo, then print the path.\r"
-    )
+         to a markdown file `{name}` in this repo. "
+    );
+    if let Some(dir) = review_dir {
+        let json = dir.join("review.json");
+        let r#ref = pr
+            .map(PrRef::full_label)
+            .unwrap_or_else(|| "owner/repo#N".to_string());
+        s.push_str(&format!(
+            "Then ALSO write a structured `review.pear.v1` JSON of the SAME review to the \
+             absolute path `{}` (create parent dirs if needed). It MUST be valid JSON with \
+             this exact shape: {{ \"schema\": \"review.pear.v1\", \"mode\": \"single\", \
+             \"engines\": [{{ \"name\": \"claude\", \"role\": \"reviewer\", \"depth\": \"standard\" }}], \
+             \"subjects\": [{{ \"ref\": \"{ref}\", \"title\": \"<pr title>\", \"head_sha\": \"<sha>\" }}], \
+             \"understanding\": {{ \"purpose\": \"<one paragraph: what + why>\", \
+             \"walkthrough\": [{{ \"id\": \"W1\", \"title\": \"<beat>\", \"body\": \"<detail>\", \
+             \"risk\": \"low|medium|high\", \"anchors\": [{{ \"subject\": 0, \"path\": \"<file>\", \"line\": <n> }}] }}], \
+             \"verified\": [\"<what you actually checked>\"] }}, \
+             \"findings\": [{{ \"id\": \"F1\", \"type\": \"bug|test|api|docs|clarity|style|error_handling|design|compat|perf|security|observability|question|praise\", \
+             \"severity\": \"blocker|fix_before_merge|follow_up|take_or_leave\", \"confidence\": 0.0-1.0, \
+             \"rule\": {{ \"id\": \"<reusable-rule-id>\", \"why\": \"<why it matters>\" }}, \
+             \"title\": \"<short>\", \"evidence\": \"<why wrong + failing case>\", \
+             \"anchor\": {{ \"subject\": 0, \"path\": \"<file>\", \"line\": <n> }}, \
+             \"suggestion\": {{ \"patch\": \"<committable replacement hunk>\" }}, \
+             \"engines\": {{ \"claude\": \"found|agree|dispute|uncertain\" }}, \
+             \"status\": \"open\" }}], \
+             \"verdict\": {{ \"ledger\": {{ \"blocker\": 0, \"fix_before_merge\": 0, \"follow_up\": 0, \"take_or_leave\": 0 }}, \
+             \"per_subject\": [{{ \"subject\": 0, \"state\": \"ready|ready_with_nits|needs_work|blocked\", \
+             \"blocked_by\": [\"<finding id, REQUIRED non-empty when state is needs_work or blocked>\"], \
+             \"scope\": \"<what this pass did NOT cover>\", \"justification\": \"<why this verdict>\" }}] }} }}. \
+             Rules: `type` `question`/`praise` MUST use severity `take_or_leave`; every `subject`/`anchor` \
+             index points into `subjects` (0-based); `blocked_by` must name real finding ids. Then print both paths. ",
+            json.display(),
+            ref = r#ref,
+        ));
+    } else {
+        s.push_str("Then print the path. ");
+    }
+    s.push('\r');
+    s
 }
 
 /// The co-review pipeline macro — typed into a CLAUDE tab only (claude is the
@@ -129,7 +171,14 @@ pub fn tandem_keystrokes(
 }
 
 /// Keystrokes for an action [`ReviewButton`] under `cli`, targeting `pr` (trailing CR).
-pub fn keystrokes(button: ReviewButton, cli: CliKind, pr: Option<&PrRef>) -> Option<String> {
+/// `review_dir` is the per-PR review drop dir (where the structured `review.json`
+/// goes) — only SaveReview uses it.
+pub fn keystrokes(
+    button: ReviewButton,
+    cli: CliKind,
+    pr: Option<&PrRef>,
+    review_dir: Option<&Path>,
+) -> Option<String> {
     use CliKind::*;
     use ReviewButton::*;
     let s = match (cli, button) {
@@ -142,7 +191,7 @@ pub fn keystrokes(button: ReviewButton, cli: CliKind, pr: Option<&PrRef>) -> Opt
         (Claude, VideoReview) => "/pr-video review\r".to_string(),
         (Claude, Ultra) => code_review("ultra", pr), // paid cloud review of THIS PR
         (Claude, CopyContent) => "/pr-copy\r".to_string(),
-        (Claude, SaveReview) => save_review_prompt(pr),
+        (Claude, SaveReview) => save_review_prompt(pr, review_dir),
 
         (Codex, PostReview) => "/review post\r".to_string(),
         (Codex, Distill) => "/review summarize\r".to_string(),
@@ -152,7 +201,7 @@ pub fn keystrokes(button: ReviewButton, cli: CliKind, pr: Option<&PrRef>) -> Opt
         (Codex, VideoReview) => return None,
         (Codex, Ultra) => return None,
         (Codex, CopyContent) => "/review copy\r".to_string(),
-        (Codex, SaveReview) => save_review_prompt(pr),
+        (Codex, SaveReview) => save_review_prompt(pr, review_dir),
 
         (Aider, PostReview) => "/run gh pr review --comment -F -\r".to_string(),
         (Aider, Distill) => {
@@ -166,7 +215,7 @@ pub fn keystrokes(button: ReviewButton, cli: CliKind, pr: Option<&PrRef>) -> Opt
         (Aider, VideoReview) => return None,
         (Aider, Ultra) => return None,
         (Aider, CopyContent) => "/run pbcopy\r".to_string(),
-        (Aider, SaveReview) => format!("/ask {}", save_review_prompt(pr)),
+        (Aider, SaveReview) => format!("/ask {}", save_review_prompt(pr, review_dir)),
 
         // Plain shell has no agent slash commands.
         (Shell, _) => return None,
@@ -241,7 +290,7 @@ mod tests {
             ReviewButton::VideoPr,
             ReviewButton::VideoReview,
         ] {
-            let k = keystrokes(b, CliKind::Claude, None).unwrap();
+            let k = keystrokes(b, CliKind::Claude, None, None).unwrap();
             assert!(k.ends_with('\r'), "{b:?} must end with CR (Enter), not LF");
             assert!(!k.contains('\n'), "{b:?} must not contain LF");
             assert!(k.starts_with("/pr-"), "{b:?} not a /pr- macro");
@@ -261,7 +310,7 @@ mod tests {
         assert!(!complex.contains("ultra"));
         // The paid cloud review lives only on the Ultra button.
         assert_eq!(
-            keystrokes(ReviewButton::Ultra, CliKind::Claude, None).unwrap(),
+            keystrokes(ReviewButton::Ultra, CliKind::Claude, None, None).unwrap(),
             "/code-review ultra\r"
         );
     }
@@ -275,7 +324,7 @@ mod tests {
             "/code-review high 42\r"
         );
         assert_eq!(
-            keystrokes(ReviewButton::Ultra, CliKind::Claude, Some(&p)).unwrap(),
+            keystrokes(ReviewButton::Ultra, CliKind::Claude, Some(&p), None).unwrap(),
             "/code-review ultra 42\r"
         );
         // Complex names the PR and pins the agent to the exact diff.
@@ -348,8 +397,8 @@ mod tests {
 
     #[test]
     fn shell_has_no_macros() {
-        assert!(keystrokes(ReviewButton::PostReview, CliKind::Shell, None).is_none());
-        assert!(keystrokes(ReviewButton::Ultra, CliKind::Shell, None).is_none());
+        assert!(keystrokes(ReviewButton::PostReview, CliKind::Shell, None, None).is_none());
+        assert!(keystrokes(ReviewButton::Ultra, CliKind::Shell, None, None).is_none());
         assert!(tier_keystrokes(ReviewTier::Light, CliKind::Shell, None).is_none());
     }
 }

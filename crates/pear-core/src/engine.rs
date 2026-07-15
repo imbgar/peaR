@@ -936,7 +936,11 @@ impl Engine {
                 return;
             }
         };
-        let Some(keys) = dispatch::keystrokes(button, cli, pr.as_ref()) else {
+        // For SaveReview, hand the agent the per-PR drop dir so it also writes the
+        // structured `review.json` (review.pear.v1) — the same path load_review_doc reads.
+        let drop = pr.as_ref().map(crate::review_doc::drop_path);
+        let review_dir = drop.as_deref().and_then(|p| p.parent());
+        let Some(keys) = dispatch::keystrokes(button, cli, pr.as_ref(), review_dir) else {
             self.emit(Event::Notice {
                 tab: Some(tab),
                 message: format!("{:?} has no macro for {:?}", button, cli),
