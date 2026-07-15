@@ -7,6 +7,7 @@
 import "./styles.css";
 import { emit, listen } from "@tauri-apps/api/event";
 import { renderReviewMap, type MapHandle } from "./asciimap";
+import { startDeck, type DeckHandle } from "./deck";
 import { startJourney, type JourneyHandle } from "./journey";
 import type { RdFinding, ReviewDoc } from "./protocol";
 
@@ -68,9 +69,15 @@ function mountJourneyButton(host: HTMLElement) {
   btn.className = "jr-launch";
   btn.textContent = "▶ journey";
   btn.title = "Narrated interactive flight through the review (esc exits)";
+  // (created up here so the journey handlers can hide/show it; wired + appended below)
+  const deckBtn = document.createElement("button");
+  deckBtn.className = "jr-launch deck-launch";
+  deckBtn.textContent = "🃏 deck";
+  deckBtn.title = "Flip through the findings as cards — add the keepers to your review (esc exits)";
   btn.addEventListener("click", () => {
     if (!handle || !currentDoc) return;
     btn.classList.add("hidden");
+    deckBtn.classList.add("hidden");
     journey = startJourney(stage, handle, currentDoc, {
       getDiff: () => localStorage.getItem(MAP_DIFF_KEY),
       requestDiff: () => post({ kind: "need-diff" }),
@@ -91,6 +98,7 @@ function mountJourneyButton(host: HTMLElement) {
     const obs = new MutationObserver(() => {
       if (!stage.querySelector(".jr")) {
         btn.classList.remove("hidden");
+        deckBtn.classList.remove("hidden");
         journey = null;
         exitJourney = null;
         obs.disconnect();
@@ -99,6 +107,29 @@ function mountJourneyButton(host: HTMLElement) {
     obs.observe(stage, { childList: true });
   });
   stage.appendChild(btn);
+
+  // The DECK — the same review as flip-through finding cards ("add to review" on the
+  // keepers); selection + compiled-draft format are SHARED with the journey, so picks
+  // made in either mode compile into the same review.
+  let deck: DeckHandle | null = null;
+  deckBtn.addEventListener("click", () => {
+    if (deck || !currentDoc) return;
+    btn.classList.add("hidden");
+    deckBtn.classList.add("hidden");
+    deck = startDeck(stage, currentDoc, {
+      onJump: (path, line) => post({ kind: "jump", path, line }),
+      onExport: (markdown, count) => {
+        void navigator.clipboard.writeText(markdown).catch(() => {});
+        post({ kind: "draft", markdown, count });
+      },
+      onExit: () => {
+        deck = null;
+        btn.classList.remove("hidden");
+        deckBtn.classList.remove("hidden");
+      },
+    });
+  });
+  stage.appendChild(deckBtn);
 }
 
 render();
