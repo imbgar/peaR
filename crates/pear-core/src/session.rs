@@ -70,6 +70,11 @@ impl Session {
         }
         cmd.env("PATH", path);
         cmd.env("TERM", "xterm-256color");
+        // The running peaR binary doubles as the review-doc validator (`pear validate`);
+        // expose it so agents inside the session can close the emit→validate→fix loop.
+        if let Ok(exe) = std::env::current_exe() {
+            cmd.env("PEAR_BIN", exe);
+        }
 
         let mut child = pair
             .slave

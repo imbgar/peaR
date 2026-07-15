@@ -158,6 +158,8 @@ Shape (all of phases 1-3 maps onto this; emit ONLY valid JSON):
 
 Rules: include EVERY confirmed/disputed finding from phase 3 (disputed ⇒ the engines
 map shows the disagreement); killed findings are omitted; `question`/`praise` are
-first-class entries; prefer a real `rule.why` on every defect finding. Validate your
-JSON parses before writing. Then tell the user: `review.json written — open the
-Insight panel ⊞ to load the review map`.
+first-class entries; prefer a real `rule.why` on every defect finding. Then VALIDATE
+it for real: run `"$PEAR_BIN" validate $D/review.json` (peaR sets `PEAR_BIN` in every
+session it spawns) and fix every reported error until it prints `VALID`; the full field
+reference is the `pr-review-schema` skill. Then tell the user: `review.json written —
+open the Insight panel ⊞ to load the review map`.

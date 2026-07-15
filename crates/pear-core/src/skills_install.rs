@@ -45,7 +45,17 @@ const SKILLS: &[(&str, &str)] = &[
         "pr-tandem",
         include_str!("../../../plugins/pear-review/skills/pr-tandem/SKILL.md"),
     ),
+    (
+        "pr-review-schema",
+        include_str!("../../../plugins/pear-review/skills/pr-review-schema/SKILL.md"),
+    ),
 ];
+
+/// The canonical `review.pear.v1` reference (the pr-review-schema SKILL body) — also
+/// written to the review drop root so SaveReview can point ANY agent at it, skills
+/// installed or not.
+pub const REVIEW_SCHEMA_MD: &str =
+    include_str!("../../../plugins/pear-review/skills/pr-review-schema/SKILL.md");
 
 fn skills_root() -> Result<PathBuf> {
     let home = std::env::var_os("HOME").ok_or_else(|| CoreError::Storage("no HOME".into()))?;
@@ -85,7 +95,7 @@ mod tests {
 
     #[test]
     fn embeds_all_bundled_skills() {
-        assert_eq!(SKILLS.len(), 8);
+        assert_eq!(SKILLS.len(), 9);
         for (name, body) in SKILLS {
             assert!(name.starts_with("pr-"), "{name} not a pr- skill");
             assert!(body.contains("name:"), "{name} missing frontmatter");
@@ -97,7 +107,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::env::set_var("HOME", tmp.path());
         let n = install_skills().unwrap();
-        assert_eq!(n, 8);
+        assert_eq!(n, 9);
         assert!(skills_installed());
         assert!(tmp
             .path()

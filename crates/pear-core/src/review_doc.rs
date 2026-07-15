@@ -30,6 +30,24 @@ pub fn drop_path(pr: &crate::protocol::PrRef) -> std::path::PathBuf {
         .join("review.json")
 }
 
+/// Write (or refresh) the canonical schema reference at the drop root and return its
+/// path — SaveReview points the agent here for the exact required shape, so the
+/// knowledge lives in ONE markdown file instead of a prompt string. Best-effort:
+/// `None` when /tmp is unwritable (the prompt then leans on the validator loop alone).
+pub fn ensure_schema_reference() -> Option<std::path::PathBuf> {
+    let root = std::path::PathBuf::from("/tmp/pear-reviews");
+    let path = root.join("review-schema.md");
+    std::fs::create_dir_all(&root).ok()?;
+    // Rewrite when missing OR stale (older pear versions may have left a different body).
+    let fresh = std::fs::read_to_string(&path)
+        .map(|cur| cur == crate::skills_install::REVIEW_SCHEMA_MD)
+        .unwrap_or(false);
+    if !fresh {
+        std::fs::write(&path, crate::skills_install::REVIEW_SCHEMA_MD).ok()?;
+    }
+    Some(path)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewDoc {
     /// Must equal [`SCHEMA_V1`].

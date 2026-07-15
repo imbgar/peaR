@@ -56,9 +56,14 @@ fn aider_ask(prompt: &str, pr: Option<&PrRef>) -> String {
 
 /// Instruct the agent to persist the review it just produced: the verbatim markdown AND,
 /// when `review_dir` is known (the per-PR review drop dir), a structured `review.json`
-/// in the `review.pear.v1` shape so the review map/deck can render it. The JSON shape is
-/// described compactly inline so the agent emits a doc that passes `ReviewDoc::parse`.
-fn save_review_prompt(pr: Option<&PrRef>, review_dir: Option<&Path>) -> String {
+/// in the `review.pear.v1` shape. The schema knowledge lives in the canonical reference
+/// file (`schema_ref`, the pr-review-schema doc) — not in this prompt — and correctness
+/// is closed-loop: the agent validates with `$PEAR_BIN validate` and fixes until VALID.
+fn save_review_prompt(
+    pr: Option<&PrRef>,
+    review_dir: Option<&Path>,
+    schema_ref: Option<&Path>,
+) -> String {
     let name = pr
         .map(|p| format!("pr-review-{}.md", p.number))
         .unwrap_or_else(|| "pr-review.md".to_string());
@@ -72,31 +77,26 @@ fn save_review_prompt(pr: Option<&PrRef>, review_dir: Option<&Path>) -> String {
             .map(PrRef::full_label)
             .unwrap_or_else(|| "owner/repo#N".to_string());
         s.push_str(&format!(
-            "Then ALSO write a structured `review.pear.v1` JSON of the SAME review to the \
-             absolute path `{}` (create parent dirs if needed). It MUST be valid JSON with \
-             this exact shape: {{ \"schema\": \"review.pear.v1\", \"mode\": \"single\", \
-             \"engines\": [{{ \"name\": \"claude\", \"role\": \"reviewer\", \"depth\": \"standard\" }}], \
-             \"subjects\": [{{ \"ref\": \"{ref}\", \"title\": \"<pr title>\", \"head_sha\": \"<sha>\" }}], \
-             \"understanding\": {{ \"purpose\": \"<one paragraph: what + why>\", \
-             \"walkthrough\": [{{ \"id\": \"W1\", \"title\": \"<beat>\", \"body\": \"<detail>\", \
-             \"risk\": \"low|medium|high\", \"anchors\": [{{ \"subject\": 0, \"path\": \"<file>\", \"line\": <n> }}] }}], \
-             \"verified\": [\"<what you actually checked>\"] }}, \
-             \"findings\": [{{ \"id\": \"F1\", \"type\": \"bug|test|api|docs|clarity|style|error_handling|design|compat|perf|security|observability|question|praise\", \
-             \"severity\": \"blocker|fix_before_merge|follow_up|take_or_leave\", \"confidence\": 0.0-1.0, \
-             \"rule\": {{ \"id\": \"<reusable-rule-id>\", \"why\": \"<why it matters>\" }}, \
-             \"title\": \"<short>\", \"evidence\": \"<why wrong + failing case>\", \
-             \"anchor\": {{ \"subject\": 0, \"path\": \"<file>\", \"line\": <n> }}, \
-             \"suggestion\": {{ \"patch\": \"<committable replacement hunk>\" }}, \
-             \"engines\": {{ \"claude\": \"found|agree|dispute|uncertain\" }}, \
-             \"status\": \"open\" }}], \
-             \"verdict\": {{ \"ledger\": {{ \"blocker\": 0, \"fix_before_merge\": 0, \"follow_up\": 0, \"take_or_leave\": 0 }}, \
-             \"per_subject\": [{{ \"subject\": 0, \"state\": \"ready|ready_with_nits|needs_work|blocked\", \
-             \"blocked_by\": [\"<finding id, REQUIRED non-empty when state is needs_work or blocked>\"], \
-             \"scope\": \"<what this pass did NOT cover>\", \"justification\": \"<why this verdict>\" }}] }} }}. \
-             Rules: `type` `question`/`praise` MUST use severity `take_or_leave`; every `subject`/`anchor` \
-             index points into `subjects` (0-based); `blocked_by` must name real finding ids. Then print both paths. ",
+            "Then ALSO write a structured `review.pear.v1` JSON of the SAME review (subject \
+             ref `{ref}`) to the absolute path `{}` (create parent dirs if needed). ",
             json.display(),
             ref = r#ref,
+        ));
+        match schema_ref {
+            Some(sr) => s.push_str(&format!(
+                "The exact required shape, field meanings and rules: READ `{}` first. ",
+                sr.display()
+            )),
+            None => s.push_str(
+                "Shape: schema=review.pear.v1 with understanding (purpose+walkthrough+verified), \
+                 findings (typed, severity=blocker|fix_before_merge|follow_up|take_or_leave), \
+                 and a justified per-subject verdict. ",
+            ),
+        }
+        s.push_str(&format!(
+            "Then VALIDATE it: run `\"$PEAR_BIN\" validate {}` — fix every reported error and \
+             re-run until it prints VALID. Then print both paths. ",
+            json.display()
         ));
     } else {
         s.push_str("Then print the path. ");
@@ -172,13 +172,15 @@ pub fn tandem_keystrokes(
 
 /// Keystrokes for an action [`ReviewButton`] under `cli`, targeting `pr` (trailing CR).
 /// `review_dir` is the per-PR review drop dir (where the structured `review.json`
-/// goes) — only SaveReview uses it. `arg` is free-text appended before the Enter
-/// (only the video buttons use it — the target-runtime cue).
+/// goes) — only SaveReview uses it, along with `schema_ref` (the canonical schema
+/// reference file the prompt points the agent at). `arg` is free-text appended before
+/// the Enter (only the video buttons use it — the target-runtime cue).
 pub fn keystrokes(
     button: ReviewButton,
     cli: CliKind,
     pr: Option<&PrRef>,
     review_dir: Option<&Path>,
+    schema_ref: Option<&Path>,
     arg: Option<&str>,
 ) -> Option<String> {
     use CliKind::*;
@@ -197,7 +199,7 @@ pub fn keystrokes(
         (Claude, VideoReview) => with_arg("/pr-video review"),
         (Claude, Ultra) => code_review("ultra", pr), // paid cloud review of THIS PR
         (Claude, CopyContent) => "/pr-copy\r".to_string(),
-        (Claude, SaveReview) => save_review_prompt(pr, review_dir),
+        (Claude, SaveReview) => save_review_prompt(pr, review_dir, schema_ref),
 
         (Codex, PostReview) => "/review post\r".to_string(),
         (Codex, Distill) => "/review summarize\r".to_string(),
@@ -207,7 +209,7 @@ pub fn keystrokes(
         (Codex, VideoReview) => return None,
         (Codex, Ultra) => return None,
         (Codex, CopyContent) => "/review copy\r".to_string(),
-        (Codex, SaveReview) => save_review_prompt(pr, review_dir),
+        (Codex, SaveReview) => save_review_prompt(pr, review_dir, schema_ref),
 
         (Aider, PostReview) => "/run gh pr review --comment -F -\r".to_string(),
         (Aider, Distill) => {
@@ -221,7 +223,7 @@ pub fn keystrokes(
         (Aider, VideoReview) => return None,
         (Aider, Ultra) => return None,
         (Aider, CopyContent) => "/run pbcopy\r".to_string(),
-        (Aider, SaveReview) => format!("/ask {}", save_review_prompt(pr, review_dir)),
+        (Aider, SaveReview) => format!("/ask {}", save_review_prompt(pr, review_dir, schema_ref)),
 
         // Plain shell has no agent slash commands.
         (Shell, _) => return None,
@@ -296,7 +298,7 @@ mod tests {
             ReviewButton::VideoPr,
             ReviewButton::VideoReview,
         ] {
-            let k = keystrokes(b, CliKind::Claude, None, None, None).unwrap();
+            let k = keystrokes(b, CliKind::Claude, None, None, None, None).unwrap();
             assert!(k.ends_with('\r'), "{b:?} must end with CR (Enter), not LF");
             assert!(!k.contains('\n'), "{b:?} must not contain LF");
             assert!(k.starts_with("/pr-"), "{b:?} not a /pr- macro");
@@ -316,9 +318,39 @@ mod tests {
         assert!(!complex.contains("ultra"));
         // The paid cloud review lives only on the Ultra button.
         assert_eq!(
-            keystrokes(ReviewButton::Ultra, CliKind::Claude, None, None, None).unwrap(),
+            keystrokes(ReviewButton::Ultra, CliKind::Claude, None, None, None, None).unwrap(),
             "/code-review ultra\r"
         );
+    }
+
+    #[test]
+    fn save_review_points_at_schema_ref_and_validator() {
+        let p = pr();
+        let k = keystrokes(
+            ReviewButton::SaveReview,
+            CliKind::Claude,
+            Some(&p),
+            Some(Path::new("/tmp/pear-reviews/o__r__42")),
+            Some(Path::new("/tmp/pear-reviews/review-schema.md")),
+            None,
+        )
+        .unwrap();
+        assert!(k.contains("/tmp/pear-reviews/o__r__42/review.json"));
+        assert!(k.contains("review-schema.md"), "prompt must point at the schema reference");
+        assert!(k.contains("\"$PEAR_BIN\" validate"), "prompt must demand the validator loop");
+        assert!(k.ends_with('\r'));
+        // Without a schema ref, the compact fallback shape still names the essentials.
+        let fallback = keystrokes(
+            ReviewButton::SaveReview,
+            CliKind::Claude,
+            Some(&p),
+            Some(Path::new("/tmp/pear-reviews/o__r__42")),
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(fallback.contains("review.pear.v1"));
+        assert!(fallback.contains("\"$PEAR_BIN\" validate"));
     }
 
     #[test]
@@ -330,7 +362,7 @@ mod tests {
             "/code-review high 42\r"
         );
         assert_eq!(
-            keystrokes(ReviewButton::Ultra, CliKind::Claude, Some(&p), None, None).unwrap(),
+            keystrokes(ReviewButton::Ultra, CliKind::Claude, Some(&p), None, None, None).unwrap(),
             "/code-review ultra 42\r"
         );
         // Complex names the PR and pins the agent to the exact diff.
@@ -403,8 +435,8 @@ mod tests {
 
     #[test]
     fn shell_has_no_macros() {
-        assert!(keystrokes(ReviewButton::PostReview, CliKind::Shell, None, None, None).is_none());
-        assert!(keystrokes(ReviewButton::Ultra, CliKind::Shell, None, None, None).is_none());
+        assert!(keystrokes(ReviewButton::PostReview, CliKind::Shell, None, None, None, None).is_none());
+        assert!(keystrokes(ReviewButton::Ultra, CliKind::Shell, None, None, None, None).is_none());
         assert!(tier_keystrokes(ReviewTier::Light, CliKind::Shell, None).is_none());
     }
 }
