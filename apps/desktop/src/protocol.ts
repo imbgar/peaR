@@ -9,7 +9,8 @@ export type ReviewButton =
   | "distill"
   | "walk_through"
   | "explain"
-  | "video"
+  | "video_pr"
+  | "video_review"
   | "ultra"
   | "copy_content"
   | "save_review";
@@ -45,6 +46,8 @@ export interface Comment {
   reactions: Reaction[];
   // For a PR review summary in the conversation: its state, else null.
   review_state: string | null;
+  // True for the synthetic opening entry that carries the PR description (body).
+  is_pr_body?: boolean;
 }
 
 export interface ReviewThread {

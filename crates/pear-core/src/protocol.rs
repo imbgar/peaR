@@ -101,7 +101,12 @@ pub enum ReviewButton {
     Distill,
     WalkThrough,
     Explain,
-    Video,
+    /// Narrated MP4 explainer of the PR ITSELF (`/pr-video purpose`) — orients a
+    /// viewer to the change; needs no prior review.
+    VideoPr,
+    /// Narrated MP4 explainer of the REVIEW (`/pr-video review`) — walks the
+    /// findings, so a review must have run first.
+    VideoReview,
     /// Paid cloud review (`/code-review ultra`) — uploads the repo to Claude on the
     /// web. Surfaced as a distinct, money-marked button so the cost is never implicit.
     Ultra,
@@ -174,6 +179,10 @@ pub struct Comment {
     /// plain issue comment.
     #[serde(default)]
     pub review_state: Option<String>,
+    /// True for the synthetic first entry that carries the PR *description* (the PR
+    /// body), so the UI can render it as the opening message rather than a comment.
+    #[serde(default)]
+    pub is_pr_body: bool,
 }
 
 /// One inline review thread anchored to a file + line in the diff, with its

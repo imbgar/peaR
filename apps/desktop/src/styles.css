@@ -662,8 +662,9 @@ button:disabled { opacity: 0.38; cursor: default; }
   text-align: left; font-family: var(--font-mono); font-size: 11px; color: var(--tx);
   background: transparent; border: none; cursor: pointer; padding: 5px 8px; border-radius: var(--r-sm);
 }
-.hist-ctx-item:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
-.hist-ctx-item.danger:hover { background: color-mix(in srgb, var(--red) 14%, transparent); color: var(--red); }
+.hist-ctx-item:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.hist-ctx-item.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--red) 14%, transparent); color: var(--red); }
+.hist-ctx-item:disabled { opacity: 0.4; cursor: default; }
 .hist-add-form { display: flex; gap: 4px; padding: 2px; }
 .hist-add-input {
   flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 11px;
@@ -1184,6 +1185,17 @@ body.tiling-drag .terminal-host { cursor: grabbing; }
 .cv-who { font-weight: 600; font-size: 12px; color: var(--tx); }
 .cv-who.me { color: var(--accent); text-shadow: var(--glow); }
 .cv-when { font-size: 10px; color: var(--faint); font-family: var(--font-mono); }
+/* The PR description (opening message) — set off with a left accent rule + a tag. */
+#comments-body .cv-card.cv-cmt-desc, /* (when the card itself carries the class) */
+#comments-body .cv-card:has(.cv-cmt-desc) {
+  border-left: 2px solid var(--accent-d);
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+.cv-desc-tag {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.4px; text-transform: uppercase;
+  color: var(--accent); padding: 1px 6px; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+}
 /* PR review summary state badge (approved / requested changes / …) */
 .cv-review-state {
   font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.8px;
@@ -1741,6 +1753,11 @@ button.close-x:hover { color: var(--red); border-color: color-mix(in srgb, var(-
 .modal-foot { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--bd); }
 .modal-status { font-family: var(--font-mono); font-size: 11.5px; color: var(--accent); text-shadow: var(--glow); }
 .modal-status.warn { color: var(--red); }
+
+/* Compact confirm dialog (showModal): the base .modal-card is sized for the big
+   copy-text modal — a short "are you sure?" should hug its content, not fill the
+   screen. */
+.modal-card.confirm-card { width: min(380px, 88vw); height: auto; max-height: 80vh; }
 
 /* "Review changes" popover (Approve / Request changes / Comment) — anchored to the button. */
 .pop-scrim { position: fixed; inset: 0; z-index: 60; }

@@ -138,7 +138,8 @@ pub fn keystrokes(button: ReviewButton, cli: CliKind, pr: Option<&PrRef>) -> Opt
         (Claude, Distill) => "/pr-distill\r".to_string(),
         (Claude, WalkThrough) => "/pr-walkthru\r".to_string(),
         (Claude, Explain) => "/pr-explain\r".to_string(),
-        (Claude, Video) => "/pr-video\r".to_string(),
+        (Claude, VideoPr) => "/pr-video purpose\r".to_string(),
+        (Claude, VideoReview) => "/pr-video review\r".to_string(),
         (Claude, Ultra) => code_review("ultra", pr), // paid cloud review of THIS PR
         (Claude, CopyContent) => "/pr-copy\r".to_string(),
         (Claude, SaveReview) => save_review_prompt(pr),
@@ -147,7 +148,8 @@ pub fn keystrokes(button: ReviewButton, cli: CliKind, pr: Option<&PrRef>) -> Opt
         (Codex, Distill) => "/review summarize\r".to_string(),
         (Codex, WalkThrough) => "/explain the review\r".to_string(),
         (Codex, Explain) => "/explain this PR and its gaps\r".to_string(),
-        (Codex, Video) => return None,
+        (Codex, VideoPr) => return None,
+        (Codex, VideoReview) => return None,
         (Codex, Ultra) => return None,
         (Codex, CopyContent) => "/review copy\r".to_string(),
         (Codex, SaveReview) => save_review_prompt(pr),
@@ -160,7 +162,8 @@ pub fn keystrokes(button: ReviewButton, cli: CliKind, pr: Option<&PrRef>) -> Opt
             "/ask Walk me through the review you produced, point by point.\r".to_string()
         }
         (Aider, Explain) => aider_ask("explain its purpose and changes, then list gaps.", pr),
-        (Aider, Video) => return None,
+        (Aider, VideoPr) => return None,
+        (Aider, VideoReview) => return None,
         (Aider, Ultra) => return None,
         (Aider, CopyContent) => "/run pbcopy\r".to_string(),
         (Aider, SaveReview) => format!("/ask {}", save_review_prompt(pr)),
@@ -235,7 +238,8 @@ mod tests {
             ReviewButton::Distill,
             ReviewButton::WalkThrough,
             ReviewButton::Explain,
-            ReviewButton::Video,
+            ReviewButton::VideoPr,
+            ReviewButton::VideoReview,
         ] {
             let k = keystrokes(b, CliKind::Claude, None).unwrap();
             assert!(k.ends_with('\r'), "{b:?} must end with CR (Enter), not LF");

@@ -831,6 +831,21 @@ function renderToolbar() {
   toolbarEl
     .querySelectorAll<HTMLButtonElement>("button[data-needs-tab]")
     .forEach((b) => (b.disabled = !enabled));
+  // These act on an existing review (Distill/Walk type /pr-* macros, Post pushes it
+  // to GitHub, Save writes it to markdown) — keep them disabled until a review has
+  // actually run in this tab, so there's something to operate on. Stopgap until
+  // peaRview reports review readiness directly. (Video is gated per-option in its
+  // own menu — a PR explainer never needs a review.)
+  const hasReview = active !== null && reviewedTabs.has(active);
+  toolbarEl
+    .querySelectorAll<HTMLButtonElement>(
+      'button[data-btn="distill"], button[data-btn="walk_through"], button[data-btn="post_review"], button[data-btn="save_review"]',
+    )
+    .forEach((b) => {
+      if (!b.dataset.titleReady) b.dataset.titleReady = b.title; // keep the descriptive tooltip
+      b.disabled = !hasReview;
+      b.title = hasReview ? b.dataset.titleReady : "Run a review first — no review for this tab yet";
+    });
 }
 
 /** Open a PR tab. Default = resume the PR's most recent session; `fresh` forces a
@@ -1031,6 +1046,19 @@ const REVIEW_MIN_MS = 1800;
 const REVIEW_MAX_MS = 20000;
 const pendingReviews = new Map<number, { sel: LaunchReview; openedAt: number; timer: number }>();
 
+// Tabs where a review has actually been launched/produced — gates the review-
+// dependent toolbar buttons (Distill, Walk). A stopgap until the structured review
+// state (peaRview) lands and can report review readiness precisely. Marked when a
+// review fires (fireReview) or is saved (review_saved). Note: a PR resumed in a
+// fresh session won't be marked until a review runs again — the safe direction,
+// since the bug being fixed is the buttons being available with no review at all.
+const reviewedTabs = new Set<number>();
+function markReviewed(tab: number) {
+  if (reviewedTabs.has(tab)) return;
+  reviewedTabs.add(tab);
+  if (tab === active) renderToolbar();
+}
+
 function fireReview(tab: number) {
   const p = pendingReviews.get(tab);
   if (!p) return;
@@ -1040,6 +1068,7 @@ function fireReview(tab: number) {
     return;
   }
   pendingReviews.delete(tab);
+  markReviewed(tab); // a review is now running for this tab → unlock Distill / Walk
   const v = tabs.get(tab);
   const agent = v ? resolveAgent(v) : undefined;
   setStatus(`auto-review (${p.sel}) → ${v?.title ?? `tab ${tab}`}`);
@@ -2052,6 +2081,7 @@ function treePrNode({ pr, rec }: PrCell): HTMLElement {
 interface CtxItem {
   label: string;
   danger?: boolean;
+  disabled?: boolean; // greyed, non-clickable (e.g. an option not yet available)
   on: () => void;
 }
 function openHistCtx(x: number, y: number, items: CtxItem[]) {
@@ -2062,11 +2092,13 @@ function openHistCtx(x: number, y: number, items: CtxItem[]) {
     b.type = "button";
     b.className = "hist-ctx-item" + (it.danger ? " danger" : "");
     b.textContent = it.label;
+    b.disabled = !!it.disabled;
     // stopPropagation so this click doesn't reach the document close-handler — important for
     // two-step menus (split → quick-launch) that rebuild #hist-ctx in place: the handler would
     // otherwise see the now-detached button as "outside" and close the freshly-opened menu.
     b.addEventListener("click", (e) => {
       e.stopPropagation();
+      if (it.disabled) return;
       closeHistCtx();
       it.on();
     });
@@ -2276,6 +2308,7 @@ function closeTabView(id: number) {
     v.el.remove();
     tabs.delete(id);
   }
+  reviewedTabs.delete(id);
   // Remove the pane from its window's layout (collapsing the split). If the window is now
   // empty, drop it; otherwise focus a surviving pane in it.
   const winId = paneWin.get(id);
@@ -2666,6 +2699,7 @@ function handle(ev: CoreEvent) {
     }
     case "review_saved": {
       setStatus(`saved review → ${ev.path}`);
+      markReviewed(ev.tab); // a saved review exists → Distill / Walk apply
       break;
     }
     case "panel": {
@@ -2804,6 +2838,22 @@ function pressButton(button: ReviewButton) {
   send({ type: "button", tab: active, button, agent: resolveAgent(v) });
 }
 
+/** The Video button offers two explainers: one for the PR itself (always available)
+ *  and one for the review (only once a review has run). Anchored under the button. */
+function openVideoMenu(anchor: HTMLElement) {
+  if (active === null) return;
+  const reviewed = reviewedTabs.has(active);
+  const r = anchor.getBoundingClientRect();
+  openHistCtx(r.right - 210, r.bottom + 4, [
+    { label: "🎬 PR explainer — orient to the change", on: () => pressButton("video_pr") },
+    {
+      label: reviewed ? "🎬 Review explainer — walk the findings" : "🎬 Review explainer — run a review first",
+      disabled: !reviewed,
+      on: () => pressButton("video_review"),
+    },
+  ]);
+}
+
 // ── copy-content modal ──────────────────────────────────────────────────────
 function setCopyStatus(msg: string, warn = false) {
   copyStatusEl.textContent = msg;
@@ -2876,7 +2926,7 @@ function showModal(opts: ModalOpts) {
   const overlay = document.createElement("div");
   overlay.className = "modal";
   overlay.innerHTML = `
-    <div class="modal-card">
+    <div class="modal-card confirm-card">
       <div class="modal-head">
         <span class="modal-title"></span>
         <button class="modal-x" title="Close (Esc)">×</button>
@@ -3718,9 +3768,9 @@ function renderConversation(tab: number) {
     commentsCountEl.textContent = "";
     return;
   }
-  commentsCountEl.textContent = c.conversation.length
-    ? `💬 See Threads (${c.conversation.length})`
-    : "";
+  // The PR description rides along as the first entry but isn't a "comment" for counts.
+  const realCount = c.conversation.filter((m) => !m.is_pr_body).length;
+  commentsCountEl.textContent = realCount ? `💬 See Threads (${realCount})` : "";
   if (!c.conversation.length) {
     const div = document.createElement("div");
     div.className = "panel-empty";
@@ -3745,7 +3795,8 @@ function buildConversationNav(comments: Comment[]) {
   const head = document.createElement("div");
   head.className = "dtl-head";
   const title = document.createElement("span");
-  title.textContent = `${comments.length} comment${comments.length > 1 ? "s" : ""}`;
+  const realN = comments.filter((m) => !m.is_pr_body).length;
+  title.textContent = `${realN} comment${realN === 1 ? "" : "s"}`;
   const close = document.createElement("button");
   close.type = "button";
   close.className = "dtl-close close-x";
@@ -4614,6 +4665,11 @@ window.addEventListener("DOMContentLoaded", async () => {
       if (which === "copy_content") copyContent();
       else pressButton(which as ReviewButton);
     });
+  });
+  // Video is a two-option menu (PR explainer / review explainer), not a direct macro.
+  $("#video-btn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    openVideoMenu(e.currentTarget as HTMLElement);
   });
 
   // Insight panel + auto-review.
