@@ -9,7 +9,8 @@ export type ReviewButton =
   | "distill"
   | "walk_through"
   | "explain"
-  | "video"
+  | "video_pr"
+  | "video_review"
   | "ultra"
   | "copy_content"
   | "save_review";

@@ -780,8 +780,9 @@ button:disabled { opacity: 0.38; cursor: default; }
   text-align: left; font-family: var(--font-mono); font-size: 11px; color: var(--tx);
   background: transparent; border: none; cursor: pointer; padding: 5px 8px; border-radius: var(--r-sm);
 }
-.hist-ctx-item:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
-.hist-ctx-item.danger:hover { background: color-mix(in srgb, var(--red) 14%, transparent); color: var(--red); }
+.hist-ctx-item:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.hist-ctx-item.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--red) 14%, transparent); color: var(--red); }
+.hist-ctx-item:disabled { opacity: 0.4; cursor: default; }
 .hist-add-form { display: flex; gap: 4px; padding: 2px; }
 .hist-add-input {
   flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 11px;
