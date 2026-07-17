@@ -24,6 +24,13 @@ import { parse as parseSearchQuery, type SearchParserResult } from "search-query
 import { renderMarkdown, setImageProxy } from "./markdown";
 import { initUpdater } from "./update";
 import {
+  PR_SORTS,
+  DEFAULT_PR_SORT,
+  isPrSortKey,
+  comparePrStatus,
+  type PrSortKey,
+} from "./prsort";
+import {
   renderDiff,
   parseDiff,
   commentEl,
@@ -411,6 +418,7 @@ interface Prefs {
   coReviewOrder: string; // "claude_codex" (claude reviews first / sits left) | "codex_claude"
   coReviewClaudeTier: string; // light | standard | complex
   coReviewCodexTier: string;
+  prSort: PrSortKey; // sort order for the Teams / Mine / Queue / Tree PR lists
 }
 const DEFAULT_PREFS: Prefs = {
   translucent: true,
@@ -433,6 +441,7 @@ const DEFAULT_PREFS: Prefs = {
   coReviewOrder: "claude_codex",
   coReviewClaudeTier: "standard",
   coReviewCodexTier: "standard",
+  prSort: DEFAULT_PR_SORT,
 };
 const PREFS_KEY = "pear.prefs.v1";
 function loadPrefs(): Prefs {
@@ -443,6 +452,7 @@ function loadPrefs(): Prefs {
       ...raw,
       trig: { ...DEFAULT_PREFS.trig, ...(raw.trig ?? {}) },
       scope: { ...DEFAULT_PREFS.scope, ...(raw.scope ?? {}) },
+      prSort: isPrSortKey(raw.prSort) ? raw.prSort : DEFAULT_PREFS.prSort,
     };
   } catch {
     return { ...DEFAULT_PREFS };
@@ -1296,6 +1306,36 @@ let myPrsAt = Number(localStorage.getItem("pear.myPrs.at") ?? "0");
 let myPrsLoading = false;
 const myPrsHiddenOrgs = new Set<string>(readJson<string[]>("pear.myPrs.hiddenOrgs", []));
 const prKey = (pr: PrRef) => `${pr.owner}/${pr.repo}#${pr.number}`;
+
+// ── PR list sorting (shared across Teams / Mine / Queue / Tree; logic in prsort.ts) ──────
+/** The authed user's login, derived from their own PRs (every `myPrs` entry is authored by them). */
+function meLogin(): string | null {
+  return myPrs[0]?.author ?? null;
+}
+/** The freshest PrStatus we hold for a PR (live team/mine data lands in prStatusCache). Synthesizes
+ *  a minimal open-PR status for queue/history entries we've never fetched a status for, so the sort
+ *  still applies (using `updated_at` from the fallback when we have it). */
+function statusFor(pr: PrRef, fallback?: { author?: string; updated_at?: string }): PrStatus {
+  const cached = prStatusCache.get(prKey(pr));
+  if (cached) return cached;
+  return {
+    pr,
+    title: "",
+    author: fallback?.author ?? "",
+    state: "open",
+    draft: false,
+    review_decision: null,
+    comments: 0,
+    commits: 0,
+    updated_at: fallback?.updated_at ?? "",
+    url: "",
+    head_oid: null,
+  };
+}
+/** Compare two PR statuses under the current sort pref (binds mine/teammate + now). */
+function prCmp(a: PrStatus, b: PrStatus): number {
+  return comparePrStatus(a, b, prefs.prSort, meLogin(), Date.now());
+}
 function requestStatuses(prs: PrRef[]) {
   const missing = prs.filter((p) => !statusRequested.has(prKey(p)));
   if (!missing.length) return;
@@ -1463,7 +1503,7 @@ function renderTeams() {
       const owner = rk.split("/")[0]; // a watched user's PR can live in another org → show that org's avatar
       const repoNode = treeNode("repo", rk, "", owner !== user ? owner : undefined);
       repoNode.rowBtn.oncontextmenu = (e) => teamsRepoContextMenu(e, owner, rk.split("/")[1] ?? "", user);
-      for (const s of repos.get(rk)!.sort((a, b) => b.pr.number - a.pr.number))
+      for (const s of [...repos.get(rk)!].sort(prCmp))
         repoNode.children.appendChild(teamPrNode(s));
       un.children.appendChild(repoNode.el);
     }
@@ -1749,7 +1789,7 @@ function renderMyPrs() {
     for (const rk of [...repos.keys()].sort((a, b) => a.localeCompare(b))) {
       const repoNode = treeNode("repo", rk, ""); // same owner as the org → no redundant avatar
       repoNode.rowBtn.oncontextmenu = (e) => repoContextMenu(e, org, rk.split("/")[1] ?? "");
-      for (const s of repos.get(rk)!.sort((a, b) => b.pr.number - a.pr.number))
+      for (const s of [...repos.get(rk)!].sort(prCmp))
         repoNode.children.appendChild(teamPrNode(s));
       orgNode.children.appendChild(repoNode.el);
     }
@@ -2258,7 +2298,11 @@ function renderQueue() {
     emptyRow("queue is empty — right-click a PR → “Add to queue”");
     return;
   }
-  const sorted = [...queue.items].sort((a, b) => queueRank(b) - queueRank(a));
+  const sorted = [...queue.items].sort(
+    (a, b) =>
+      queueRank(b) - queueRank(a) || // pinned/favorite items stay on top
+      prCmp(statusFor(a.pr, { updated_at: a.added }), statusFor(b.pr, { updated_at: b.added })),
+  );
   for (const item of sorted) historyEl.appendChild(queueItemEl(item));
 }
 
@@ -2389,7 +2433,14 @@ function renderHistTree(entries: PrRecord[]) {
       const repoNode = treeNode("repo", repo, fav ? "★" : ""); // owner == org above → no avatar
       repoNode.rowBtn.oncontextmenu = (e) => repoContextMenu(e, owner, repo);
       const cells = repos.get(repo)!;
-      const nums = [...cells.keys()].sort((a, b) => b - a);
+      const nums = [...cells.keys()].sort((na, nb) => {
+        const ca = cells.get(na)!;
+        const cb = cells.get(nb)!;
+        return prCmp(
+          statusFor(ca.pr, { updated_at: ca.rec?.last_opened }),
+          statusFor(cb.pr, { updated_at: cb.rec?.last_opened }),
+        );
+      });
       for (const num of nums) repoNode.children.appendChild(treePrNode(cells.get(num)!));
       if (nums.length === 0) {
         const none = document.createElement("div");
@@ -5194,6 +5245,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   const setHistView = (v: HistView) => {
     historyView = v;
     localStorage.setItem("pear.histView", v);
+    $("#pr-sort").classList.toggle("hidden", v === "list"); // sort applies to tree/queue/teams/mine
     if (v === "teams") {
       refreshTeams();
       maybeOnboardTeams();
@@ -5207,6 +5259,17 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#view-queue").addEventListener("click", () => setHistView("queue"));
   $("#view-teams")?.addEventListener("click", () => setHistView("teams"));
   $("#view-mine")?.addEventListener("click", () => setHistView("mine"));
+  // PR-list sort dropdown (Tree / Queue / Teams / Mine).
+  const sortSel = $<HTMLSelectElement>("#pr-sort");
+  sortSel.innerHTML = PR_SORTS.map((s) => `<option value="${s.key}">${s.label}</option>`).join("");
+  sortSel.value = prefs.prSort;
+  sortSel.classList.toggle("hidden", historyView === "list");
+  sortSel.addEventListener("change", () => {
+    if (!isPrSortKey(sortSel.value)) return;
+    prefs.prSort = sortSel.value;
+    savePrefs();
+    renderHistory();
+  });
   $("#fav-only").addEventListener("click", () => {
     favOnly = !favOnly;
     localStorage.setItem("pear.favOnly", favOnly ? "1" : "0");
