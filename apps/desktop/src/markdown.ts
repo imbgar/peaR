@@ -29,3 +29,14 @@ export function renderMarkdown(el: HTMLElement, src: string) {
   el.innerHTML = DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
   imageHook?.(el);
 }
+
+/** Flatten markdown `src` to plain text for one-line previews (thread lists, comment
+ *  navigators). Same parse + sanitize as `renderMarkdown`, then textContent — so a
+ *  preview shows the words, never raw `#`/`**` syntax or HTML comment scaffolding
+ *  (Linear's `<!-- linear-linkback --><details>…` bodies were rendering verbatim). */
+export function markdownToText(src: string): string {
+  const html = marked.parse(src ?? "", { async: false }) as string;
+  const div = document.createElement("div");
+  div.innerHTML = DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+  return (div.textContent ?? "").replace(/\s+/g, " ").trim();
+}

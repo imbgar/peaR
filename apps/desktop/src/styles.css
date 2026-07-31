@@ -1691,6 +1691,13 @@ body.map-window .rmap-stage { border: none; border-radius: 0; }
   padding: 5px 12px 6px 30px; border-bottom: 1px solid var(--bd);
   background: color-mix(in srgb, var(--accent) 5%, transparent);
 }
+/* Summaries render markdown now — keep the one-liner a one-liner. */
+.diff-file-summary p { display: inline; margin: 0; }
+.diff-file-summary code {
+  font-family: var(--font-mono); font-size: 10.5px;
+  background: color-mix(in srgb, var(--tx) 8%, transparent);
+  padding: 0 3px; border-radius: 3px;
+}
 .dt-toggle.add.on { color: var(--green); border-color: color-mix(in srgb, var(--green) 55%, transparent); }
 .dt-toggle.del.on { color: var(--red); border-color: color-mix(in srgb, var(--red) 55%, transparent); }
 .dt-toggle:not(.on) { opacity: 0.5; text-decoration: line-through; }

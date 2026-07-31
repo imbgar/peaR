@@ -1244,12 +1244,21 @@ impl Engine {
             message: format!("loading diff for {}…", pr.short_label()),
         });
         let sink = self.sink.clone();
-        std::thread::spawn(move || match gh.pr_diff(&pr) {
-            Ok(diff) => {
+        std::thread::spawn(move || match gh.pr_diff_report(&pr) {
+            Ok(report) => {
+                // The fallback note (huge PR, diff rebuilt from the files API) is a
+                // Notice, not part of the diff: the operator should know what they
+                // are looking at is reconstructed and possibly incomplete.
+                if let Some(note) = report.note {
+                    sink(Event::Notice {
+                        tab: Some(tab),
+                        message: note,
+                    });
+                }
                 let comments = gh.pr_review_comments(&pr).unwrap_or_default();
                 sink(Event::Diff {
                     tab,
-                    diff,
+                    diff: report.diff,
                     comments,
                 });
             }

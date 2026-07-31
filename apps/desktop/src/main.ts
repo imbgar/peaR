@@ -21,7 +21,7 @@ import "@fontsource-variable/hanken-grotesk";
 import "@fontsource-variable/jetbrains-mono";
 import { marked } from "marked";
 import { parse as parseSearchQuery, type SearchParserResult } from "search-query-parser";
-import { renderMarkdown, setImageProxy } from "./markdown";
+import { markdownToText, renderMarkdown, setImageProxy } from "./markdown";
 import { initUpdater } from "./update";
 import {
   renderDiff,
@@ -4311,7 +4311,9 @@ function buildConversationNav(comments: Comment[]) {
     loc.textContent = `${cm.author}${cm.review_state ? ` · ${cm.review_state.toLowerCase().replace(/_/g, " ")}` : ""} · ${relTime(cm.created_at)}`;
     const meta = document.createElement("span");
     meta.className = "dtl-meta";
-    meta.textContent = (cm.body || "").replace(/\s+/g, " ").trim().slice(0, 80) || "(no text)";
+    // Flattened through the markdown pipeline — the preview shows the words, never
+    // raw `# Description **…` syntax or a bot's `<!-- -->` HTML scaffolding.
+    meta.textContent = markdownToText(cm.body || "").slice(0, 80) || "(no text)";
     text.append(loc, meta);
     item.append(av, text);
     // Hover → a floating preview bubble with the full comment.
