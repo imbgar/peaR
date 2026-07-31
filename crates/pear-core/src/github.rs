@@ -69,6 +69,71 @@ pub fn base64_encode(data: &[u8]) -> String {
     out
 }
 
+/// A PR diff plus how it was obtained. `note` is `Some` only when the diff media
+/// type was refused (huge PR) and the text was rebuilt from the files API.
+pub struct DiffReport {
+    pub diff: String,
+    pub note: Option<String>,
+}
+
+/// Rebuild unified-diff text from `GET /pulls/{n}/files` entries. Pure so the shape
+/// the frontend parser depends on is pinned by tests, not by a live 3419-file PR.
+///
+/// Per entry: the `diff --git` header, status markers (`new file` / `deleted file` /
+/// `rename from`+`rename to`) and the `patch` hunks verbatim. When GitHub omits
+/// `patch`: a binary file (0 additions + 0 deletions) becomes the standard
+/// `Binary files … differ` line; an oversized text file becomes an explicit
+/// `omitted-patch:` marker the frontend parser turns into a "patch not available"
+/// card — an empty body would read as "no changes", which is a lie.
+pub fn files_to_diff(files: &[serde_json::Value]) -> String {
+    let mut out = String::new();
+    for f in files {
+        let path = f["filename"].as_str().unwrap_or("");
+        if path.is_empty() {
+            continue;
+        }
+        let prev = f["previous_filename"].as_str().unwrap_or(path);
+        let status = f["status"].as_str().unwrap_or("modified");
+        out.push_str(&format!("diff --git a/{prev} b/{path}\n"));
+        match status {
+            "added" => out.push_str("new file mode 100644\n"),
+            "removed" => out.push_str("deleted file mode 100644\n"),
+            "renamed" => out.push_str(&format!("rename from {prev}\nrename to {path}\n")),
+            _ => {}
+        }
+        match f["patch"].as_str() {
+            Some(patch) => {
+                if status == "added" {
+                    out.push_str("--- /dev/null\n");
+                } else {
+                    out.push_str(&format!("--- a/{prev}\n"));
+                }
+                if status == "removed" {
+                    out.push_str("+++ /dev/null\n");
+                } else {
+                    out.push_str(&format!("+++ b/{path}\n"));
+                }
+                out.push_str(patch);
+                if !patch.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            None => {
+                let adds = f["additions"].as_u64().unwrap_or(0);
+                let dels = f["deletions"].as_u64().unwrap_or(0);
+                if adds == 0 && dels == 0 {
+                    out.push_str(&format!("Binary files a/{prev} and b/{path} differ\n"));
+                } else {
+                    out.push_str(&format!(
+                        "omitted-patch: +{adds} -{dels} (too large for the GitHub files API)\n"
+                    ));
+                }
+            }
+        }
+    }
+    out
+}
+
 #[derive(Clone)]
 pub struct GitHub {
     token: String,
@@ -208,11 +273,74 @@ impl GitHub {
     }
 
     /// The PR's unified diff (via GitHub's `application/vnd.github.diff` media type).
+    /// Falls back to the paginated files API on a huge PR — see [`GitHub::pr_diff_report`].
     pub fn pr_diff(&self, pr: &PrRef) -> Result<String> {
-        self.get_raw(
+        self.pr_diff_report(pr).map(|r| r.diff)
+    }
+
+    /// [`GitHub::pr_diff`] plus provenance. GitHub's diff media type refuses PRs over
+    /// 300 files / 20k lines with HTTP 406 ("Consider using 'List pull requests files'
+    /// API"), so on exactly that refusal the diff is REBUILT from the paginated files
+    /// endpoint. `note` is set only on the fallback path, so the UI can say the diff
+    /// is reconstructed (and possibly incomplete: that endpoint caps at 3000 files and
+    /// omits `patch` for oversized ones) instead of presenting it as the real thing.
+    pub fn pr_diff_report(&self, pr: &PrRef) -> Result<DiffReport> {
+        match self.get_raw(
             &format!("/repos/{}/{}/pulls/{}", pr.owner, pr.repo, pr.number),
             "application/vnd.github.diff",
-        )
+        ) {
+            Ok(diff) => Ok(DiffReport { diff, note: None }),
+            Err(CoreError::GitHub(msg)) if msg.starts_with("HTTP 406") => {
+                self.pr_diff_via_files(pr)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    fn pr_diff_via_files(&self, pr: &PrRef) -> Result<DiffReport> {
+        let mut files: Vec<serde_json::Value> = Vec::new();
+        // GitHub documents a 3000-file ceiling on this endpoint; the page cap is just
+        // a belt against an API that misbehaves and never returns a short page.
+        for page in 1..=30 {
+            let v = self.get(&format!(
+                "/repos/{}/{}/pulls/{}/files?per_page=100&page={page}",
+                pr.owner, pr.repo, pr.number
+            ))?;
+            let arr = v.as_array().cloned().unwrap_or_default();
+            let n = arr.len();
+            files.extend(arr);
+            if n < 100 {
+                break;
+            }
+        }
+        let diff = files_to_diff(&files);
+        // The PR's own count is the honesty check: when it exceeds what the files
+        // endpoint would give us, say how much is missing rather than render a
+        // 3000-file diff as if it were the whole PR.
+        let total = self
+            .get(&format!(
+                "/repos/{}/{}/pulls/{}",
+                pr.owner, pr.repo, pr.number
+            ))
+            .ok()
+            .and_then(|meta| meta["changed_files"].as_u64())
+            .unwrap_or(files.len() as u64);
+        let note = if total > files.len() as u64 {
+            format!(
+                "huge PR: diff rebuilt from the files API — showing {} of {} files (GitHub caps the list)",
+                files.len(),
+                total
+            )
+        } else {
+            format!(
+                "huge PR: diff rebuilt from the files API ({} files; oversized patches omitted)",
+                files.len()
+            )
+        };
+        Ok(DiffReport {
+            diff,
+            note: Some(note),
+        })
     }
 
     /// Existing inline review comments on the PR, anchored to file + line.
@@ -723,5 +851,79 @@ fn parse_comment(node: &serde_json::Value) -> Comment {
         reactions: parse_reactions(node),
         review_state: None,
         is_pr_body: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::files_to_diff;
+    use serde_json::json;
+
+    #[test]
+    fn a_files_entry_becomes_a_parseable_unified_diff() {
+        let files = [json!({
+            "filename": "src/app.ts",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "patch": "@@ -1,2 +1,2 @@\n-old\n+new\n context"
+        })];
+        let d = files_to_diff(&files);
+        assert!(
+            d.starts_with("diff --git a/src/app.ts b/src/app.ts\n"),
+            "{d}"
+        );
+        assert!(d.contains("--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1,2 +1,2 @@\n"));
+        assert!(
+            d.ends_with(" context\n"),
+            "patch without a trailing newline gets one: {d:?}"
+        );
+    }
+
+    #[test]
+    fn statuses_emit_their_git_markers() {
+        let files = [
+            json!({"filename": "new.rs", "status": "added", "patch": "@@ -0,0 +1 @@\n+x"}),
+            json!({"filename": "gone.rs", "status": "removed", "patch": "@@ -1 +0,0 @@\n-x"}),
+            json!({"filename": "after.rs", "previous_filename": "before.rs", "status": "renamed",
+                   "patch": "@@ -1 +1 @@\n-a\n+b"}),
+        ];
+        let d = files_to_diff(&files);
+        assert!(
+            d.contains("new file mode 100644\n--- /dev/null\n+++ b/new.rs\n"),
+            "{d}"
+        );
+        assert!(
+            d.contains("deleted file mode 100644\n--- a/gone.rs\n+++ /dev/null\n"),
+            "{d}"
+        );
+        assert!(
+            d.contains(
+                "diff --git a/before.rs b/after.rs\nrename from before.rs\nrename to after.rs\n"
+            ),
+            "{d}"
+        );
+    }
+
+    /// GitHub omits `patch` for two different reasons, and they must not render the
+    /// same: a binary file gets the standard git line, an oversized text file gets
+    /// the explicit omission marker — never an empty body that reads as "no changes".
+    #[test]
+    fn an_absent_patch_is_binary_or_an_explicit_omission_never_silence() {
+        let files = [
+            json!({"filename": "logo.png", "status": "modified", "additions": 0, "deletions": 0}),
+            json!({"filename": "huge.lock", "status": "modified", "additions": 90000, "deletions": 4}),
+        ];
+        let d = files_to_diff(&files);
+        assert!(
+            d.contains("Binary files a/logo.png and b/logo.png differ\n"),
+            "{d}"
+        );
+        assert!(
+            d.contains("omitted-patch: +90000 -4 (too large for the GitHub files API)\n"),
+            "{d}"
+        );
+        // Two file blocks, nothing silent between them.
+        assert_eq!(d.matches("diff --git").count(), 2);
     }
 }

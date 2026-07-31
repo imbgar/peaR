@@ -3,7 +3,7 @@
 // markdown, rendered through the sanitizing `renderMarkdown` helper (see markdown.ts).
 
 import { Comment, DiffComment, ReviewThread } from "./protocol";
-import { renderMarkdown } from "./markdown";
+import { markdownToText, renderMarkdown } from "./markdown";
 
 type LineKind = "add" | "del" | "ctx";
 interface DLine {
@@ -21,6 +21,9 @@ export interface DFile {
   oldPath: string | null;
   status: "added" | "deleted" | "renamed" | "modified";
   binary: boolean;
+  /** GitHub omitted this file's patch (huge-PR fallback diff, see pear-core
+   *  `files_to_diff`) — render a "patch not available" card, not an empty body. */
+  omitted: boolean;
   adds: number;
   dels: number;
   hunks: DHunk[];
@@ -46,6 +49,7 @@ export function parseDiff(diff: string): DFile[] {
         oldPath: m ? m[1] : null,
         status: "modified",
         binary: false,
+        omitted: false,
         adds: 0,
         dels: 0,
         hunks: [],
@@ -74,6 +78,16 @@ export function parseDiff(diff: string): DFile[] {
     }
     if (ln.startsWith("Binary files")) {
       f.binary = true;
+      continue;
+    }
+    // pear-core's huge-PR fallback marks a file whose patch GitHub refused to return.
+    if (ln.startsWith("omitted-patch:")) {
+      f.omitted = true;
+      const om = ln.match(/\+(\d+) -(\d+)/);
+      if (om) {
+        f.adds = parseInt(om[1], 10);
+        f.dels = parseInt(om[2], 10);
+      }
       continue;
     }
     if (
@@ -266,7 +280,9 @@ export function applyFileSummaries(container: HTMLElement, summaries: Map<string
       el.className = "diff-file-summary";
       card.querySelector(".diff-file-head")?.after(el);
     }
-    el.textContent = `✦ ${s}`;
+    // Model-authored markdown (backticked paths, bold) renders instead of showing
+    // raw syntax. Sanitized like every other untrusted body in this pane.
+    renderMarkdown(el, `✦ ${s}`);
   });
 }
 
@@ -324,7 +340,9 @@ function buildThreadList(container: HTMLElement, threads: ReviewThread[]): HTMLE
     const meta = document.createElement("span");
     meta.className = "dtl-meta";
     const first = t.comments[0];
-    const snippet = (first?.body ?? "").replace(/\s+/g, " ").trim().slice(0, 70);
+    // Flattened through the markdown pipeline: a preview shows the words, not raw
+    // `#`/`**` syntax or bot HTML scaffolding.
+    const snippet = markdownToText(first?.body ?? "").slice(0, 70);
     meta.textContent = first ? `${first.author}: ${snippet}` : "";
     item.append(loc, meta);
     item.addEventListener("click", () => jumpToThread(container, t.id));
@@ -604,6 +622,11 @@ export function renderDiff(
       const b = document.createElement("div");
       b.className = "diff-binary";
       b.textContent = "Binary file — not shown";
+      body.appendChild(b);
+    } else if (f.omitted) {
+      const b = document.createElement("div");
+      b.className = "diff-binary";
+      b.textContent = `Patch not available (+${f.adds} −${f.dels}) — too large for the GitHub API; view this file on GitHub`;
       body.appendChild(b);
     }
     const threadMap = threadByPath.get(f.path);
